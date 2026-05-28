@@ -37,7 +37,7 @@ The list view groups by `category`, with this priority order:
 | 1    | `languages`       | Language toolchains (typescript, python, dotnet, ...).|
 | 2    | `desktop`         | Desktop frameworks on top of a language (winforms, winui). |
 | 3    | (other / default) | Any unrecognized category sorts here.                 |
-| 4    | `user-experience` | OS-feel flows (common-adjustments, mac-comfort-shell, calm-os). |
+| 4    | `user-experience` | OS-feel flows (windows-dev-config, comfort-shell). |
 | 4    | `shell`           | Legacy alias for `user-experience`. New flows should pick `user-experience`. |
 
 Within a rank, flows sort alphabetically by category then by name.

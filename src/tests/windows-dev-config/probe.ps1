@@ -1,4 +1,4 @@
-# Smoke-test probe for the calm-os user-experience flow.
+# Smoke-test probe for the windows-dev-config user-experience flow.
 #
 # After the master config has been applied, the apps module installs
 # git via winget. The simplest signal a human can use to confirm the
