@@ -114,9 +114,9 @@ flows:
     manual_test: true
     os: [windows]
     windows:
-      install: src/Workloads/winforms/install.ps1
-      configuration: src/Workloads/winforms/configuration.winget
-      build: dotnet build src/tests/winforms/hello.csproj -c Release -v q --nologo -o src/tests/winforms/bin
+      install: Workloads/winforms/install.ps1
+      configuration: Workloads/winforms/configuration.winget
+      build: dotnet build src/tests/winforms/hello.csproj -c Release -v q --nologo -o tests/winforms/bin
       run: src\tests\winforms\bin\hello.exe
       expected: src/tests/winforms/expected.txt
       version: "dotnet --version"
@@ -134,8 +134,8 @@ flows:
     manual_test: true
     os: [windows]
     windows:
-      install: src/Workloads/winui/install.ps1
-      configuration: src/Workloads/winui/configuration.winget
+      install: Workloads/winui/install.ps1
+      configuration: Workloads/winui/configuration.winget
       build: dotnet build src/tests/winui/hello.csproj -c Release -v q --nologo -o src/tests/winui/bin
       run: src\tests\winui\bin\hello.exe
       expected: src/tests/winui/expected.txt
@@ -150,8 +150,8 @@ flows:
     onboardingUrl: https://learn.microsoft.com/dotnet/core/install/windows
     os: [windows]
     windows:
-      install: src/Workloads/dotnet/install.ps1
-      configuration: src/Workloads/dotnet/configuration.winget
+      install: Workloads/dotnet/install.ps1
+      configuration: Workloads/dotnet/configuration.winget
       build: dotnet build src/tests/dotnet/hello.csproj -c Release -v q --nologo -o src/tests/dotnet/bin
       run: src\tests\dotnet\bin\hello.exe
       expected: src/tests/dotnet/expected.txt
@@ -166,8 +166,8 @@ flows:
     onboardingUrl: https://go.dev/doc/install
     os: [windows]
     windows:
-      install: src/Workloads/go/install.ps1
-      configuration: src/Workloads/go/configuration.winget
+      install: Workloads/go/install.ps1
+      configuration: Workloads/go/configuration.winget
       build: ""
       run: go run src/tests/go/hello.go
       expected: src/tests/go/expected.txt
@@ -182,8 +182,8 @@ flows:
     onboardingUrl: https://learn.microsoft.com/java/openjdk/install
     os: [windows]
     windows:
-      install: src/Workloads/java/install.ps1
-      configuration: src/Workloads/java/configuration.winget
+      install: Workloads/java/install.ps1
+      configuration: Workloads/java/configuration.winget
       build: ""
       run: java src/tests/java/Hello.java
       expected: src/tests/java/expected.txt
@@ -198,8 +198,8 @@ flows:
     onboardingUrl: https://www.rust-lang.org/tools/install
     os: [windows]
     windows:
-      install: src/Workloads/rust/install.ps1
-      configuration: src/Workloads/rust/configuration.winget
+      install: Workloads/rust/install.ps1
+      configuration: Workloads/rust/configuration.winget
       build: cargo build --release --manifest-path src/tests/rust/Cargo.toml --quiet
       run: src\tests\rust\target\release\hello.exe
       expected: src/tests/rust/expected.txt
@@ -214,8 +214,8 @@ flows:
     onboardingUrl: https://docs.python.org/3/using/windows.html
     os: [windows]
     windows:
-      install: src/Workloads/python/install.ps1
-      configuration: src/Workloads/python/configuration.winget
+      install: Workloads/python/install.ps1
+      configuration: Workloads/python/configuration.winget
       build: ""
       run: python src/tests/python/hello.py
       expected: src/tests/python/expected.txt
@@ -234,7 +234,7 @@ flows:
     manual_test: true
     os: [windows]
     windows:
-      install: src/wsl-comfort/install.ps1
+      install: wsl-comfort/install.ps1
       build: ""
       run: wsl -- bash src/tests/wsl-comfort/hello.sh
       expected: src/tests/wsl-comfort/expected.txt
@@ -255,8 +255,8 @@ flows:
     manual_test: true
     os: [windows]
     windows:
-      install: src/windows-dev-config/install.ps1
-      configuration: src/windows-dev-config/dev-config.winget
+      install: windows-dev-config/install.ps1
+      configuration: windows-dev-config/dev-config.winget
       build: ""
       run: pwsh -NoProfile -File src/tests/windows-dev-config/probe.ps1
       expected: src/tests/windows-dev-config/expected.txt

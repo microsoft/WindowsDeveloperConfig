@@ -8,13 +8,13 @@ Opinionated, CI-validated configurations for bootstrapping developer
 toolchains and Windows-desktop personalities using `winget` /
 `winget configure`.
 
-On Windows, the **core artifact of each flow is a [winget DSC configuration
+On Windows the **core artifact of each flow is a [winget DSC configuration
 file](https://learn.microsoft.com/windows/package-manager/configuration/)**
 (`configuration.winget` for language toolchains, `dev-config.winget` for the
-clean development configuration) — a declarative, idempotent description of the machine state
+Windows Dev Config flow) — a declarative, idempotent description of the machine state
 required for that flow. Where winget alone is not enough (e.g. `npm install
 --global typescript`, registry tweaks, or a `RunOnce` reboot dance) the
-configuration calls a DSC `RunCommandOnSet` / `PowerShellScript` / `Registry`
+configuration calls a DSC `Script` / `RunCommandOnSet` / `Registry`
 resource, so everything the flow needs lives in one YAML file. A small
 `install.ps1` shim next to it applies the config with `winget configure`
 and handles session-level glue (PATH refresh, CI sentinel).
@@ -27,7 +27,7 @@ configuration actually produced a working toolchain.
 
 ## Supported flows
 
-Each flow's `configuration.winget` (or `dev-config.winget`)
+Each flow's `configuration.winget` (or `dev-config.winget` for Windows Dev Config)
 is the source of truth for what gets installed; the table below
 summarizes it for quick scanning. Flows marked **manual** are excluded
 from the automated CI matrix (they need an interactive desktop session
@@ -46,13 +46,13 @@ extension.
 | Python            | ✅ automated   | `Python.Python.3.13`, `astral-sh.uv`                                                    |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCLI` + WinUI/Universal/ManagedDesktop VS workloads |
-| Windows Dev Config | 🙋 manual     | A full distraction-free workstation: apps + registry tweaks + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
-| Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
+| Windows Dev Config| 🙋 manual     | A full distraction-free workstation: apps + ~24 registry tweaks + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
+| WSL Comfort       | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative
 list (paths, build/run commands, onboarding URLs).
 
-## Command Palette extension (coming soon)
+## Command Palette extension
 
 A [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview)
 extension lives under [`future/cmdpal/`](../future/cmdpal/). It reads the same
@@ -66,48 +66,41 @@ for build + configuration details.
 
 ## Repository layout
 
-All source lives under `src/`. The top-level `Workloads/`,
-`windows-dev-config/`, and `wsl-comfort/` directories are signed release
-copies — see [Signed vs source](#repo-layout-signed-vs-source) below.
-
 ```
-src/
-  Workloads/
-    _common/         # shared PowerShell shim helpers (retry, refresh PATH, preflight, assert-winget-configure, apply-configuration)
-    typescript/      # configuration.winget (core) + install.ps1 (thin shim)
-    php/             # configuration.winget (core) + install.ps1 (thin shim)
-    python/          # configuration.winget (core) + install.ps1 (thin shim)
-    dotnet/          # configuration.winget (core) + install.ps1 (thin shim)
-    go/              # configuration.winget (core) + install.ps1 (thin shim)
-    java/            # configuration.winget (core) + install.ps1 (thin shim)
-    rust/            # configuration.winget (core) + install.ps1 (thin shim)
-    winforms/        # configuration.winget (core) + install.ps1 (thin shim)
-    winui/           # configuration.winget (core) + install.ps1 (thin shim)
-  windows-dev-config/    # Windows Dev Config — dev-config.winget (single-file DSC) + install.ps1 + README.md
-  wsl-comfort/           # Comfort Shell — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
-  tests/
-    _harness/          # build-run-diff harness used by CI:
-                       #   run-flow.ps1   - all flows (build + run + diff stdout)
-                       #   run-server.ps1 - helper for future server scenarios
-                       #                    (kept idle; no flow currently uses it)
-    typescript/        # hello.ts + expected.txt
-    php/               # hello.php + expected.txt
-    python/            # hello.py + expected.txt
-    dotnet/            # hello.csproj + Program.cs + expected.txt
-    go/                # hello.go + expected.txt
-    java/              # Hello.java + expected.txt
-    rust/              # Cargo.toml + src/main.rs + expected.txt
-    winforms/          # hello.csproj + Program.cs + expected.txt
-    winui/             # hello.csproj + Program.cs + expected.txt
-    windows-dev-config/ # probe.ps1 + expected.txt (manual-only flow)
-    comfort-shell/     # hello.sh + expected.txt (manual-only flow)
-  manifest.yml         # declarative list of flows consumed by CI **and** by the extension
-  future/
-    cmdpal/            # PowerToys Command Palette extension (reads manifest.yml)
-  docs/
-    development.md     # this file
+Workloads/
+  _common/         # shared PowerShell shim helpers (retry, refresh PATH, preflight, assert-winget-configure, apply-configuration)
+  typescript/      # configuration.winget (core) + install.ps1 (thin shim)
+  php/             # configuration.winget (core) + install.ps1 (thin shim)
+  python/          # configuration.winget (core) + install.ps1 (thin shim)
+  dotnet/          # configuration.winget (core) + install.ps1 (thin shim)
+  go/              # configuration.winget (core) + install.ps1 (thin shim)
+  java/            # configuration.winget (core) + install.ps1 (thin shim)
+  rust/            # configuration.winget (core) + install.ps1 (thin shim)
+  winforms/        # configuration.winget (core) + install.ps1 (thin shim)
+  winui/           # configuration.winget (core) + install.ps1 (thin shim)
+windows-dev-config/    # Windows Dev Config — dev-config.winget (single-file DSC) + install.ps1 + README.md
+wsl-comfort/           # WSL Comfort — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
+tests/
+  _harness/          # build-run-diff harness used by CI:
+                     #   run-flow.ps1   - all flows (build + run + diff stdout)
+                     #   run-server.ps1 - helper for future server scenarios
+                     #                    (kept idle; no flow currently uses it)
+  typescript/        # hello.ts + expected.txt
+  php/               # hello.php + expected.txt
+  python/            # hello.py + expected.txt
+  dotnet/            # hello.csproj + Program.cs + expected.txt
+  go/                # hello.go + expected.txt
+  java/              # Hello.java + expected.txt
+  rust/              # Cargo.toml + src/main.rs + expected.txt
+  winforms/          # hello.csproj + Program.cs + expected.txt
+  winui/             # hello.csproj + Program.cs + expected.txt
+  windows-dev-config/# probe.ps1 + expected.txt (manual-only flow)
+  wsl-shell/         # hello.sh + expected.txt (manual-only flow)
+manifest.yml         # declarative list of flows consumed by CI **and** by the extension
+future/
+  cmdpal/            # PowerToys Command Palette extension (reads manifest.yml)
 .github/workflows/
-  ci.yml               # discover -> per-OS matrix -> summary
+  ci.yml             # discover -> per-OS matrix -> summary
 ```
 
 ## Repo layout: signed vs source
@@ -183,11 +176,11 @@ winget configure --file ./Workloads/typescript/configuration.winget `
 session and prints a CI-friendly sentinel:
 
 ```powershell
-./src/Workloads/typescript/install.ps1
-./src/tests/_harness/run-flow.ps1 -Id typescript `
-    -Build 'tsc src/tests/typescript/hello.ts' `
-    -Run   'node src/tests/typescript/hello.js' `
-    -Expected src/tests/typescript/expected.txt
+./Workloads/typescript/install.ps1
+./tests/_harness/run-flow.ps1 -Id typescript `
+    -Build 'tsc tests/typescript/hello.ts' `
+    -Run   'node tests/typescript/hello.js' `
+    -Expected tests/typescript/expected.txt
 ```
 
 ## Testing and verifying locally
@@ -208,11 +201,11 @@ These don't touch your machine state and are a good pre-commit pass:
 
 ```bash
 # DSC YAML parses and has the expected shape.
-python3 -c "import yaml; yaml.safe_load(open('src/Workloads/typescript/configuration.winget'))"
-python3 -c "import yaml; yaml.safe_load(open('src/Workloads/php/configuration.winget'))"
+python3 -c "import yaml; yaml.safe_load(open('Workloads/typescript/configuration.winget'))"
+python3 -c "import yaml; yaml.safe_load(open('Workloads/php/configuration.winget'))"
 
 # manifest.yml parses (this is what CI's `discover` job consumes).
-python3 -c "import yaml; print(yaml.safe_load(open('src/manifest.yml')))"
+python3 -c "import yaml; print(yaml.safe_load(open('manifest.yml')))"
 ```
 
 ```powershell
@@ -229,7 +222,7 @@ If you have [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer)
 installed, also run:
 
 ```powershell
-Invoke-ScriptAnalyzer -Recurse -Path ./src/Workloads, ./src/tests/_harness
+Invoke-ScriptAnalyzer -Recurse -Path ./Workloads, ./tests/_harness
 ```
 
 ### 2. Validate the DSC config without applying it (Windows)
@@ -240,7 +233,7 @@ desired state — useful for "will this config do what I think?" without
 actually installing anything:
 
 ```powershell
-winget configure test --file ./src/Workloads/typescript/configuration.winget `
+winget configure test --file ./Workloads/typescript/configuration.winget `
     --accept-configuration-agreements `
     --disable-interactivity
 ```
@@ -255,37 +248,37 @@ This is exactly what CI does and is the definitive local test:
 
 ```powershell
 # a) Apply the DSC config via the shim (this is what CI invokes).
-./src/Workloads/typescript/install.ps1
+./Workloads/typescript/install.ps1
 # Expected tail of output: "INSTALL_OK: typescript"
 
 # b) Build + run the hello-world and diff its stdout against expected.txt.
-./src/tests/_harness/run-flow.ps1 -Id typescript `
-    -Build 'tsc src/tests/typescript/hello.ts' `
-    -Run   'node src/tests/typescript/hello.js' `
-    -Expected src/tests/typescript/expected.txt
+./tests/_harness/run-flow.ps1 -Id typescript `
+    -Build 'tsc tests/typescript/hello.ts' `
+    -Run   'node tests/typescript/hello.js' `
+    -Expected tests/typescript/expected.txt
 # Expected tail of output: "FLOW_OK: typescript"
 
 # c) Re-run the install to prove idempotence — it should succeed again and
 #    report no packages changed.
-./src/Workloads/typescript/install.ps1
+./Workloads/typescript/install.ps1
 ```
 
 Swap `typescript` for `php` (and the matching build/run args from
-[`src/manifest.yml`](../manifest.yml)) to verify the PHP flow the same way.
+[`manifest.yml`](../manifest.yml)) to verify the PHP flow the same way.
 
 ### 4. Drive every flow from the manifest (Windows)
 
-If you're changing something shared (`src/Workloads/_common/*.ps1`, the harness,
+If you're changing something shared (`Workloads/_common/*.ps1`, the harness,
 or the manifest schema) and want to exercise every flow the way CI will:
 
 ```powershell
-$flows = (ConvertFrom-Yaml (Get-Content -Raw ./src/manifest.yml)).flows |
+$flows = (ConvertFrom-Yaml (Get-Content -Raw ./manifest.yml)).flows |
     Where-Object { $_.os -contains 'windows' -and -not $_.manual_test }
 
 foreach ($f in $flows) {
     Write-Host "=== $($f.id) ==="
     & $f.windows.install
-    ./src/tests/_harness/run-flow.ps1 `
+    ./tests/_harness/run-flow.ps1 `
         -Id       $f.id `
         -Build    ($f.windows.build ?? '') `
         -Run      $f.windows.run `
@@ -295,18 +288,18 @@ foreach ($f in $flows) {
 
 `ConvertFrom-Yaml` comes from the `powershell-yaml` module
 (`Install-Module powershell-yaml -Scope CurrentUser`). If you don't want that
-dependency, just copy the build/run strings out of `src/manifest.yml` by hand.
+dependency, just copy the build/run strings out of `manifest.yml` by hand.
 
 ### 5. Validating CI itself
 
-To sanity-check a change to `.github/workflows/ci.yml` or `src/manifest.yml`
+To sanity-check a change to `.github/workflows/ci.yml` or `manifest.yml`
 without a full CI round-trip, run `discover`'s Python block locally — it will
 reject malformed flows with the same error CI would:
 
 ```bash
 python3 - <<'PY'
 import yaml, json
-doc = yaml.safe_load(open("src/manifest.yml"))
+doc = yaml.safe_load(open("manifest.yml"))
 for flow in doc.get("flows", []):
     for os_name in flow.get("os", []):
         spec = flow.get(os_name) or {}
@@ -320,18 +313,18 @@ PY
 
 Adding a language is a **data change**, not a workflow change:
 
-1. Add a `configuration.winget` at `src/Workloads/<lang>/` describing the
+1. Add a `configuration.winget` at `Workloads/<lang>/` describing the
    winget packages and any PowerShell (via `Microsoft.DSC.Transitional/RunCommandOnSet`
-   or `Microsoft.DSC.Transitional/PowerShellScript` resources) needed to reach
-   the desired state. This file is the core artifact — it should be readable
-   on its own and applied directly with `winget configure`.
+   or `PSDscResources/Script` resources) needed to reach the desired state.
+   This file is the core artifact — it should be readable on its own and
+   applyable with `winget configure`.
 2. Add a thin `install.ps1` shim next to it that delegates to
-   `src/Workloads/_common/apply-configuration.ps1` with the flow id, config
+   `Workloads/_common/apply-configuration.ps1` with the flow id, config
    path, and list of commands that must be on PATH afterwards. The shim ends
    with `INSTALL_OK: <lang>`, which CI asserts on.
-3. Add a hello world under `src/tests/<lang>/` together with an `expected.txt`
+3. Add a hello world under `tests/<lang>/` together with an `expected.txt`
    containing its exact stdout.
-4. Append an entry to `src/manifest.yml` describing the build command, run
+4. Append an entry to `manifest.yml` describing the build command, run
    command, and expected-output path for each supported OS.
 
 That's it — `discover` in CI picks up the new flow automatically.
