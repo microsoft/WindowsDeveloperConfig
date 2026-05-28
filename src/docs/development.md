@@ -132,6 +132,14 @@ This repo carries **two parallel copies** of every flow:
 - Don't expect the two trees to be byte-identical. The signed copies carry an Authenticode signature block (`# SIG # Begin signature block` … `# SIG # End signature block`); the bodies above that marker should match what's in `src/`. They will diverge for the window between a `src/` change landing on `main` and the next sign cycle catching up.
 - Don't add a third copy of anything. Both copies exist for one reason only (to ship signed PS1s without losing the unsigned source), and any new flow or shared script lives only in `src/` until the sign pipeline mirrors it.
 
+### Signed-copy drift guard
+
+A PR check named **`Signed copy guard`** ([`.github/workflows/signed-copy-guard.yml`](../../.github/workflows/signed-copy-guard.yml)) runs **only when a PR touches files under `Workloads/`, `windows-dev-config/`, or `wsl-comfort/`** (i.e. one of the three top-level signed-copy roots). For every PR-touched file in those roots, it fails the job if the file no longer matches its `src/` counterpart — modulo the Authenticode signature block on `.ps1` files (the body above `# SIG # Begin signature block` must match; everything else, including `.winget` / `.sh` / `.md` / images / any new extension, must be strictly byte-equal). PRs that edit only `src/` skip this check entirely; the sign pipeline will mirror those changes to the top level on the next sign cycle.
+
+The drift definition is implemented by the shared comparator [`src/tools/check-signed-drift.ps1`](../tools/check-signed-drift.ps1), which is the single source of truth for "what counts as drift". It is a pure reporter — it always exits 0 and emits a JSON report; the workflow decides pass/fail. A follow-up PR will add a non-blocking "Drift status" visibility check that reuses the same script.
+
+Maintainers: once this guard has landed, add **`Signed copy guard`** to the required status checks in `main`'s branch protection so PRs cannot bypass it. The guard does **not** replace the sign pipeline; it only prevents human edits to the top-level copies between sign cycles.
+
 ## Prerequisites (Windows)
 
 Every flow — and the [Command Palette extension](../future/cmdpal/) — installs
