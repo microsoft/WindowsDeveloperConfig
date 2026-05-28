@@ -1,4 +1,4 @@
-# WindowsDeveloperConfig — Developer Guide
+# Windows Developer Config — Developer Guide
 
 > 👋 **Just want to run something?** See the
 > [top-level README](../../README.md). This file is the contributor /
@@ -46,7 +46,7 @@ extension.
 | Python            | ✅ automated   | `Python.Python.3.13`, `astral-sh.uv`                                                    |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCLI` + WinUI/Universal/ManagedDesktop VS workloads |
-| Windows Dev Config | 🙋 manual     | A full distraction-free workstation: apps + ~24 registry tweaks + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
+| Windows Dev Config | 🙋 manual     | A full distraction-free workstation: apps + registry tweaks + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
 | Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative

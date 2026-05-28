@@ -237,7 +237,7 @@ flows:
       install: src/wsl-comfort/install.ps1
       build: ""
       run: wsl -- bash src/tests/comfort-shell/hello.sh
-      expected: src/tests/comfort-shell/expected.txt
+      expected: src/tests/wsl-comfort/expected.txt
       version: "wsl --status"
 
   - id: windows-dev-config
