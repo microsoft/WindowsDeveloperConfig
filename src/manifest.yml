@@ -221,8 +221,8 @@ flows:
       expected: src/tests/python/expected.txt
       version: "python --version; uv --version"
 
-  - id: comfort-shell
-    name: Comfort Shell
+  - id: wsl-comfort
+    name: WSL Comfort
     description: Cozy WSL shell setup — zsh/bash, starship, modern CLI tools, and shims
     category: user-experience
     tags: [user-experience, wsl, zsh, bash, shell, starship, homebrew, terminal, nerd-font]
@@ -236,7 +236,7 @@ flows:
     windows:
       install: src/wsl-comfort/install.ps1
       build: ""
-      run: wsl -- bash src/tests/comfort-shell/hello.sh
+      run: wsl -- bash src/tests/wsl-comfort/hello.sh
       expected: src/tests/wsl-comfort/expected.txt
       version: "wsl --status"
 
