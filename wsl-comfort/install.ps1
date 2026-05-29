@@ -7,7 +7,6 @@
   step and lets you pick the distro. Pass -NonInteractive to accept all
   defaults (auto-pick distro, forward --non-interactive to the bootstrap).
 #>
-# lets intentional touch a file that should flag
 
 [CmdletBinding()]
 param(
