@@ -15,7 +15,9 @@ name: Signed copy guard
 
 on:
   pull_request:
-    branches: [main,signed-copy-drift-guard]
+    branches: 
+      - main
+      - signed-copy-drift-guard
     paths:
       - 'Workloads/**'
       - 'windows-dev-config/**'
