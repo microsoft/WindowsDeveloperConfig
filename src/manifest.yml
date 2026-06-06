@@ -223,6 +223,22 @@ flows:
       expected: src/tests/python/expected.txt
       version: "python --version; uv --version"
 
+  - id: powershell
+    name: PowerShell
+    description: PowerShell 7 + VS Code PowerShell tooling and script analysis
+    category: languages
+    tags: [powershell, pwsh, pester, psscriptanalyzer, vscode]
+    icon: 💙
+    onboardingUrl: https://learn.microsoft.com/powershell/scripting/overview
+    os: [windows]
+    windows:
+      install: Workloads/powershell/install.ps1
+      configuration: Workloads/powershell/configuration.winget
+      build: ""
+      run: pwsh -NoProfile -File src/tests/powershell/hello.ps1
+      expected: src/tests/powershell/expected.txt
+      version: "pwsh --version; code --version"
+
   - id: comfort-shell
     name: Comfort Shell
     description: Cozy WSL shell setup — zsh/bash, starship, modern CLI tools, and shims
