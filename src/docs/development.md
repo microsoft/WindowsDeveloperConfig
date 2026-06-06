@@ -44,6 +44,7 @@ extension.
 | Java              | ✅ automated   | `Microsoft.OpenJDK.25`                                                                  |
 | Rust              | ✅ automated   | `Rustlang.Rustup` (then `rustup default stable`)                                        |
 | Python            | ✅ automated   | `Python.Python.3.14`, `astral-sh.uv`                                                    |
+| SQL Developer     | 🙋 manual     | Lightweight SQL Developer: SQL Server + sqlcmd + VS Code extension; no VS/SSDT           |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCLI` + WinUI/Universal/ManagedDesktop VS workloads |
 | Calm OS           | 🙋 manual     | A full distraction-free workstation: apps + ~24 registry tweaks + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
