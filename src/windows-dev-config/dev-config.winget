@@ -690,16 +690,6 @@ resources:
     securityContext: elevated
 
 - type: Microsoft.WinGet/Package
-  name: NodeJS
-  properties:
-    id: OpenJS.NodeJS.LTS
-    source: winget
-    useLatest: true
-  metadata:
-    description: Install Node.js 24 LTS
-    securityContext: elevated
-
-- type: Microsoft.WinGet/Package
   name: nvmForNode
   properties:
     id: CoreyButler.NVMforWindows
@@ -707,6 +697,47 @@ resources:
     useLatest: true
   metadata:
     description: Install NVM
+    securityContext: elevated
+
+- type: Microsoft.DSC.Transitional/PowerShellScript
+  name: NvmActivateNode
+  dependsOn:
+    - nvmForNode
+  properties:
+    getScript: |
+      $machine = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+      $user    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+      $env:Path = (($machine, $user) | Where-Object { $_ }) -join ';'
+      $nvmOk  = $null -ne (Get-Command nvm -ErrorAction SilentlyContinue)
+      $ver    = node --version 2>$null
+      return @{ nvm = $nvmOk; nodeVersion = [string]$ver }
+    testScript: |
+      $machine = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+      $user    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+      $env:Path = (($machine, $user) | Where-Object { $_ }) -join ';'
+      $nvmOk  = $null -ne (Get-Command nvm -ErrorAction SilentlyContinue)
+      $nodeOk = (node --version 2>$null) -match '^v24\.'
+      return ($nvmOk -and $nodeOk)
+    setScript: |
+      $machine = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+      $user    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+      $env:Path = (($machine, $user) | Where-Object { $_ }) -join ';'
+      if (-not (Get-Command nvm -ErrorAction SilentlyContinue)) {
+          throw 'nvm not on PATH. Verify CoreyButler.NVMforWindows installed correctly.'
+      }
+
+      & nvm install 24
+      if ($LASTEXITCODE -ne 0) { throw "nvm install 24 failed (exit $LASTEXITCODE)" }
+      & nvm use 24
+      if ($LASTEXITCODE -ne 0) { throw "nvm use 24 failed (exit $LASTEXITCODE)" }
+
+      $machine = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+      $user    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+      $env:Path = (($machine, $user) | Where-Object { $_ }) -join ';'
+
+      Write-Host "node $(node --version) activated via nvm"
+  metadata:
+    description: Activate Node 24 LTS via nvm (nvm install 24 + nvm use 24)
     securityContext: elevated
 
 - type: Microsoft.WinGet/Package
