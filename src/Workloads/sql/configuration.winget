@@ -27,7 +27,7 @@ resources:
   - name: VSCode
     type: Microsoft.WinGet/Package
     dependsOn:
-      - "[resourceId('Microsoft.WinGet/Package', 'PowerShell')]"
+      - PowerShell
     properties:
       id: Microsoft.VisualStudioCode
       source: winget
@@ -63,7 +63,7 @@ resources:
   - name: InstallVSCodeDscModule
     type: Microsoft.DSC.Transitional/PowerShellScript
     dependsOn:
-      - "[resourceId('Microsoft.WinGet/Package', 'PowerShell')]"
+      - PowerShell
     metadata:
       description: Install the Microsoft.VSCode.Dsc prerelease resource module
     properties:
@@ -84,8 +84,8 @@ resources:
   - name: SqlDatabaseProjectsVSCodeExtension
     type: Microsoft.VSCode.Dsc/VSCodeExtension
     dependsOn:
-      - "[resourceId('Microsoft.WinGet/Package', 'VSCode')]"
-      - "[resourceId('Microsoft.DSC.Transitional/PowerShellScript', 'InstallVSCodeDscModule')]"
+      - VSCode
+      - InstallVSCodeDscModule
     metadata:
       description: Install the SQL Database Projects VS Code extension
     properties:
