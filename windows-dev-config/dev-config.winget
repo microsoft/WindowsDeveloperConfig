@@ -956,13 +956,34 @@ resources:
     - RebootForVmp
   properties:
     getScript: |
-      # WSL tracks installed distros as subkeys under Lxss.
-      $distros = Get-ChildItem 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss' -ErrorAction Ignore
-      return @{ distroCount = ($distros | Measure-Object).Count }
+      $env:WSL_UTF8 = '1'
+      $distros = @()
+      try {
+        $raw = & wsl.exe --list --quiet 2>$null
+        if ($LASTEXITCODE -eq 0 -and $raw) {
+          $distros = @($raw |
+            ForEach-Object { ($_ -replace "`0", '').Trim() } |
+            Where-Object { $_ })
+        }
+      } catch {
+        # wsl.exe not on PATH (e.g. WSL platform not yet installed). Treat as
+        # "no distros" and let setScript run.
+      }
+      return @{ distroCount = $distros.Count; distros = ($distros -join ',') }
     testScript: |
-      # Skip if any distro is already registered.
-      $distros = Get-ChildItem 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss' -ErrorAction Ignore
-      return [bool]$distros
+      $env:WSL_UTF8 = '1'
+      try {
+        $raw = & wsl.exe --list --quiet 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $raw) {
+          return $false
+        }
+        $distros = @($raw |
+          ForEach-Object { ($_ -replace "`0", '').Trim() } |
+          Where-Object { $_ })
+        return $distros.Count -gt 0
+      } catch {
+        return $false
+      }
     setScript: |
       Write-Host "InstallUbuntu: running wsl --install -d Ubuntu --no-launch..."
       $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c wsl --install -d Ubuntu --no-launch >nul 2>&1" -Wait -PassThru
