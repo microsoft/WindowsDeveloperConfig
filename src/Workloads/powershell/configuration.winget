@@ -23,7 +23,7 @@ resources:
   - name: VSCode
     type: Microsoft.WinGet/Package
     dependsOn:
-      - "[resourceId('Microsoft.WinGet/Package', 'PowerShell')]"
+      - PowerShell
     properties:
       id: Microsoft.VisualStudioCode
       source: winget
@@ -37,7 +37,7 @@ resources:
   - name: InstallVSCodeDscModule
     type: Microsoft.DSC.Transitional/PowerShellScript
     dependsOn:
-      - "[resourceId('Microsoft.WinGet/Package', 'PowerShell')]"
+      - PowerShell
     metadata:
       description: Install the Microsoft.VSCode.Dsc prerelease resource module
     properties:
@@ -58,8 +58,8 @@ resources:
   - name: PowerShellVSCodeExtension
     type: Microsoft.VSCode.Dsc/VSCodeExtension
     dependsOn:
-      - "[resourceId('Microsoft.WinGet/Package', 'VSCode')]"
-      - "[resourceId('Microsoft.DSC.Transitional/PowerShellScript', 'InstallVSCodeDscModule')]"
+      - VSCode
+      - InstallVSCodeDscModule
     metadata:
       description: Install the PowerShell VS Code extension
     properties:
@@ -69,8 +69,8 @@ resources:
   - name: PesterTestVSCodeExtension
     type: Microsoft.VSCode.Dsc/VSCodeExtension
     dependsOn:
-      - "[resourceId('Microsoft.WinGet/Package', 'VSCode')]"
-      - "[resourceId('Microsoft.DSC.Transitional/PowerShellScript', 'InstallVSCodeDscModule')]"
+      - VSCode
+      - InstallVSCodeDscModule
     metadata:
       description: Install the Pester Test VS Code extension
     properties:
@@ -81,8 +81,8 @@ resources:
   - name: ConfigurePowerShellScriptAnalyzer
     type: Microsoft.DSC.Transitional/PowerShellScript
     dependsOn:
-      - "[resourceId('Microsoft.VSCode.Dsc/VSCodeExtension', 'PowerShellVSCodeExtension')]"
-      - "[resourceId('Microsoft.VSCode.Dsc/VSCodeExtension', 'PesterTestVSCodeExtension')]"
+      - PowerShellVSCodeExtension
+      - PesterTestVSCodeExtension
     metadata:
       description: Enable PSScriptAnalyzer rules in VS Code user settings
     properties:
