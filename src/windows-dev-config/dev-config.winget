@@ -702,6 +702,7 @@ resources:
 - type: Microsoft.DSC.Transitional/PowerShellScript
   name: NvmActivateNode
   dependsOn:
+    - PowerShell
     - nvmForNode
   properties:
     getScript: |
@@ -737,7 +738,7 @@ resources:
 
       Write-Host "node $(node --version) activated via nvm"
   metadata:
-    description: Activate Node 24 LTS via nvm (nvm install 24 + nvm use 24)
+    description: Activate Node 24 via nvm (nvm install 24 + nvm use 24)
     securityContext: elevated
 
 - type: Microsoft.WinGet/Package

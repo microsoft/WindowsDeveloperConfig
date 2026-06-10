@@ -66,7 +66,7 @@ The configuration is idempotent, so it is safe to re-run after reboot or at any 
 
 ## What this configures
 
-- **12 apps** via winget (PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14, UV, NVM for Windows (activates Node 24), Windows Application CLI, plus optional Oh My Posh and PowerToys).
+- **11 core apps** (plus 2 optional: Oh My Posh and PowerToys) via winget (Windows Terminal, PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14, UV, NVM for Windows (activates Node 24), Windows Application CLI).
 - **WSL + Ubuntu**, installed via 3 transitional script resources that bracket a reboot (Phase 2/3/4 below).
 - **~24 registry settings** for theme/OS, Explorer, Taskbar, Search, Start, Notifications, Edge, Sudo, and the Widget service.
 - **Cascadia Code & Cascadia Mono Nerd Fonts** downloaded from the `microsoft/cascadia-code` GitHub release and registered per-user.
