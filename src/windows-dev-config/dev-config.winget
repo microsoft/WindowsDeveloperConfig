@@ -60,16 +60,10 @@ resources:
       $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
       return [bool]$svc
     setScript: |
-      $env:WSL_UTF8 = '1'
       Write-Host "InstallWslComponents: running wsl --install --no-distribution..."
       # Start-Process isolates the native call so wsl's stderr never reaches
       # PowerShell's error stream and $LASTEXITCODE is left untouched
-      $out = [System.IO.Path]::GetTempFileName()
-      $err = [System.IO.Path]::GetTempFileName()
-      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--install','--no-distribution' `
-             -NoNewWindow -Wait -PassThru `
-             -RedirectStandardOutput $out -RedirectStandardError $err
-      Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+      $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c wsl --install --no-distribution >nul 2>&1" -Wait -PassThru -NoNewWindow
       if ($p.ExitCode -eq 3010 -or $p.ExitCode -eq 1641) {
         Write-Host "WSL installed successfully, but a system reboot is required."
       }
@@ -175,8 +169,6 @@ resources:
       Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
       return $distros.Count -gt 0
     setScript: |
-      $env:WSL_UTF8 = '1'
-
       # Suppress the "Welcome to WSL" first-run GUI/OOBE
       $lxssPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
       New-Item -Path $lxssPath -Force | Out-Null
@@ -186,12 +178,7 @@ resources:
       # Start-Process isolates the native call so wsl's stderr never reaches
       # PowerShell's error stream and $LASTEXITCODE is left untouched — both of
       # which the dscv3 PowerShell adapter would otherwise treat as a failure.
-      $out = [System.IO.Path]::GetTempFileName()
-      $err = [System.IO.Path]::GetTempFileName()
-      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--install','-d','Ubuntu','--no-launch' `
-             -NoNewWindow -Wait -PassThru `
-             -RedirectStandardOutput $out -RedirectStandardError $err
-      Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+      $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c wsl --install -d Ubuntu --no-launch >nul 2>&1" -Wait -PassThru -NoNewWindow
       if ($p.ExitCode -ne 0) {
         throw "InstallUbuntu: wsl --install -d Ubuntu --no-launch failed with exit code $($p.ExitCode)"
       }
