@@ -43,17 +43,23 @@ resources:
     properties:
       getScript: |
         $module = Get-InstalledPSResource -Name Microsoft.VSCode.Dsc -ErrorAction SilentlyContinue |
-          Where-Object { $_.Version.ToString() -eq '0.1.5-alpha' } |
+          Where-Object { $_.Version.ToString() -eq '0.1.6-alpha' -and $_.PrivateData.PSData.Prerelease -eq 'alpha' } |
           Select-Object -First 1
         $version = if ($module) { $module.Version.ToString() } else { $null }
         return @{ installed = [bool]$module; version = $version }
       testScript: |
         $module = Get-InstalledPSResource -Name Microsoft.VSCode.Dsc -ErrorAction SilentlyContinue |
-          Where-Object { $_.Version.ToString() -eq '0.1.5-alpha' } |
+          Where-Object { $_.Version.ToString() -eq '0.1.6-alpha' -and $_.PrivateData.PSData.Prerelease -eq 'alpha' } |
           Select-Object -First 1
         return [bool]$module
       setScript: |
-        Install-PSResource -Name Microsoft.VSCode.Dsc -Version 0.1.5-alpha -Prerelease -Repository PSGallery -TrustRepository -AcceptLicense -Scope CurrentUser
+        Install-PSResource -Name Microsoft.VSCode.Dsc `
+          -Version 0.1.6-alpha `
+          -Prerelease `
+          -Repository PSGallery `
+          -TrustRepository `
+          -AcceptLicense `
+          -Scope CurrentUser
 
   - name: PowerShellVSCodeExtension
     type: Microsoft.VSCode.Dsc/VSCodeExtension
