@@ -62,12 +62,19 @@ resources:
     setScript: |
       $env:WSL_UTF8 = '1'
       Write-Host "InstallWslComponents: running wsl --install --no-distribution..."
-      & wsl.exe --install --no-distribution 2>&1 | Out-Null
-      if ($LASTEXITCODE -eq 3010 -or $LASTEXITCODE -eq 1641) {
+      # Start-Process isolates the native call so wsl's stderr never reaches
+      # PowerShell's error stream and $LASTEXITCODE is left untouched
+      $out = [System.IO.Path]::GetTempFileName()
+      $err = [System.IO.Path]::GetTempFileName()
+      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--install','--no-distribution' `
+             -NoNewWindow -Wait -PassThru `
+             -RedirectStandardOutput $out -RedirectStandardError $err
+      Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+      if ($p.ExitCode -eq 3010 -or $p.ExitCode -eq 1641) {
         Write-Host "WSL installed successfully, but a system reboot is required."
       }
-      elseif ($LASTEXITCODE -ne 0) {
-        throw "InstallWslComponents: wsl --install failed with exit code $LASTEXITCODE"
+      elseif ($p.ExitCode -ne 0) {
+        throw "InstallWslComponents: wsl --install failed with exit code $($p.ExitCode)"
       }
   metadata:
     securityContext: elevated
@@ -131,34 +138,42 @@ resources:
     - RebootForVmp
   properties:
     getScript: |
+      # Run wsl --list via Start-Process with redirected output. Calling wsl.exe
+      # directly leaks its non-zero exit code (when no distro is installed) into
+      # $LASTEXITCODE and routes its stderr into PowerShell's error stream — both
+      # of which the dscv3 PowerShell adapter treats as a resource failure.
+      # Start-Process isolates the native call: stderr never reaches the error
+      # stream and $LASTEXITCODE is untouched.
       $env:WSL_UTF8 = '1'
       $distros = @()
-      try {
-        $raw = & wsl.exe --list --quiet 2>$null
-        if ($LASTEXITCODE -eq 0 -and $raw) {
-          $distros = @($raw |
-            ForEach-Object { ($_ -replace "`0", '').Trim() } |
-            Where-Object { $_ })
-        }
-      } catch {
-        # wsl.exe not on PATH (e.g. WSL platform not yet installed). Treat as
-        # "no distros" and let setScript run.
+      $out = [System.IO.Path]::GetTempFileName()
+      $err = [System.IO.Path]::GetTempFileName()
+      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--list','--quiet' `
+             -NoNewWindow -Wait -PassThru `
+             -RedirectStandardOutput $out -RedirectStandardError $err
+      if ($p.ExitCode -eq 0) {
+        $distros = @(Get-Content -LiteralPath $out -Encoding UTF8 |
+          ForEach-Object { ($_ -replace "`0", '').Trim() } |
+          Where-Object { $_ })
       }
+      Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
       return @{ distroCount = $distros.Count; distros = ($distros -join ',') }
     testScript: |
       $env:WSL_UTF8 = '1'
-      try {
-        $raw = & wsl.exe --list --quiet 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $raw) {
-          return $false
-        }
-        $distros = @($raw |
-          ForEach-Object { ($_ -replace "`0", '').Trim() } |
-          Where-Object { $_ })
-        return $distros.Count -gt 0
-      } catch {
+      $out = [System.IO.Path]::GetTempFileName()
+      $err = [System.IO.Path]::GetTempFileName()
+      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--list','--quiet' `
+             -NoNewWindow -Wait -PassThru `
+             -RedirectStandardOutput $out -RedirectStandardError $err
+      if ($p.ExitCode -ne 0) {
+        Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
         return $false
       }
+      $distros = @(Get-Content -LiteralPath $out -Encoding UTF8 |
+        ForEach-Object { ($_ -replace "`0", '').Trim() } |
+        Where-Object { $_ })
+      Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+      return $distros.Count -gt 0
     setScript: |
       $env:WSL_UTF8 = '1'
 
@@ -168,9 +183,17 @@ resources:
       Set-ItemProperty -Path $lxssPath -Name 'OOBEComplete' -Value 1 -Type DWord -Force
 
       Write-Host "InstallUbuntu: running wsl --install -d Ubuntu --no-launch..."
-      & wsl.exe --install -d Ubuntu --no-launch 2>&1 | Out-Null
-      if ($LASTEXITCODE -ne 0) {
-        throw "InstallUbuntu: wsl --install -d Ubuntu --no-launch failed with exit code $LASTEXITCODE"
+      # Start-Process isolates the native call so wsl's stderr never reaches
+      # PowerShell's error stream and $LASTEXITCODE is left untouched — both of
+      # which the dscv3 PowerShell adapter would otherwise treat as a failure.
+      $out = [System.IO.Path]::GetTempFileName()
+      $err = [System.IO.Path]::GetTempFileName()
+      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--install','-d','Ubuntu','--no-launch' `
+             -NoNewWindow -Wait -PassThru `
+             -RedirectStandardOutput $out -RedirectStandardError $err
+      Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+      if ($p.ExitCode -ne 0) {
+        throw "InstallUbuntu: wsl --install -d Ubuntu --no-launch failed with exit code $($p.ExitCode)"
       }
   metadata:
     securityContext: elevated
