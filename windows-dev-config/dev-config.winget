@@ -44,6 +44,158 @@ resources:
 # 
 #       throw "ElevationCheck: re-launched elevated successfully. This unelevated session is now complete — check the elevated window for results."
 
+# ---------------------------------------------------------------------------
+# WSL Phase 1 — Enable WSL optional components via wsl --install
+#            (enables Virtual Machine Platform; reboot required)
+# ---------------------------------------------------------------------------
+
+- name: InstallWslComponents
+  type: Microsoft.DSC.Transitional/WindowsPowerShellScript
+  properties:
+    getScript: |
+      $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
+      return @{ vmcomputePresent = [bool]$svc }
+    testScript: |
+      # If vmcompute is present, VMP is active — components already installed.
+      $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
+      return [bool]$svc
+    setScript: |
+      Write-Host "InstallWslComponents: running wsl --install --no-distribution..."
+      # Launch wsl.exe directly WITHOUT -NoNewWindow and WITHOUT -RedirectStandard*
+      # so Start-Process allocates a fresh console (CREATE_NEW_CONSOLE), which
+      # wsl's install bootstrap requires. The dscv3 host has no console to
+      # inherit, so -NoNewWindow (or -RedirectStandardOutput, which also
+      # suppresses the new console) makes wsl fail with "The Windows Subsystem
+      # for Linux is not installed". With no -Redirect* flags PowerShell never
+      # captures wsl's output — it goes to that console, not PowerShell's error
+      # stream — so there is no stderr-as-error problem and no cmd ">nul" needed.
+      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--install','--no-distribution' -Wait -PassThru
+      if ($p.ExitCode -eq 3010 -or $p.ExitCode -eq 1641) {
+        Write-Host "WSL installed successfully, but a system reboot is required."
+      }
+      elseif ($p.ExitCode -ne 0) {
+        throw "InstallWslComponents: wsl --install failed with exit code $($p.ExitCode)"
+      }
+  metadata:
+    securityContext: elevated
+
+# ---------------------------------------------------------------------------
+# WSL Phase 2 — Reboot so VMP takes effect
+# ---------------------------------------------------------------------------
+
+- name: RebootForVmp
+  type: Microsoft.DSC.Transitional/WindowsPowerShellScript
+  dependsOn:
+    - InstallWslComponents
+  properties:
+    getScript: |
+      # Get-CimInstance returns $null without error when the service doesn't
+      # exist (unlike Get-Service, which sets HadErrors at the hosting layer
+      # even with -ErrorAction Ignore or try/catch).
+      $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
+      return @{ vmcomputePresent = [bool]$svc }
+    testScript: |
+      # vmcompute (Hyper-V Host Compute Service) is registered once Virtual
+      # Machine Platform is active post-reboot. Presence alone is sufficient
+      # — no need to check if it is running.
+      $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
+      return [bool]$svc
+    setScript: |
+      # ${WinGetConfigRoot} is set by winget configure to the directory
+      # containing the config file being applied.
+      $configFile = "${WinGetConfigRoot}\dev-config.winget"
+      $resumeCmd  = "winget configure --file `"$configFile`" --accept-configuration-agreements"
+
+      # RunOnce entries are deleted by Windows automatically before they
+      # are executed, so no cleanup step is needed in this config.
+      $runOncePath = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce'
+      Set-ItemProperty -Path $runOncePath -Name 'DSCConfigureResume' -Value $resumeCmd -Force
+
+      Write-Host "RebootForVmp: registered RunOnce resume key."
+      Write-Host "  HKCU:\...\RunOnce\DSCConfigureResume = $resumeCmd"
+      Write-Host "RebootForVmp: rebooting now to activate Virtual Machine Platform..."
+      Restart-Computer -Force
+
+      # Restart-Computer -Force returns immediately after signalling the OS
+      # to reboot — it does not block until the machine goes down. Without
+      # an explicit failure here DSC would consider this resource succeeded
+      # and attempt to run InstallUbuntu before the reboot happens.
+      # Throwing forces DSC to mark the current run as failed; the RunOnce
+      # key handles resuming on the next login.
+      Start-Sleep -Seconds 60   # give the OS time to initiate shutdown
+      throw "Reboot initiated to activate Virtual Machine Platform. DSC will resume via RunOnce on next login."
+  metadata:
+    securityContext: elevated
+
+
+# ---------------------------------------------------------------------------
+# WSL Phase 3 — Install default Ubuntu distro (VMP now active post-reboot)
+# ---------------------------------------------------------------------------
+
+- name: InstallUbuntu
+  type: Microsoft.DSC.Transitional/WindowsPowerShellScript
+  dependsOn:
+    - RebootForVmp
+  properties:
+    getScript: |
+      # Run wsl --list via Start-Process with redirected output. Calling wsl.exe
+      # directly leaks its non-zero exit code (when no distro is installed) into
+      # $LASTEXITCODE and routes its stderr into PowerShell's error stream — both
+      # of which the dscv3 PowerShell adapter treats as a resource failure.
+      # Start-Process isolates the native call: stderr never reaches the error
+      # stream and $LASTEXITCODE is untouched.
+      $env:WSL_UTF8 = '1'
+      $distros = @()
+      $out = [System.IO.Path]::GetTempFileName()
+      $err = [System.IO.Path]::GetTempFileName()
+      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--list','--quiet' `
+             -NoNewWindow -Wait -PassThru `
+             -RedirectStandardOutput $out -RedirectStandardError $err
+      if ($p.ExitCode -eq 0) {
+        $distros = @(Get-Content -LiteralPath $out -Encoding UTF8 |
+          ForEach-Object { ($_ -replace "`0", '').Trim() } |
+          Where-Object { $_ })
+      }
+      Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+      return @{ distroCount = $distros.Count; distros = ($distros -join ',') }
+    testScript: |
+      $env:WSL_UTF8 = '1'
+      $out = [System.IO.Path]::GetTempFileName()
+      $err = [System.IO.Path]::GetTempFileName()
+      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--list','--quiet' `
+             -NoNewWindow -Wait -PassThru `
+             -RedirectStandardOutput $out -RedirectStandardError $err
+      if ($p.ExitCode -ne 0) {
+        Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+        return $false
+      }
+      $distros = @(Get-Content -LiteralPath $out -Encoding UTF8 |
+        ForEach-Object { ($_ -replace "`0", '').Trim() } |
+        Where-Object { $_ })
+      Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+      return $distros.Count -gt 0
+    setScript: |
+      # Suppress the "Welcome to WSL" first-run GUI/OOBE
+      $lxssPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+      New-Item -Path $lxssPath -Force | Out-Null
+      Set-ItemProperty -Path $lxssPath -Name 'OOBEComplete' -Value 1 -Type DWord -Force
+
+      Write-Host "InstallUbuntu: running wsl --install -d Ubuntu --no-launch..."
+      # Launch wsl.exe directly WITHOUT -NoNewWindow and WITHOUT -RedirectStandard*
+      # so Start-Process allocates a fresh console (CREATE_NEW_CONSOLE), which
+      # wsl's install bootstrap requires. The dscv3 host has no console to
+      # inherit, so -NoNewWindow (or -RedirectStandardOutput, which also
+      # suppresses the new console) makes wsl fail with "The Windows Subsystem
+      # for Linux is not installed". With no -Redirect* flags PowerShell never
+      # captures wsl's output — it goes to that console, not PowerShell's error
+      # stream — so there is no stderr-as-error problem and no cmd ">nul" needed.
+      $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--install','-d','Ubuntu','--no-launch' -Wait -PassThru
+      if ($p.ExitCode -ne 0) {
+        throw "InstallUbuntu: wsl --install -d Ubuntu --no-launch failed with exit code $($p.ExitCode)"
+      }
+  metadata:
+    securityContext: elevated
+
 # =============================================================================
 # Terminal and PowerShell 7
 # =============================================================================
@@ -54,6 +206,7 @@ resources:
     id: Microsoft.WindowsTerminal
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install Windows Terminal
 
@@ -63,6 +216,7 @@ resources:
     id: Microsoft.PowerShell
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install PowerShell 7
 
@@ -624,6 +778,7 @@ resources:
     id: Git.Git
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install Git
     securityContext: elevated
@@ -636,6 +791,7 @@ resources:
     id: GitHub.Cli
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install GitHub CLI
     securityContext: elevated
@@ -648,6 +804,7 @@ resources:
     id: GitHub.Copilot
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install GitHub Copilot
 
@@ -657,6 +814,7 @@ resources:
     id: Microsoft.VisualStudioCode
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install VS Code
 
@@ -666,6 +824,7 @@ resources:
     id: Microsoft.dotnet.SDK.10
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install dotnet SDK
     securityContext: elevated
@@ -676,6 +835,7 @@ resources:
     id: Python.Python.3.14
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install Python 3.14
 
@@ -685,6 +845,7 @@ resources:
     id: astral-sh.uv
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install UV (Python tool)
     securityContext: elevated
@@ -695,6 +856,7 @@ resources:
     id: OpenJS.NodeJS.LTS
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install Node.js 24 LTS
     securityContext: elevated
@@ -705,6 +867,7 @@ resources:
     id: CoreyButler.NVMforWindows
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install NVM
     securityContext: elevated
@@ -715,6 +878,7 @@ resources:
     id: JanDeDobbeleer.OhMyPosh
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install Oh My Posh (Optional)
 
@@ -724,6 +888,7 @@ resources:
     id: Microsoft.winappcli
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install winAppCLI
 
@@ -733,6 +898,7 @@ resources:
     id: Microsoft.PowerToys
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install PowerToys (Optional)
 
@@ -869,126 +1035,3 @@ resources:
       copilot plugin install winui@win-dev-skills
   metadata:
     description: Install the WinUI Copilot plugin from win-dev-skills
-
-# ---------------------------------------------------------------------------
-# WSL Phase 1 — Enable WSL optional components via wsl --install
-#            (enables Virtual Machine Platform; reboot required)
-# ---------------------------------------------------------------------------
-
-- name: InstallWslComponents
-  type: Microsoft.DSC.Transitional/WindowsPowerShellScript
-  properties:
-    getScript: |
-      $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
-      return @{ vmcomputePresent = [bool]$svc }
-    testScript: |
-      # If vmcompute is present, VMP is active — components already installed.
-      $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
-      return [bool]$svc
-    setScript: |
-      Write-Host "InstallWslComponents: running wsl --install --no-distribution..."
-      $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c wsl --install --no-distribution >nul 2>&1" -Wait -PassThru
-      if ($process.ExitCode -eq 3010 -or $process.ExitCode -eq 1641) {
-        Write-Host "WSL installed successfully, but a system reboot is required."
-      }
-      elseif ($process.ExitCode -ne 0) {
-        throw "InstallWslComponents: wsl --install failed with exit code $($process.ExitCode)"
-      }
-  metadata:
-    securityContext: elevated
-
-# ---------------------------------------------------------------------------
-# WSL Phase 2 — Reboot so VMP takes effect
-# ---------------------------------------------------------------------------
-
-- name: RebootForVmp
-  type: Microsoft.DSC.Transitional/WindowsPowerShellScript
-  dependsOn:
-    - InstallWslComponents
-  properties:
-    getScript: |
-      # Get-CimInstance returns $null without error when the service doesn't
-      # exist (unlike Get-Service, which sets HadErrors at the hosting layer
-      # even with -ErrorAction Ignore or try/catch).
-      $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
-      return @{ vmcomputePresent = [bool]$svc }
-    testScript: |
-      # vmcompute (Hyper-V Host Compute Service) is registered once Virtual
-      # Machine Platform is active post-reboot. Presence alone is sufficient
-      # — no need to check if it is running.
-      $svc = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
-      return [bool]$svc
-    setScript: |
-      # ${WinGetConfigRoot} is set by winget configure to the directory
-      # containing the config file being applied.
-      $configFile = "${WinGetConfigRoot}\dev-config.winget"
-      $resumeCmd  = "winget configure --file `"$configFile`" --accept-configuration-agreements"
-
-      # RunOnce entries are deleted by Windows automatically before they
-      # are executed, so no cleanup step is needed in this config.
-      $runOncePath = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce'
-      Set-ItemProperty -Path $runOncePath -Name 'DSCConfigureResume' -Value $resumeCmd -Force
-
-      Write-Host "RebootForVmp: registered RunOnce resume key."
-      Write-Host "  HKCU:\...\RunOnce\DSCConfigureResume = $resumeCmd"
-      Write-Host "RebootForVmp: rebooting now to activate Virtual Machine Platform..."
-      Restart-Computer -Force
-
-      # Restart-Computer -Force returns immediately after signalling the OS
-      # to reboot — it does not block until the machine goes down. Without
-      # an explicit failure here DSC would consider this resource succeeded
-      # and attempt to run InstallUbuntu before the reboot happens.
-      # Throwing forces DSC to mark the current run as failed; the RunOnce
-      # key handles resuming on the next login.
-      Start-Sleep -Seconds 60   # give the OS time to initiate shutdown
-      throw "Reboot initiated to activate Virtual Machine Platform. DSC will resume via RunOnce on next login."
-  metadata:
-    securityContext: elevated
-
-
-# ---------------------------------------------------------------------------
-# WSL Phase 3 — Install default Ubuntu distro (VMP now active post-reboot)
-# ---------------------------------------------------------------------------
-
-- name: InstallUbuntu
-  type: Microsoft.DSC.Transitional/WindowsPowerShellScript
-  dependsOn:
-    - RebootForVmp
-  properties:
-    getScript: |
-      $env:WSL_UTF8 = '1'
-      $distros = @()
-      try {
-        $raw = & wsl.exe --list --quiet 2>$null
-        if ($LASTEXITCODE -eq 0 -and $raw) {
-          $distros = @($raw |
-            ForEach-Object { ($_ -replace "`0", '').Trim() } |
-            Where-Object { $_ })
-        }
-      } catch {
-        # wsl.exe not on PATH (e.g. WSL platform not yet installed). Treat as
-        # "no distros" and let setScript run.
-      }
-      return @{ distroCount = $distros.Count; distros = ($distros -join ',') }
-    testScript: |
-      $env:WSL_UTF8 = '1'
-      try {
-        $raw = & wsl.exe --list --quiet 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $raw) {
-          return $false
-        }
-        $distros = @($raw |
-          ForEach-Object { ($_ -replace "`0", '').Trim() } |
-          Where-Object { $_ })
-        return $distros.Count -gt 0
-      } catch {
-        return $false
-      }
-    setScript: |
-      Write-Host "InstallUbuntu: running wsl --install -d Ubuntu --no-launch..."
-      $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c wsl --install -d Ubuntu --no-launch >nul 2>&1" -Wait -PassThru
-      if ($process.ExitCode -ne 0) {
-        throw "InstallUbuntu: wsl --install -d Ubuntu --no-launch failed with exit code $($process.ExitCode)"
-      }
-  metadata:
-    securityContext: elevated
