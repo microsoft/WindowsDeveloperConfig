@@ -132,7 +132,7 @@ Package resources use `Microsoft.WinGet/Package` with `source: winget` and `useL
 | `ElevationCheck` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` checks `IsInRole(Administrator)`. If false, `setScript` re-invokes `winget configure --file <this> --accept-configuration-agreements --disable-interactivity --wait` via `Start-Process -Verb RunAs`, then throws so the unelevated session ends cleanly. |
 | `InstallWslComponents` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` probes for the `vmcompute` service (presence ⇒ Virtual Machine Platform is active). `setScript` runs `wsl --install --no-distribution`. |
 | `RebootForVmp` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | Same `vmcompute` test. `setScript` registers `HKCU:\...\RunOnce\DSCConfigureResume` with the same `winget configure --file <this> --accept-configuration-agreements` command, then `Restart-Computer -Force` and throws so DSC stops the current run. |
-| `InstallUbuntu` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` checks for any subkey under `HKCU:\...\Lxss`. `setScript` runs `wsl --install -d Ubuntu --no-launch`. |
+| `InstallUbuntu` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` runs `wsl --list --quiet` and returns true if any distro is already registered. `setScript` runs `wsl --install -d Ubuntu --no-launch`. |
 
 All app resources that need WSL present depend on `InstallUbuntu` so the OS work happens before the reboot — but the WSL install is still part of the same `winget configure` invocation thanks to the RunOnce resume.
 
@@ -273,7 +273,7 @@ HKLM policies, applied via `Microsoft.Windows/Registry`:
 | **`useLatest: true`** | Each run grabs the latest available version. Builds may differ between machines applying the config on different days. |
 | **HKLM registry keys** | Sudo, the Widget service policy, Edge policies, Remote Desktop, Long Paths, and Developer Mode all live in HKLM. The `ElevationCheck` gate guarantees the run is elevated; without it these would silently fail. |
 | **PowerToys AOT path** | `HKCU\...\Notifications\Settings\PowerToys\Enabled` targets a specific registry path that may change across PowerToys versions. |
-| **Idempotency of WSL phases** | `InstallWslComponents` and `RebootForVmp` both test for `vmcompute`. Re-running after the reboot is a no-op for those resources. `InstallUbuntu` tests for any `Lxss` subkey, so it skips once any distro is registered. |
+| **Idempotency of WSL phases** | `InstallWslComponents` and `RebootForVmp` both test for `vmcompute`. Re-running after the reboot is a no-op for those resources. `InstallUbuntu` queries `wsl --list --quiet`, so it skips once any distro is registered. |
 | **Pinned font release** | `InstallCascadiaCodeNerdFonts` hard-codes Cascadia Code release `2407.24` from `microsoft/cascadia-code`. Bump `$Version` to pick up newer releases. |
 | **Windows Terminal settings overwrite** | `SetCascadiaNfAsDefault` and `ps7default` rewrite `settings.json` via `ConvertTo-Json`. `SetCascadiaNfAsDefault` writes a `settings.json.bak` first; `ps7default` does not. JSON comments will not survive the round-trip. |
 | **`ohMyPoshProfileSet` runs `. $PROFILE`** | Dot-sourcing the profile inside `pwsh -NoProfile` can surface errors from the user's existing profile during DSC apply. |
