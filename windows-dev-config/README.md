@@ -66,7 +66,7 @@ The configuration is idempotent, so it is safe to re-run after reboot or at any 
 
 ## What this configures
 
-- **11 core apps** (plus 2 optional: Oh My Posh and PowerToys) via winget (Windows Terminal, PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14, UV, NVM for Windows (activates Node 24), Windows Application CLI).
+- **13 apps** via winget (PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14, UV, Node.js LTS, NVM for Windows, Windows Application CLI, plus optional Oh My Posh and PowerToys).
 - **WSL + Ubuntu**, installed via 3 transitional script resources that bracket a reboot (Phase 2/3/4 below).
 - **~24 registry settings** for theme/OS, Explorer, Taskbar, Search, Start, Notifications, Edge, Sudo, and the Widget service.
 - **Cascadia Code & Cascadia Mono Nerd Fonts** downloaded from the `microsoft/cascadia-code` GitHub release and registered per-user.
@@ -84,7 +84,7 @@ The configuration is idempotent, so it is safe to re-run after reboot or at any 
 
 All resources are dscv3 (`$schema: .../DSC/main/schemas/2023/08/config/document.json`, `metadata.winget.processor.identifier: dscv3`). Every resource that touches HKLM or runs elevated tools depends on `ElevationCheck`.
 
-Package resources use `Microsoft.WinGet/Package` with `source: winget` and `useLatest: true` (except `Python.Python.3.14` and `Microsoft.dotnet.SDK.10`, which are pinned by id). Node 24 is activated via nvm (`NvmActivateNode`).
+Package resources use `Microsoft.WinGet/Package` with `source: winget` and `useLatest: true` (except `Python.Python.3.14`, `Microsoft.dotnet.SDK.10`, and `OpenJS.NodeJS.LTS`, which are pinned by id).
 
 ### Phase resources (elevation + WSL)
 
@@ -93,7 +93,7 @@ Package resources use `Microsoft.WinGet/Package` with `source: winget` and `useL
 | `ElevationCheck` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` checks `IsInRole(Administrator)`. If false, `setScript` re-invokes `winget configure --file <this> --accept-configuration-agreements --disable-interactivity --wait` via `Start-Process -Verb RunAs`, then throws so the unelevated session ends cleanly. |
 | `InstallWslComponents` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` probes for the `vmcompute` service (presence ⇒ Virtual Machine Platform is active). `setScript` runs `wsl --install --no-distribution`. |
 | `RebootForVmp` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | Same `vmcompute` test. `setScript` registers `HKCU:\...\RunOnce\DSCConfigureResume` with the same `winget configure --file <this> --accept-configuration-agreements` command, then `Restart-Computer -Force` and throws so DSC stops the current run. |
-| `InstallUbuntu` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` checks for any subkey under `HKCU:\...\Lxss`. `setScript` runs `wsl --install -d Ubuntu --no-launch`. |
+| `InstallUbuntu` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` runs `wsl --list --quiet` and returns true if any distro is already registered. `setScript` runs `wsl --install -d Ubuntu --no-launch`. |
 
 All app resources that need WSL present depend on `InstallUbuntu` so the OS work happens before the reboot — but the WSL install is still part of the same `winget configure` invocation thanks to the RunOnce resume.
 
@@ -109,7 +109,8 @@ All app resources that need WSL present depend on `InstallUbuntu` so the OS work
 | `DotnetSdk` | `Microsoft.dotnet.SDK.10` | Pinned to v10. |
 | `Python` | `Python.Python.3.14` | Pinned to 3.14. |
 | `UV` | `astral-sh.uv` | |
-| `nvmForNode` | `CoreyButler.NVMforWindows` | Node version manager for Windows. `NvmActivateNode` runs `nvm install 24` + `nvm use 24` after install. |
+| `NodeJS` | `OpenJS.NodeJS.LTS` | Pinned to the LTS line (currently Node 24 LTS). |
+| `nvmForNode` | `CoreyButler.NVMforWindows` | Node version manager for Windows. |
 | `OhMyPosh` | `JanDeDobbeleer.OhMyPosh` | Marked Optional in the comments. Triggers `ohMyPoshProfileSet`. |
 | `winappCli` | `Microsoft.winappcli` | Windows Application CLI. |
 | `PowerToys` | `Microsoft.PowerToys` | Marked Optional. Followed by `PowerToysAOT` which disables AOT notifications via registry. |
@@ -202,7 +203,7 @@ HKLM policies, applied via `Microsoft.Windows/Registry`:
 ## Customization
 
 - **Pick and choose packages.** Comment out any `Microsoft.WinGet/Package` block to skip that install — most have no `dependsOn` chain beyond `InstallUbuntu` (exceptions: `GitHubCLI` and `GitHubCopilot` depend on `Git`; `PowerToysAOT` depends on `PowerToys`; `ohMyPoshProfileSet` depends on `OhMyPosh`).
-- **Pin or unpin versions.** Switch `id: Python.Python.3.14` (pinned) to `id: Python.Python.3` if you want to drift forward. Vice versa for other unpinned packages. To change the activated Node version, update the `nvm install` and `nvm use` arguments in `NvmActivateNode`.
+- **Pin or unpin versions.** Switch `id: Python.Python.3.14` (pinned) to `id: Python.Python.3` if you want to drift forward, or switch `OpenJS.NodeJS.LTS` to `OpenJS.NodeJS` for current. Vice versa for the unpinned packages.
 - **Toggle registry values.** Most settings are `DWord: 0` or `DWord: 1`; flip the value to invert the behavior.
 - **Re-enable commented-out tweaks.** `HideDesktopIcons` ships commented out (it over-fires on some user setups). Uncomment to enable.
 - **Change the WSL distro.** Edit the `wsl --install -d Ubuntu --no-launch` line inside the `InstallUbuntu` resource.
@@ -218,7 +219,7 @@ HKLM policies, applied via `Microsoft.Windows/Registry`:
 | `Microsoft.DSC.Transitional/WindowsPowerShellScript` (not `PSDscResources/Script`) | The dscv3 transitional resource is the supported equivalent under the new processor. |
 | Self-relaunch elevated from `ElevationCheck` | A user can double-click into an unelevated shell and the DSC will UAC-prompt itself rather than failing. |
 | Reboot + RunOnce inside the DSC | The DSC owns the reboot and the resume, so the user only invokes `winget configure` once. The throw after `Restart-Computer -Force` is required because `Restart-Computer` returns immediately after signalling shutdown; without the throw DSC would treat the resource as succeeded and continue. |
-| `useLatest: true` on most packages | Cloud PC parity tracks "current" tools. Pinned ids (`Python.Python.3.14`, `Microsoft.dotnet.SDK.10`) are used where a major-version line matters. Node version is pinned explicitly in the `NvmActivateNode` activation script (`nvm install 24`). |
+| `useLatest: true` on most packages | Cloud PC parity tracks "current" tools. Pinned ids (`Python.Python.3.14`, `Microsoft.dotnet.SDK.10`, `OpenJS.NodeJS.LTS`) are used where a major-version line matters. |
 | Dark theme via `dark.theme` file (not registry) | Applying the shipped `.theme` file flips both `AppsUseLightTheme` and `SystemUsesLightTheme` *and* applies the matching color scheme/cursors atomically, which the broadcast-message dance you'd otherwise need from a registry-only approach often misses. |
 | Per-user font install | Avoids requiring admin for the font step and keeps the font registration under `HKCU`, which is what modern Windows + Terminal expect. |
 | `RunCommandOnSet` to mutate `settings.json` | Windows Terminal's settings are JSON-based and not registry-mapped; a small pwsh fragment is the cleanest way. |
@@ -233,7 +234,7 @@ HKLM policies, applied via `Microsoft.Windows/Registry`:
 | **`useLatest: true`** | Each run grabs the latest available version. Builds may differ between machines applying the config on different days. |
 | **HKLM registry keys** | Sudo, the Widget service policy, Edge policies, Remote Desktop, Long Paths, and Developer Mode all live in HKLM. The `ElevationCheck` gate guarantees the run is elevated; without it these would silently fail. |
 | **PowerToys AOT path** | `HKCU\...\Notifications\Settings\PowerToys\Enabled` targets a specific registry path that may change across PowerToys versions. |
-| **Idempotency of WSL phases** | `InstallWslComponents` and `RebootForVmp` both test for `vmcompute`. Re-running after the reboot is a no-op for those resources. `InstallUbuntu` tests for any `Lxss` subkey, so it skips once any distro is registered. |
+| **Idempotency of WSL phases** | `InstallWslComponents` and `RebootForVmp` both test for `vmcompute`. Re-running after the reboot is a no-op for those resources. `InstallUbuntu` queries `wsl --list --quiet`, so it skips once any distro is registered. |
 | **Pinned font release** | `InstallCascadiaCodeNerdFonts` hard-codes Cascadia Code release `2407.24` from `microsoft/cascadia-code`. Bump `$Version` to pick up newer releases. |
 | **Windows Terminal settings overwrite** | `SetCascadiaNfAsDefault` and `ps7default` rewrite `settings.json` via `ConvertTo-Json`. `SetCascadiaNfAsDefault` writes a `settings.json.bak` first; `ps7default` does not. JSON comments will not survive the round-trip. |
 | **`ohMyPoshProfileSet` runs `. $PROFILE`** | Dot-sourcing the profile inside `pwsh -NoProfile` can surface errors from the user's existing profile during DSC apply. |
