@@ -1,0 +1,80 @@
+name: Drift status
+
+# Informational PR check: surfaces drift between `src/` and the top-level
+# signed copies. See /src/docs/development.md#repo-layout-signed-vs-source for
+# the source-of-truth model.
+#
+# This workflow does NOT block merge by default. It exists so that drift is
+# visible at the top of every PR — when drift exists, the job exits non-zero
+# and the check surfaces as a red ❌ in the PR's "Some checks were not
+# successful" panel. The intent is purely visibility: drift is expected in
+# the window between a `src/` change landing on `main` and the next sign
+# pipeline cycle mirroring it to the top-level copies.
+#
+# Enforcement of "you must not edit the top-level signed copies directly" is
+# handled by the separate `signed-copy-guard.yml` workflow.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  drift-status:
+    name: Drift status
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run comparator
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./src/tools/check-signed-drift.ps1 -RepoRoot . -OutPath drift-report.json | Out-Null
+
+      - name: Summarize and set status
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $report = Get-Content drift-report.json -Raw | ConvertFrom-Json
+          $s = $report.summary
+          $total = [int]$s.drifted + [int]$s.missing_in_root + [int]$s.missing_in_src
+
+          $lines = New-Object 'System.Collections.Generic.List[string]'
+          if ($total -eq 0) {
+              $lines.Add('# ✅ Signed copies in sync with `src/`')
+              $lines.Add('')
+              $lines.Add("$($s.ok) file(s) checked. No drift detected.")
+          } else {
+              $lines.Add("# ⚠️ $total file(s) drifted between ``src/`` and the top-level signed copies")
+              $lines.Add('')
+              $lines.Add('> **This check is informational and does not block merge.** Drift is expected in the window between a `src/` change landing on `main` and the next sign pipeline cycle. See [Repo layout: signed vs source](https://github.com/microsoft/WindowsDeveloperConfig/blob/main/src/docs/development.md#repo-layout-signed-vs-source) and the [`signed-copy-guard`](https://github.com/microsoft/WindowsDeveloperConfig/blob/main/.github/workflows/signed-copy-guard.yml) workflow, which *does* block PRs that edit the top-level signed copies directly.')
+              $lines.Add('')
+              $lines.Add('| Path | Status | Detail |')
+              $lines.Add('| --- | --- | --- |')
+              foreach ($f in $report.files) {
+                  if ($f.status -eq 'ok') { continue }
+                  $detail = if ($f.reason) { $f.reason } else { '—' }
+                  $lines.Add("| ``$($f.path)`` | $($f.status) | $detail |")
+              }
+              $lines.Add('')
+              $lines.Add("Totals: ok=$($s.ok), drifted=$($s.drifted), missing-in-root=$($s.missing_in_root), missing-in-src=$($s.missing_in_src).")
+          }
+
+          ($lines -join "`n") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+          if ($total -gt 0) {
+              Write-Host "::notice::$total file(s) drifted from src/ — see job summary for the full list."
+              exit 1
+          } else {
+              Write-Host "No drift detected."
+          }
