@@ -1,0 +1,158 @@
+name: Signed copy guard
+
+# Check 2 of 2 in the signed-copy drift design (see
+# src/docs/development.md#signed-copy-drift-guard).
+#
+# Fails a PR if it edits a file under the top-level signed-copy roots
+# (Workloads/, windows-dev-config/, wsl-comfort/) that no longer matches
+# its src/ counterpart (modulo the Authenticode signature block on .ps1
+# files). The shared comparator is src/tools/check-signed-drift.ps1.
+#
+# This workflow only runs when files under one of the three signed-copy
+# roots are touched by the PR; PRs that edit only src/ skip it entirely.
+# The sign pipeline (.pipelines/OneBranch.SignAndPackage.yml) remains the
+# only thing that should ever write to those top-level paths.
+
+on:
+  pull_request:
+    branches: 
+      - main
+      - signed-copy-drift-guard
+    paths:
+      - 'Workloads/**'
+      - 'windows-dev-config/**'
+      - 'wsl-comfort/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  guard:
+    name: Signed copy guard
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect PR-changed signed-copy paths
+        id: changed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = "${{ github.base_ref }}"
+          git fetch origin $base --depth=0 | Out-Null
+          $diffRange = "origin/$base...HEAD"
+          # --diff-filter=ACMRD covers Added, Copied, Modified, Renamed, Deleted.
+          # For renames git produces both the old and new path as separate lines
+          # (because --name-only flattens R entries into two paths).
+          $changed = git diff --name-only --diff-filter=ACMRD $diffRange -- `
+              'Workloads/**' 'windows-dev-config/**' 'wsl-comfort/**'
+          if ($null -eq $changed) { $changed = @() }
+          $changed = @($changed | Where-Object { $_ -and $_.Trim().Length -gt 0 })
+          # Normalize to forward slashes so the set matches the comparator's
+          # `path` field exactly.
+          $changed = $changed | ForEach-Object { ($_ -replace '\\', '/').Trim() } | Sort-Object -Unique
+          Write-Host "Changed signed-copy paths ($($changed.Count)):"
+          $changed | ForEach-Object { Write-Host "  - $_" }
+          $changed | Set-Content -Path changed-paths.txt -Encoding utf8
+
+      - name: Run signed-copy drift comparator
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File ./src/tools/check-signed-drift.ps1 `
+              -RepoRoot . `
+              -OutPath drift-report.json | Out-Null
+          if (-not (Test-Path drift-report.json)) {
+              throw "drift-report.json was not produced"
+          }
+          Write-Host "drift-report.json written ($((Get-Item drift-report.json).Length) bytes)"
+
+      - name: Evaluate drift against PR-changed paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $changed = @()
+          if (Test-Path changed-paths.txt) {
+              $changed = @(Get-Content -LiteralPath changed-paths.txt |
+                  Where-Object { $_ -and $_.Trim().Length -gt 0 } |
+                  ForEach-Object { $_.Trim() })
+          }
+
+          $report = Get-Content -LiteralPath drift-report.json -Raw | ConvertFrom-Json
+
+          # Build the set of PR-changed paths we care about (already filtered
+          # to the three signed-copy roots by the diff pathspec).
+          $changedSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+          foreach ($p in $changed) { [void]$changedSet.Add($p) }
+
+          # An entry is in scope if either its `path` (signed-copy side) or
+          # its `src_path` (source side) was touched by this PR. We accept
+          # both so renames / additions under src/ that are still missing on
+          # the root side are caught when the PR also touches the root tree.
+          $offenders = @()
+          foreach ($entry in $report.files) {
+              if ($entry.status -eq 'ok') { continue }
+              if ($changedSet.Contains($entry.path) -or $changedSet.Contains($entry.src_path)) {
+                  $offenders += $entry
+              }
+          }
+
+          $summary = $env:GITHUB_STEP_SUMMARY
+
+          if ($offenders.Count -eq 0) {
+              $msg = "✅ Signed copy guard: no drift in the $($changed.Count) signed-copy path(s) touched by this PR."
+              Write-Host $msg
+              if ($summary) {
+                  "## Signed copy guard" | Out-File -FilePath $summary -Append -Encoding utf8
+                  "" | Out-File -FilePath $summary -Append -Encoding utf8
+                  $msg | Out-File -FilePath $summary -Append -Encoding utf8
+              }
+              exit 0
+          }
+
+          $header = "❌ The following files were edited in this PR but do not match ``src/`` (modulo the Authenticode signature block on ``.ps1`` files):"
+          $lines = @($header, "")
+          foreach ($o in $offenders) {
+              switch ($o.status) {
+                  'drifted' {
+                      $lines += "- ``$($o.path)`` (drifted) — edit ``$($o.src_path)`` instead"
+                  }
+                  'missing-in-src' {
+                      $lines += "- ``$($o.path)`` (missing-in-src) — no matching ``$($o.src_path)`` exists; add it to ``src/`` (the sign pipeline will mirror it to the top level on the next cycle)"
+                  }
+                  'missing-in-root' {
+                      $lines += "- ``$($o.path)`` (missing-in-root) — no matching signed copy exists; the sign pipeline will produce it on the next cycle, so this PR should not touch the top-level path"
+                  }
+                  default {
+                      $lines += "- ``$($o.path)`` ($($o.status)) — $($o.reason)"
+                  }
+              }
+          }
+          $lines += ""
+          $lines += "The top-level signed copies are regenerated by the sign pipeline from ``src/``. See ``src/docs/development.md#signed-copy-drift-guard`` for the full explanation."
+
+          $body = [string]::Join("`n", $lines)
+          [Console]::Error.WriteLine($body)
+          if ($summary) {
+              "## Signed copy guard" | Out-File -FilePath $summary -Append -Encoding utf8
+              "" | Out-File -FilePath $summary -Append -Encoding utf8
+              $body | Out-File -FilePath $summary -Append -Encoding utf8
+          }
+          exit 1
+
+      - name: Upload drift report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-copy-drift-report
+          path: drift-report.json
+          if-no-files-found: ignore

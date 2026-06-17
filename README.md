@@ -30,7 +30,7 @@ Three developer setups live in this repo. Pick the one that matches what you wan
 | --- | --- |
 | A complete dev workstation: tools, OS settings, WSL, and terminal. One command, may reboot. | [Windows Dev Config](#%EF%B8%8F-windows-dev-config) |
 | A polished WSL shell: zsh/bash, Starship, CLI tools, and a themed terminal profile. Interactive or unattended. | [WSL Comfort](#-wsl-comfort) |
-| A single language toolchain: Node, Python, Ruby, .NET, Rust, Go, Java, PHP, WinForms, or WinUI 3. One command each. | [Workloads](#-single-language-workloads) |
+| A single language toolchain: Node, Python, Ruby, SQL, PowerShell, .NET, Rust, Go, Java, PHP, WinForms, or WinUI 3. One command each. | [Workloads](#-single-language-workloads) |
 
 Most of them use [`winget configure`](https://learn.microsoft.com/en-us/windows/package-manager/winget/configure). If you've never used it before, enable it once:
 
@@ -83,7 +83,7 @@ winget configure -f .\windows-dev-config\dev-config.winget --accept-configuratio
 <details>
 <summary><strong>What you get</strong></summary>
 
-- **Dev tools:** PowerShell 7, Git, GitHub CLI, VS Code, .NET SDK 10, Python 3.14 + uv, Node.js, Oh My Posh, and PowerToys.
+- **Dev tools:** PowerShell 7, Git, GitHub CLI, VS Code, .NET SDK 10, Python 3.14 + uv, Node.js, Coreutils for Windows, Oh My Posh, and PowerToys.
 - **Terminal:** PowerShell 7 is the default profile, Oh My Posh is enabled, and Cascadia Mono NF is set as the default font.
 - **Windows settings:** Dark theme, developer mode, long paths, File Explorer defaults, Start/Search cleanup, Edge policies, and other workstation defaults.
 - **WSL:** WSL platform + Ubuntu, including the reboot and the `RunOnce` resume step.
@@ -137,6 +137,8 @@ Just want one toolchain? Pick a row. Each workload ships a `configuration.winget
 | Rust       | Rust stable via rustup                                                  | `winget configure -f .\Workloads\rust\configuration.winget --accept-configuration-agreements --disable-interactivity`       |
 | Python     | Python 3.14 + uv                                                       | `winget configure -f .\Workloads\python\configuration.winget --accept-configuration-agreements --disable-interactivity`     |
 | Ruby       | Ruby 3.4 + MSYS2 DevKit                                                  | `winget configure -f .\Workloads\ruby\configuration.winget --accept-configuration-agreements --disable-interactivity`        |
+| SQL        | Lightweight SQL Developer: SQL Server + sqlcmd + VS Code extension     | `winget configure -f .\Workloads\sql\configuration.winget --accept-configuration-agreements --disable-interactivity`        |
+| PowerShell | PowerShell 7 + VS Code PowerShell extensions + PSScriptAnalyzer settings | `winget configure -f .\Workloads\powershell\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | WinForms   | .NET SDK 10 + Windows Forms desktop workload                            | `winget configure -f .\Workloads\winforms\configuration.winget --accept-configuration-agreements --disable-interactivity`   |
 | WinUI 3    | .NET SDK 10 + Visual Studio Community + Windows App SDK / WinUI 3 + WinAppCLI | `winget configure -f .\Workloads\winui\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 

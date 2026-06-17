@@ -670,6 +670,12 @@ alias gp="git push"'
   if [ "$CHOSEN_SHELL" = "zsh" ]; then
     # Zsh-specific: keybindings + plugin sources
     rc_block="${rc_block}"'
+# Persistent history
+HISTFILE="${HISTFILE:-$HOME/.zsh_history}"
+HISTSIZE=5000
+SAVEHIST=5000
+setopt appendhistory
+setopt hist_ignore_all_dups
 # Windows Terminal / xterm keybindings (zsh has no readline so these are needed)
 bindkey "^[[1;5C" forward-word          # Ctrl+Right -> next word
 bindkey "^[[1;5D" backward-word         # Ctrl+Left  -> previous word
@@ -678,7 +684,14 @@ bindkey "^[[F"    end-of-line           # End
 bindkey "^[[3~"   delete-char           # Delete
 bindkey "^[[3;5~" kill-word             # Ctrl+Delete -> delete word forward
 bindkey "^H"      backward-kill-word    # Ctrl+Backspace -> delete word back
+# History search by current prefix
+autoload -Uz up-line-or-beginning-search down-line-or-beginning-search
+zle -N up-line-or-beginning-search
+zle -N down-line-or-beginning-search
+[[ -n "${key[Up]}"   ]] && bindkey -- "${key[Up]}"   up-line-or-beginning-search
+[[ -n "${key[Down]}" ]] && bindkey -- "${key[Down]}" down-line-or-beginning-search
 # Plugins
+[ -f /etc/zsh_command_not_found ] && source /etc/zsh_command_not_found
 [ -f /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ] && source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 [ -f /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ] && source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh'
 

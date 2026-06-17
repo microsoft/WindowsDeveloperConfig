@@ -105,7 +105,7 @@ The configuration is idempotent, so it is safe to re-run after reboot or at any 
 
 ## What this configures
 
-- **13 apps** via winget (PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14, UV, Node.js LTS, NVM for Windows, Windows Application CLI, plus optional Oh My Posh and PowerToys).
+- **14 apps** via winget (PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14, UV, Node.js LTS, NVM for Windows, Coreutils for Windows, Windows Application CLI, plus optional Oh My Posh and PowerToys).
 - **WSL + Ubuntu**, installed via 3 transitional script resources that bracket a reboot (Phase 2/3/4 below).
 - **~24 registry settings** for theme/OS, Explorer, Taskbar, Search, Start, Notifications, Edge, Sudo, and the Widget service.
 - **Cascadia Code & Cascadia Mono Nerd Fonts** downloaded from the `microsoft/cascadia-code` GitHub release and registered per-user.
@@ -150,6 +150,7 @@ All app resources that need WSL present depend on `InstallUbuntu` so the OS work
 | `UV` | `astral-sh.uv` | |
 | `NodeJS` | `OpenJS.NodeJS.LTS` | Pinned to the LTS line (currently Node 24 LTS). |
 | `nvmForNode` | `CoreyButler.NVMforWindows` | Node version manager for Windows. |
+| `Coreutils` | `Microsoft.Coreutils` | Microsoft-maintained Coreutils for Windows. Command integration is handled by the package itself after install. |
 | `OhMyPosh` | `JanDeDobbeleer.OhMyPosh` | Marked Optional in the comments. Triggers `ohMyPoshProfileSet`. |
 | `winappCli` | `Microsoft.winappcli` | Windows Application CLI. |
 | `PowerToys` | `Microsoft.PowerToys` | Marked Optional. Followed by `PowerToysAOT` which disables AOT notifications via registry. |
