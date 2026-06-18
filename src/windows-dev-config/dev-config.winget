@@ -934,7 +934,7 @@ resources:
   properties:
     states:
       - name: pwsh
-        command: oh-my-posh init pwsh
+        command: $(if (Get-Command 'oh-my-posh' -ErrorAction SilentlyContinue) { oh-my-posh init pwsh })
   metadata:
     description: Setup OhMyPosh in PowerShell 7
 
