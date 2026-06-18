@@ -26,7 +26,7 @@
 #                     - "user-experience"  : OS-feel / shell flows that
 #                                            shape the desktop rather than
 #                                            install dev toolchains
-#                                            (wsl-comfort, calm-os,
+#                                            (wsl-comfort, windows-dev-config,
 #                                            common-adjustments).
 #                     - "shell"            : legacy alias for
 #                                            "user-experience"; new flows
@@ -273,20 +273,20 @@ flows:
     windows:
       install: wsl-comfort/install.ps1
       build: ""
-      run: wsl -- bash src/tests/comfort-shell/hello.sh
-      expected: src/tests/comfort-shell/expected.txt
+      run: wsl -- bash src/tests/wsl-comfort/hello.sh
+      expected: src/tests/wsl-comfort/expected.txt
       version: "wsl --status"
 
-  - id: calm-os
-    name: Calm OS
+  - id: windows-dev-config
+    name: Windows Dev Config
     description: Distraction-free dev workstation — apps + OS settings + WSL, all in one DSC
     category: user-experience
-    tags: [user-experience, calm-os, distraction-free, taskbar, wsl, ubuntu]
+    tags: [user-experience, windows-dev-config, distraction-free, taskbar, wsl, ubuntu]
     icon: 🧘
     onboardingUrl: https://dev.windows.com
     # Heavy machine-state changes (Sudo, Recall off, Click To Do off, WSL +
     # Ubuntu install with a forced reboot, etc.) — keep out of the automated
-    # matrix. The probe under src/tests/calm-os/probe.ps1 is for a human running
+    # matrix. The probe under src/tests/windows-dev-config/probe.ps1 is for a human running
     # the flow locally; it asserts that `git` resolves on PATH after the
     # install (the apps module's first dep) as a fast smoke signal.
     manual_test: true
@@ -295,8 +295,8 @@ flows:
       install: windows-dev-config/install.ps1
       configuration: windows-dev-config/dev-config.winget
       build: ""
-      run: pwsh -NoProfile -File src/tests/calm-os/probe.ps1
-      expected: src/tests/calm-os/expected.txt
+      run: pwsh -NoProfile -File src/tests/windows-dev-config/probe.ps1
+      expected: src/tests/windows-dev-config/expected.txt
       version: "git --version"
 
 # Curated bundles of flows. Surfaced by the Command Palette extension; not

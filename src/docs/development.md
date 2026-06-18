@@ -1,4 +1,4 @@
-# WindowsDevSetupScripts — Developer Guide
+# Windows Developer Config — Developer Guide
 
 > 👋 **Just want to run something?** See the
 > [top-level README](../../README.md). This file is the contributor /
@@ -11,7 +11,7 @@ toolchains and Windows-desktop personalities using `winget` /
 On Windows the **core artifact of each flow is a [winget DSC configuration
 file](https://learn.microsoft.com/windows/package-manager/configuration/)**
 (`configuration.winget` for language toolchains, `dev-config.winget` for the
-Calm OS flow) — a declarative, idempotent description of the machine state
+Windows Dev Config flow) — a declarative, idempotent description of the machine state
 required for that flow. Where winget alone is not enough (e.g. `npm install
 --global typescript`, registry tweaks, or a `RunOnce` reboot dance) the
 configuration calls a DSC `Script` / `RunCommandOnSet` / `Registry`
@@ -27,7 +27,7 @@ configuration actually produced a working toolchain.
 
 ## Supported flows
 
-Each flow's `configuration.winget` (or `dev-config.winget` for Calm OS)
+Each flow's `configuration.winget` (or `dev-config.winget` for Windows Dev Config)
 is the source of truth for what gets installed; the table below
 summarizes it for quick scanning. Flows marked **manual** are excluded
 from the automated CI matrix (they need an interactive desktop session
@@ -48,8 +48,8 @@ extension.
 | PowerShell        | ✅ automated   | `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCLI` + WinUI/Universal/ManagedDesktop VS workloads |
-| Calm OS           | 🙋 manual     | A full distraction-free workstation: apps + ~24 registry tweaks + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
-| Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
+| Windows Dev Config| 🙋 manual     | A full distraction-free workstation: apps + ~24 registry tweaks + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
+| WSL Comfort       | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative
 list (paths, build/run commands, onboarding URLs).
@@ -80,8 +80,8 @@ Workloads/
   rust/            # configuration.winget (core) + install.ps1 (thin shim)
   winforms/        # configuration.winget (core) + install.ps1 (thin shim)
   winui/           # configuration.winget (core) + install.ps1 (thin shim)
-windows-dev-config/    # Calm OS — dev-config.winget (single-file DSC) + install.ps1 + README.md
-wsl-comfort/           # Comfort Shell — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
+windows-dev-config/    # Windows Dev Config — dev-config.winget (single-file DSC) + install.ps1 + README.md
+wsl-comfort/           # WSL Comfort — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
 tests/
   _harness/          # build-run-diff harness used by CI:
                      #   run-flow.ps1   - all flows (build + run + diff stdout)
@@ -96,8 +96,8 @@ tests/
   rust/              # Cargo.toml + src/main.rs + expected.txt
   winforms/          # hello.csproj + Program.cs + expected.txt
   winui/             # hello.csproj + Program.cs + expected.txt
-  calm-os/           # probe.ps1 + expected.txt (manual-only flow)
-  comfort-shell/     # hello.sh + expected.txt (manual-only flow)
+  windows-dev-config/# probe.ps1 + expected.txt (manual-only flow)
+  wsl-shell/         # hello.sh + expected.txt (manual-only flow)
 manifest.yml         # declarative list of flows consumed by CI **and** by the extension
 future/
   cmdpal/            # PowerToys Command Palette extension (reads manifest.yml)
