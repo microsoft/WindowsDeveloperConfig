@@ -223,6 +223,25 @@ flows:
       expected: src/tests/python/expected.txt
       version: "python --version; uv --version"
 
+  - id: sql
+    name: Lightweight SQL Developer
+    description: SQL Server Developer + sqlcmd + VS Code SQL database projects extension
+    category: languages
+    tags: [sql, sqlserver, sqlcmd, database, vscode]
+    icon: 🗄️
+    onboardingUrl: https://learn.microsoft.com/sql/sql-server/
+    # Installs full SQL Server Developer, so keep it out of automated CI even
+    # though the workload intentionally avoids Visual Studio and SSDT.
+    manual_test: true
+    os: [windows]
+    windows:
+      install: Workloads/sql/install.ps1
+      configuration: Workloads/sql/configuration.winget
+      build: ""
+      run: pwsh -NoProfile -File src/tests/sql/probe.ps1
+      expected: src/tests/sql/expected.txt
+      version: "sqlcmd --version; code --version"
+
   - id: powershell
     name: PowerShell
     description: PowerShell 7 + VS Code PowerShell tooling and script analysis

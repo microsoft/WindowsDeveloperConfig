@@ -48,8 +48,8 @@ function Normalize-Output {
     if ($null -eq $Text) { return '' }
     $Text = $Text -replace "`r`n", "`n"
     $Text = $Text -replace "`r",   "`n"
-    $lines = $Text -split "`n"
-    $lines = $lines | ForEach-Object { $_.TrimEnd() }
+    $lines = @($Text -split "`n")
+    $lines = @($lines | ForEach-Object { $_.TrimEnd() })
     # Trim trailing blank lines.
     $i = $lines.Count - 1
     while ($i -ge 0 -and [string]::IsNullOrEmpty($lines[$i])) { $i-- }

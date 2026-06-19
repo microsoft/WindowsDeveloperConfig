@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+#
+#     winget configure --file scripts/windows/sql/configuration.winget `
+#         --accept-configuration-agreements `
+#         --disable-interactivity
+#
+# Lightweight SQL developer workload: installs SQL Server Developer, sqlcmd,
+# VS Code, and the SQL database projects extension. It intentionally does not
+# install Visual Studio or SSDT tools.
+#
+$schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+metadata:
+  winget:
+    processor: dscv3
+resources:
+  - name: PowerShell
+    type: Microsoft.WinGet/Package
+    properties:
+      id: Microsoft.PowerShell
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install PowerShell 7
+      winget:
+        securityContext: elevated
+
+  - name: VSCode
+    type: Microsoft.WinGet/Package
+    dependsOn:
+      - PowerShell
+    properties:
+      id: Microsoft.VisualStudioCode
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install Visual Studio Code
+      winget:
+        securityContext: elevated
+
+  - name: Sqlcmd
+    type: Microsoft.WinGet/Package
+    properties:
+      id: Microsoft.Sqlcmd
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install sqlcmd command-line tools
+      winget:
+        securityContext: elevated
+
+  - name: SQLServerDeveloper
+    type: Microsoft.WinGet/Package
+    properties:
+      id: Microsoft.SQLServer.2025.Developer
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install SQL Server 2025 Developer
+      winget:
+        securityContext: elevated
+
+  # TODO: When PowerShell 7+ ships Microsoft.PowerShell.PSResourceGet v1.3.0, change it for built-in DSC resource module.
+  - name: InstallVSCodeDscModule
+    type: Microsoft.DSC.Transitional/PowerShellScript
+    dependsOn:
+      - PowerShell
+    metadata:
+      description: Install the Microsoft.VSCode.Dsc prerelease resource module
+    properties:
+      getScript: |
+        $module = Get-InstalledPSResource -Name Microsoft.VSCode.Dsc -ErrorAction SilentlyContinue |
+          Where-Object { $_.Version.ToString() -eq '0.1.6-alpha' -and $_.PrivateData.PSData.Prerelease -eq 'alpha' } |
+          Select-Object -First 1
+        $version = if ($module) { $module.Version.ToString() } else { $null }
+        return @{ installed = [bool]$module; version = $version }
+      testScript: |
+        $module = Get-InstalledPSResource -Name Microsoft.VSCode.Dsc -ErrorAction SilentlyContinue |
+          Where-Object { $_.Version.ToString() -eq '0.1.6-alpha' -and $_.PrivateData.PSData.Prerelease -eq 'alpha' } |
+          Select-Object -First 1
+        return [bool]$module
+      setScript: |
+        Install-PSResource -Name Microsoft.VSCode.Dsc -Version 0.1.6-alpha -Prerelease -Repository PSGallery -TrustRepository -AcceptLicense -Scope CurrentUser
+
+  - name: SqlDatabaseProjectsVSCodeExtension
+    type: Microsoft.VSCode.Dsc/VSCodeExtension
+    dependsOn:
+      - VSCode
+      - InstallVSCodeDscModule
+    metadata:
+      description: Install the SQL Database Projects VS Code extension
+    properties:
+      Name: ms-mssql.sql-database-projects-vscode
+      Exist: true
