@@ -878,6 +878,7 @@ resources:
     id: Microsoft.Coreutils
     source: winget
     useLatest: true
+    installMode: silent
   metadata:
     description: Install Coreutils for Windows
     securityContext: elevated
