@@ -44,8 +44,47 @@ The flow is a single DSC document (`dev-config.winget`) that handles everything 
 - Windows 11 (latest).
 - `winget` with the DSC v3 processor available (the file uses `Microsoft.WinGet/Package`, `Microsoft.Windows/Registry`, and `Microsoft.DSC.Transitional/*`).
 - Administrator rights — the `ElevationCheck` resource will auto-relaunch winget elevated via `Start-Process -Verb RunAs` if you started in an unelevated session, but you'll need to consent at the UAC prompt.
+- The Microsoft Visual C++ Redistributable when invoking `winget` from a non-elevated environment. Without it, `winget configure` fails with an internal error. See [aka.ms/vcredist](https://aka.ms/vcredist) or install via winget (see the Usage callout below).
+- The repo on disk. `winget configure` reads a local file path, and the bootstrap is what installs Git, so on a fresh machine you'll either `git clone` (if Git is already installed) or download the repo as a ZIP from GitHub and extract it before running.
+- **Hardware virtualization must be available to the OS** before WSL can install. On bare metal, this means virtualization (VT-x / AMD-V) is enabled in BIOS/UEFI. Inside a VM, it means the host has exposed nested virtualization to the guest. See the Usage callout below.
 
 ## Usage
+
+> [!IMPORTANT]
+> If `winget` is being invoked from a **non-elevated** environment, the Microsoft Visual C++ Redistributable ([aka.ms/vcredist](https://aka.ms/vcredist)) must also be installed — without it `winget configure` fails with an internal error. Install it once with the command for your machine's architecture:
+>
+> ```powershell
+> # x64:
+> winget install Microsoft.VCRedist.2015+.x64
+>
+> # ARM64:
+> winget install Microsoft.VCRedist.2015+.arm64
+> ```
+
+> [!IMPORTANT]
+> **WSL needs hardware virtualization.** If virtualization isn't available to the OS, the `InstallUbuntu` step fails with `wsl --install ... failed with exit code -1`.
+>
+> - **On bare metal:** enable virtualization (VT-x / AMD-V) in your BIOS/UEFI. The exact label varies by vendor — check your motherboard or laptop manufacturer's documentation if you can't find it. Reboot into firmware settings, toggle it on, save, and reboot back into Windows.
+> - **Inside a VM:** the host must expose nested virtualization to the guest. For a Hyper-V host, run this from an elevated PowerShell session **on the host** (with the guest VM powered off):
+>
+>   ```powershell
+>   Set-VMProcessor -VMName <VM_NAME> -ExposeVirtualizationExtensions $true
+>   ```
+>
+>   Other hypervisors have their own equivalent settings — check your hypervisor's documentation.
+
+**Get the files first** (skip if you already have the repo locally):
+
+```powershell
+# Git already installed:
+git clone https://github.com/microsoft/WindowsDeveloperConfig.git
+cd WindowsDeveloperConfig\windows-dev-config
+
+# Otherwise, download and extract the ZIP:
+Invoke-WebRequest -Uri https://github.com/microsoft/WindowsDeveloperConfig/archive/refs/heads/main.zip -OutFile WindowsDeveloperConfig.zip
+Expand-Archive .\WindowsDeveloperConfig.zip -DestinationPath .
+cd .\WindowsDeveloperConfig-main\windows-dev-config
+```
 
 **Full setup (recommended):**
 
@@ -66,7 +105,7 @@ The configuration is idempotent, so it is safe to re-run after reboot or at any 
 
 ## What this configures
 
-- **13 apps** via winget (PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14, UV, Node.js LTS, NVM for Windows, Windows Application CLI, plus optional Oh My Posh and PowerToys).
+- **14 apps** via winget (PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14, UV, Node.js LTS, NVM for Windows, Coreutils for Windows, Windows Application CLI, plus optional Oh My Posh and PowerToys).
 - **WSL + Ubuntu**, installed via 3 transitional script resources that bracket a reboot (Phase 2/3/4 below).
 - **~24 registry settings** for theme/OS, Explorer, Taskbar, Search, Start, Notifications, Edge, Sudo, and the Widget service.
 - **Cascadia Code & Cascadia Mono Nerd Fonts** downloaded from the `microsoft/cascadia-code` GitHub release and registered per-user.
@@ -111,6 +150,7 @@ All app resources that need WSL present depend on `InstallUbuntu` so the OS work
 | `UV` | `astral-sh.uv` | |
 | `NodeJS` | `OpenJS.NodeJS.LTS` | Pinned to the LTS line (currently Node 24 LTS). |
 | `nvmForNode` | `CoreyButler.NVMforWindows` | Node version manager for Windows. |
+| `Coreutils` | `Microsoft.Coreutils` | Microsoft-maintained Coreutils for Windows. Command integration is handled by the package itself after install. |
 | `OhMyPosh` | `JanDeDobbeleer.OhMyPosh` | Marked Optional in the comments. Triggers `ohMyPoshProfileSet`. |
 | `winappCli` | `Microsoft.winappcli` | Windows Application CLI. |
 | `PowerToys` | `Microsoft.PowerToys` | Marked Optional. Followed by `PowerToysAOT` which disables AOT notifications via registry. |

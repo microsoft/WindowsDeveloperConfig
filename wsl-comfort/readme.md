@@ -35,7 +35,6 @@ The Windows half (`install.ps1`) handles WSL, the distro, the font, and the term
 ## Prerequisites
 
 - Windows 11 with **Windows Terminal** (`wt.exe`) installed and on PATH. The installer hard-fails if it can't find `wt.exe`.
-- `winget` available (used only for the Nerd Font; the rest of the flow tolerates its absence).
 - Internet access for the WSL distro download, Homebrew, starship, and apt.
 - The bootstrap requires Ubuntu (any supported LTS). Other distros are rejected at preflight.
 
@@ -87,7 +86,7 @@ Picks `Ubuntu` (latest LTS) as the distro and forwards `--non-interactive` to th
 - **Clipboard / `open` shims** in `~/bin`: `pbcopy`, `pbpaste`, `open`, `xdg-open` — bridged to `clip.exe`, PowerShell `Get-Clipboard`, and `cmd /c start`.
 - **Managed dotfile blocks** in `~/.zprofile` + `~/.zshrc` (or `~/.profile` + `~/.bashrc`) for PATH, brew shellenv, prompt init, aliases, and (zsh) keybindings.
 - **Git defaults**: `init.defaultBranch=main`, `pull.rebase=false`, `core.autocrlf=input`.
-- **JetBrainsMono Nerd Font** via winget.
+- **Cascadia Code Nerd Fonts** both mono and not.
 - **A Windows Terminal profile fragment** named `Comfort Shell - <distro>`, with a custom Catppuccin-ish dark scheme, the sunglasses icon, and `wsl.exe -d <distro>` as the command line.
 
 ---
@@ -112,7 +111,7 @@ The script runs five labeled steps and updates the console title with the curren
 | 1. Ensuring WSL platform | `wsl.exe --status` probe. If WSL is missing, runs `wsl.exe --install --no-distribution` and exits via reboot. | Registers a RunOnce auto-resume so the script picks up where it left off after the reboot. |
 | 2. Choosing Ubuntu distro | Lists installed `Ubuntu*` distros from `wsl -l -q`. If none, offers the 4 supported LTS lines. | `Install-NewDistro` retries up to 3 times (5s → 15s backoff) and gives actionable hints on failure (DNS, proxy, VPN). |
 | 3. Running Comfort Shell bootstrap | Stages `comfort-shell-bootstrap.sh` to `%TEMP%`, copies it into the distro's `$HOME`, strips CRLFs, makes it executable, runs it. | Uses `Invoke-NativeConsole` so the child sees a real TTY (needed for `/dev/tty` prompts in the bootstrap). |
-| 4. Installing JetBrainsMono Nerd Font | `winget install --id DEVCOM.JetBrainsMonoNerdFont --silent`. | Non-fatal: a missing winget or a "already installed" exit code is logged and skipped. |
+| 4. Installing Cascadia Code Nerd Fonts | Downloads fonts from GitHub release; extracts and registers them. | Detects "already installed" and skips if so. |
 | 5. Installing Windows Terminal profile | Writes a JSON fragment under `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\ComfortShell\comfort-shell-<slug>.fragment.json`. | Deterministic per-distro GUID (MD5 of `comfort-shell:<distro>`) so re-runs update in place and multiple distros coexist. Touches `settings.json` mtime to nudge WT's hot-reload. |
 
 ### Parameters
@@ -152,7 +151,7 @@ The bootstrap shows a plan + asks for confirmation, then runs N labeled steps (c
 | CLI shims | `install_cli_shims` | Writes `~/bin/pbcopy` (→ `clip.exe`), `~/bin/pbpaste` (→ `Get-Clipboard \| tr -d "\r"`), `~/bin/open` (→ `cmd.exe /c start`), `~/bin/xdg-open` (→ `open`). Marked `# comfort-shell shim` so the script can recognize its own files. |
 | Homebrew | `install_homebrew` | Runs the upstream `install.sh` with `NONINTERACTIVE=1 CI=1`. Then `brew install gh direnv zoxide`. In skel mode this is deferred — see [Skel mode](#skel-mode-running-as-root). |
 | Git defaults | `install_git_defaults` | `git config --global` for `init.defaultBranch=main`, `pull.rebase=false`, `core.autocrlf=input`. Only sets values that aren't already set (or with `--force`). |
-| Shell config | `install_shell_config` | Replaces a `# >>> comfort-shell >>>` managed block in `~/.zprofile` + `~/.zshrc` (or `~/.profile` + `~/.bashrc`) with PATH, brew shellenv, prompt init, aliases (`ls`/`ll`/`lt`/`cat`/`grep`/`find` + git shortcuts), and zsh keybindings for Windows Terminal (Ctrl+Left/Right, Home/End, Ctrl+Backspace, etc.). |
+| Shell config | `install_shell_config` | Replaces a `# >>> comfort-shell >>>` managed block in `~/.zprofile` + `~/.zshrc` (or `~/.profile` + `~/.bashrc`) with PATH, brew shellenv, prompt init, aliases (`ls`/`ll`/`lt`/`cat`/`grep`/`find` + git shortcuts), persistent zsh history (`~/.zsh_history`) with duplicate suppression, `/etc/zsh_command_not_found` integration when available, and zsh keybindings for Windows Terminal (including Up/Down history search by prefix, Ctrl+Left/Right, Home/End, Ctrl+Backspace, etc.). |
 
 Before the steps run, `heal_wsl_issues` cleans NUL bytes from `/etc/wsl.conf` (a known WSL corruption that produces `Invalid key name` warnings on every shell launch).
 

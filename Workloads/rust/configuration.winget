@@ -75,4 +75,3 @@ resources:
         treatAsArray: true
     metadata:
       description: Install and default the stable Rust toolchain via rustup
-
