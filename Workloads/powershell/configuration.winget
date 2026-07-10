@@ -1,0 +1,323 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+#
+#     winget configure --file scripts/windows/powershell/configuration.winget `
+#         --accept-configuration-agreements `
+#         --disable-interactivity
+#
+$schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+metadata:
+  winget:
+    processor: dscv3
+resources:
+  - name: PowerShell
+    type: Microsoft.WinGet/Package
+    properties:
+      id: Microsoft.PowerShell
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install PowerShell 7
+      winget:
+        securityContext: elevated
+
+  - name: VSCode
+    type: Microsoft.WinGet/Package
+    dependsOn:
+      - PowerShell
+    properties:
+      id: Microsoft.VisualStudioCode
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install Visual Studio Code
+      winget:
+        securityContext: elevated
+
+  # TODO: When PowerShell 7+ ships Microsoft.PowerShell.PSResourceGet v1.3.0, change it for built-in DSC resource module
+  - name: InstallVSCodeDscModule
+    type: Microsoft.DSC.Transitional/PowerShellScript
+    dependsOn:
+      - PowerShell
+    metadata:
+      description: Install the Microsoft.VSCode.Dsc prerelease resource module
+    properties:
+      getScript: |
+        $module = Get-InstalledPSResource -Name Microsoft.VSCode.Dsc -ErrorAction SilentlyContinue |
+          Where-Object { $_.Version.ToString() -eq '0.1.6-alpha' -and $_.PrivateData.PSData.Prerelease -eq 'alpha' } |
+          Select-Object -First 1
+        $version = if ($module) { $module.Version.ToString() } else { $null }
+        return @{ installed = [bool]$module; version = $version }
+      testScript: |
+        $module = Get-InstalledPSResource -Name Microsoft.VSCode.Dsc -ErrorAction SilentlyContinue |
+          Where-Object { $_.Version.ToString() -eq '0.1.6-alpha' -and $_.PrivateData.PSData.Prerelease -eq 'alpha' } |
+          Select-Object -First 1
+        return [bool]$module
+      setScript: |
+        Install-PSResource -Name Microsoft.VSCode.Dsc `
+          -Version 0.1.6-alpha `
+          -Prerelease `
+          -Repository PSGallery `
+          -TrustRepository `
+          -AcceptLicense `
+          -Scope CurrentUser
+
+  - name: PowerShellVSCodeExtension
+    type: Microsoft.VSCode.Dsc/VSCodeExtension
+    dependsOn:
+      - VSCode
+      - InstallVSCodeDscModule
+    metadata:
+      description: Install the PowerShell VS Code extension
+    properties:
+      Name: ms-vscode.powershell
+      Exist: true
+
+  - name: PesterTestVSCodeExtension
+    type: Microsoft.VSCode.Dsc/VSCodeExtension
+    dependsOn:
+      - VSCode
+      - InstallVSCodeDscModule
+    metadata:
+      description: Install the Pester Test VS Code extension
+    properties:
+      Name: pspester.pester-test
+      Exist: true
+
+  # Captured from: https://learn.microsoft.com/en-us/powershell/utility-modules/psscriptanalyzer/rules-recommendations?view=ps-modules
+  - name: ConfigurePowerShellScriptAnalyzer
+    type: Microsoft.DSC.Transitional/PowerShellScript
+    dependsOn:
+      - PowerShellVSCodeExtension
+      - PesterTestVSCodeExtension
+    metadata:
+      description: Enable PSScriptAnalyzer rules in VS Code user settings
+    properties:
+      getScript: |
+        $ruleNames = @(
+            'PSAvoidDefaultValueSwitchParameter',
+            'PSAvoidGlobalVars',
+            'PSAvoidUsingCmdletAliases',
+            'PSAvoidUsingComputerNameHardcoded',
+            'PSAvoidUsingConvertToSecureStringWithPlainText',
+            'PSAvoidUsingEmptyCatchBlock',
+            'PSAvoidUsingInvokeExpression',
+            'PSAvoidUsingPlainTextForPassword',
+            'PSAvoidUsingPositionalParameters',
+            'PSAvoidUsingUsernameAndPasswordParams',
+            'PSAvoidUsingWMICmdlet',
+            'PSAvoidUsingWriteHost',
+            'PSDSCDscExamplesPresent',
+            'PSDSCDscTestsPresent',
+            'PSDSCReturnCorrectTypesForDSCFunctions',
+            'PSDSCStandardDSCFunctionsInResource',
+            'PSDSCUseIdenticalMandatoryParametersForDSC',
+            'PSDSCUseIdenticalParametersForDSC',
+            'PSMissingModuleManifestField',
+            'PSProvideCommentHelp',
+            'PSReservedCmdletChar',
+            'PSReservedParams',
+            'PSShouldProcess',
+            'PSUseApprovedVerbs',
+            'PSUseCmdletCorrectly',
+            'PSUseDeclaredVarsMoreThanAssignments',
+            'PSUsePSCredentialType',
+            'PSUseShouldProcessForStateChangingFunctions',
+            'PSUseSingularNouns',
+            'PSUseSupportsShouldProcess'
+        )
+
+        function Get-VSCodeUserDirectory {
+            if ($IsWindows) { return Join-Path $env:APPDATA 'Code\User' }
+            if ($IsMacOS) { return Join-Path $HOME 'Library/Application Support/Code/User' }
+            return Join-Path $HOME '.config/Code/User'
+        }
+
+        function Read-VSCodeSettings {
+            param([Parameter(Mandatory)] [string] $Path)
+
+            if (-not (Test-Path -LiteralPath $Path)) { return [ordered]@{} }
+
+            $raw = Get-Content -LiteralPath $Path -Raw
+            $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
+            $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
+            if ([string]::IsNullOrWhiteSpace($clean)) { return [ordered]@{} }
+
+            return $clean | ConvertFrom-Json -AsHashtable
+        }
+
+        $userDirectory = Get-VSCodeUserDirectory
+        $settingsPath = Join-Path $userDirectory 'settings.json'
+        $analyzerSettingsPath = Join-Path $userDirectory 'PSScriptAnalyzerSettings.psd1'
+        $settings = Read-VSCodeSettings -Path $settingsPath
+        $configuredRuleCount = 0
+
+        if (Test-Path -LiteralPath $analyzerSettingsPath) {
+          try {
+            $analyzerSettings = Import-PowerShellDataFile -LiteralPath $analyzerSettingsPath
+            $configuredRuleCount = @($analyzerSettings.IncludeRules).Count
+          } catch {
+            $configuredRuleCount = 0
+          }
+        }
+
+        return @{
+            scriptAnalysisEnabled = [bool]$settings['powershell.scriptAnalysis.enable']
+            settingsPath = $settings['powershell.scriptAnalysis.settingsPath']
+            analyzerSettingsPresent = Test-Path -LiteralPath $analyzerSettingsPath
+          configuredRuleCount = $configuredRuleCount
+          expectedRuleCount = $ruleNames.Count
+        }
+      testScript: |
+        $ruleNames = @(
+          'PSAvoidDefaultValueSwitchParameter',
+          'PSAvoidGlobalVars',
+          'PSAvoidUsingCmdletAliases',
+          'PSAvoidUsingComputerNameHardcoded',
+          'PSAvoidUsingConvertToSecureStringWithPlainText',
+          'PSAvoidUsingEmptyCatchBlock',
+          'PSAvoidUsingInvokeExpression',
+          'PSAvoidUsingPlainTextForPassword',
+          'PSAvoidUsingPositionalParameters',
+          'PSAvoidUsingUsernameAndPasswordParams',
+          'PSAvoidUsingWMICmdlet',
+          'PSAvoidUsingWriteHost',
+          'PSDSCDscExamplesPresent',
+          'PSDSCDscTestsPresent',
+          'PSDSCReturnCorrectTypesForDSCFunctions',
+          'PSDSCStandardDSCFunctionsInResource',
+          'PSDSCUseIdenticalMandatoryParametersForDSC',
+          'PSDSCUseIdenticalParametersForDSC',
+          'PSMissingModuleManifestField',
+          'PSProvideCommentHelp',
+          'PSReservedCmdletChar',
+          'PSReservedParams',
+          'PSShouldProcess',
+          'PSUseApprovedVerbs',
+          'PSUseCmdletCorrectly',
+          'PSUseDeclaredVarsMoreThanAssignments',
+          'PSUsePSCredentialType',
+          'PSUseShouldProcessForStateChangingFunctions',
+          'PSUseSingularNouns',
+          'PSUseSupportsShouldProcess'
+        )
+
+        function Get-VSCodeUserDirectory {
+            if ($IsWindows) { return Join-Path $env:APPDATA 'Code\User' }
+            if ($IsMacOS) { return Join-Path $HOME 'Library/Application Support/Code/User' }
+            return Join-Path $HOME '.config/Code/User'
+        }
+
+        function Read-VSCodeSettings {
+            param([Parameter(Mandatory)] [string] $Path)
+
+            if (-not (Test-Path -LiteralPath $Path)) { return [ordered]@{} }
+
+            $raw = Get-Content -LiteralPath $Path -Raw
+            $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
+            $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
+            if ([string]::IsNullOrWhiteSpace($clean)) { return [ordered]@{} }
+
+            return $clean | ConvertFrom-Json -AsHashtable
+        }
+
+        $userDirectory = Get-VSCodeUserDirectory
+        $settingsPath = Join-Path $userDirectory 'settings.json'
+        $analyzerSettingsPath = Join-Path $userDirectory 'PSScriptAnalyzerSettings.psd1'
+        $settings = Read-VSCodeSettings -Path $settingsPath
+
+        if ($settings['powershell.scriptAnalysis.enable'] -ne $true) { return $false }
+        if ($settings['powershell.scriptAnalysis.settingsPath'] -ne $analyzerSettingsPath) { return $false }
+        if (-not (Test-Path -LiteralPath $analyzerSettingsPath)) { return $false }
+
+        try {
+          $analyzerSettings = Import-PowerShellDataFile -LiteralPath $analyzerSettingsPath
+        } catch {
+          return $false
+        }
+
+        if ($analyzerSettings.IncludeDefaultRules -ne $true) { return $false }
+
+        $configuredRules = @($analyzerSettings.IncludeRules)
+        foreach ($ruleName in $ruleNames) {
+          if ($ruleName -notin $configuredRules) { return $false }
+        }
+
+        return $true
+      setScript: |
+        $ruleNames = @(
+          'PSAvoidDefaultValueSwitchParameter',
+          'PSAvoidGlobalVars',
+          'PSAvoidUsingCmdletAliases',
+          'PSAvoidUsingComputerNameHardcoded',
+          'PSAvoidUsingConvertToSecureStringWithPlainText',
+          'PSAvoidUsingEmptyCatchBlock',
+          'PSAvoidUsingInvokeExpression',
+          'PSAvoidUsingPlainTextForPassword',
+          'PSAvoidUsingPositionalParameters',
+          'PSAvoidUsingUsernameAndPasswordParams',
+          'PSAvoidUsingWMICmdlet',
+          'PSAvoidUsingWriteHost',
+          'PSDSCDscExamplesPresent',
+          'PSDSCDscTestsPresent',
+          'PSDSCReturnCorrectTypesForDSCFunctions',
+          'PSDSCStandardDSCFunctionsInResource',
+          'PSDSCUseIdenticalMandatoryParametersForDSC',
+          'PSDSCUseIdenticalParametersForDSC',
+          'PSMissingModuleManifestField',
+          'PSProvideCommentHelp',
+          'PSReservedCmdletChar',
+          'PSReservedParams',
+          'PSShouldProcess',
+          'PSUseApprovedVerbs',
+          'PSUseCmdletCorrectly',
+          'PSUseDeclaredVarsMoreThanAssignments',
+          'PSUsePSCredentialType',
+          'PSUseShouldProcessForStateChangingFunctions',
+          'PSUseSingularNouns',
+          'PSUseSupportsShouldProcess'
+        )
+
+        function Get-VSCodeUserDirectory {
+            if ($IsWindows) { return Join-Path $env:APPDATA 'Code\User' }
+            if ($IsMacOS) { return Join-Path $HOME 'Library/Application Support/Code/User' }
+            return Join-Path $HOME '.config/Code/User'
+        }
+
+        function Read-VSCodeSettings {
+            param([Parameter(Mandatory)] [string] $Path)
+
+            if (-not (Test-Path -LiteralPath $Path)) { return [ordered]@{} }
+
+            $raw = Get-Content -LiteralPath $Path -Raw
+            $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
+            $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
+            if ([string]::IsNullOrWhiteSpace($clean)) { return [ordered]@{} }
+
+            return $clean | ConvertFrom-Json -AsHashtable
+        }
+
+        $userDirectory = Get-VSCodeUserDirectory
+        New-Item -ItemType Directory -Path $userDirectory -Force | Out-Null
+
+        $settingsPath = Join-Path $userDirectory 'settings.json'
+        $analyzerSettingsPath = Join-Path $userDirectory 'PSScriptAnalyzerSettings.psd1'
+
+        $analyzerSettingsLines = [System.Collections.Generic.List[string]]::new()
+        [void]$analyzerSettingsLines.Add('@{')
+        [void]$analyzerSettingsLines.Add('    IncludeDefaultRules = $true')
+        [void]$analyzerSettingsLines.Add('    IncludeRules = @(')
+        foreach ($ruleName in $ruleNames) {
+          [void]$analyzerSettingsLines.Add("        '$ruleName'")
+        }
+        [void]$analyzerSettingsLines.Add('    )')
+        [void]$analyzerSettingsLines.Add('}')
+        $analyzerSettingsContent = $analyzerSettingsLines -join [Environment]::NewLine
+
+        $analyzerSettingsContent | Set-Content -LiteralPath $analyzerSettingsPath -Encoding utf8
+
+        $settings = Read-VSCodeSettings -Path $settingsPath
+        $settings['powershell.scriptAnalysis.enable'] = $true
+        $settings['powershell.scriptAnalysis.settingsPath'] = $analyzerSettingsPath
+        $settings | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $settingsPath -Encoding utf8
+
+    # TODO: Add other PowerShell configurations like formatting (https://poshcode.gitbook.io/powershell-practice-and-style)
