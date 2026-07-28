@@ -214,6 +214,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  slipstream-static:
+    name: win / slipstream-static
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Validate PowerShell-only Calm OS payload
+        shell: powershell
+        run: ./src/tests/slipstream/validate.ps1
+
   # ---------------------------------------------------------------------------
   # Job C: Linux parity. Wired up so future milestones only need manifest + scripts.
   # ---------------------------------------------------------------------------

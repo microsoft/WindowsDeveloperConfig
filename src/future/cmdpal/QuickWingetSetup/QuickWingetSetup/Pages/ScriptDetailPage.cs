@@ -27,11 +27,15 @@ internal sealed partial class ScriptDetailPage : ListPage
     {
         var items = new List<IListItem>();
 
-        if (_script.WindowsConfigurationPath is { } winPath)
+        if (_script.WindowsLaunchPath is { } winPath)
         {
-            var localPath = _fetchService.GetScriptPathAsync(winPath).GetAwaiter().GetResult();
+            var localPath = (_script.UsesPowerShellInstaller
+                ? _fetchService.GetPayloadEntryPathAsync(winPath, _script.Windows?.PayloadFiles)
+                : _fetchService.GetScriptPathAsync(winPath)).GetAwaiter().GetResult();
             var winTags = new List<Tag> { new("Windows") };
-            var winSubtitle = $"winget configure {winPath}";
+            var winSubtitle = _script.UsesPowerShellInstaller
+                ? $"PowerShell installer {winPath}"
+                : $"winget configure {winPath}";
 
             // Flows that need WSL even though they register as Windows-only
             // (e.g. mac-comfort-shell installs a font via DSC but the
@@ -56,7 +60,7 @@ internal sealed partial class ScriptDetailPage : ListPage
                 }
             }
 
-            items.Add(new ListItem(new RunWinGetCommand(winPath, _fetchService, _script))
+            items.Add(new ListItem(new RunWindowsSetupCommand(winPath, _fetchService, _script))
             {
                 Title = "🪟 Run Windows Setup",
                 Subtitle = winSubtitle,
@@ -120,7 +124,7 @@ internal sealed partial class ScriptDetailPage : ListPage
     }
 }
 
-internal sealed partial class RunWinGetCommand : InvokableCommand, IConfirmationArgs
+internal sealed partial class RunWindowsSetupCommand : InvokableCommand, IConfirmationArgs
 {
     private const string FixItRelativePath = "scripts/windows/_common/enable-winget-configure.ps1";
 
@@ -128,7 +132,7 @@ internal sealed partial class RunWinGetCommand : InvokableCommand, IConfirmation
     private readonly ScriptFetchService _fetchService;
     private readonly ScriptEntry _script;
 
-    public RunWinGetCommand(string scriptPath, ScriptFetchService fetchService, ScriptEntry script)
+    public RunWindowsSetupCommand(string scriptPath, ScriptFetchService fetchService, ScriptEntry script)
     {
         _scriptPath = scriptPath;
         _fetchService = fetchService;
@@ -143,7 +147,9 @@ internal sealed partial class RunWinGetCommand : InvokableCommand, IConfirmation
     // list page already telegraphs intent; the dialog is the seatbelt.
     public string Title => $"Run {_script.Name} setup?";
     public string Description =>
-        $"This will run `winget configure` against {_scriptPath} in a new Windows Terminal tab. "
+        (_script.UsesPowerShellInstaller
+            ? $"This will run the PowerShell installer {_scriptPath} in a new Windows Terminal tab. "
+            : $"This will run `winget configure` against {_scriptPath} in a new Windows Terminal tab. ")
         + "Some flows install packages, change Windows settings, or enable WSL. Re-running is safe (each flow is idempotent).";
     public Microsoft.CommandPalette.Extensions.ICommand? PrimaryCommand => this;
     public bool IsPrimaryCommandCritical => false;
@@ -165,8 +171,10 @@ internal sealed partial class RunWinGetCommand : InvokableCommand, IConfirmation
         // page last rendered). If still broken, divert to the remediation
         // script instead of launching a wt.exe tab that would just fail
         // with an opaque winget error.
-        var health = WingetConfigureHealthService.RefreshStatus();
-        if (health != WingetConfigureStatus.Available)
+        var health = _script.UsesPowerShellInstaller
+            ? WingetConfigureStatus.Available
+            : WingetConfigureHealthService.RefreshStatus();
+        if (!_script.UsesPowerShellInstaller && health != WingetConfigureStatus.Available)
         {
             try
             {
@@ -185,9 +193,17 @@ internal sealed partial class RunWinGetCommand : InvokableCommand, IConfirmation
             return CommandResult.Dismiss();
         }
 
-        var localPath = _fetchService.GetScriptPathAsync(_scriptPath).GetAwaiter().GetResult();
+        var localPath = (_script.UsesPowerShellInstaller
+            ? _fetchService.GetPayloadEntryPathAsync(_scriptPath, _script.Windows?.PayloadFiles)
+            : _fetchService.GetScriptPathAsync(_scriptPath)).GetAwaiter().GetResult();
         if (localPath == null)
         {
+            return CommandResult.Dismiss();
+        }
+
+        if (_script.UsesPowerShellInstaller)
+        {
+            ScriptRunnerService.RunPowerShellInstaller(localPath);
             return CommandResult.Dismiss();
         }
 

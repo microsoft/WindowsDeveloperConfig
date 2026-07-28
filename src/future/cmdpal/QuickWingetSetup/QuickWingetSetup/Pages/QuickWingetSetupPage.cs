@@ -46,14 +46,13 @@ internal sealed partial class QuickWingetSetupPage : ListPage
             var health = WingetConfigureHealthService.RefreshStatus();
 
             var items = new List<IListItem>();
-            // Hard-fail banner if `winget configure` isn't available. Every
-            // Windows flow depends on this, so we put it above the flows
-            // list and block the "Run Windows Setup" path until it's fixed.
+            // DSC workloads need `winget configure`; direct PowerShell
+            // installers such as Calm OS can still run without it.
             if (health != WingetConfigureStatus.Available)
             {
                 items.Add(new ListItem(new EnableWingetConfigureCommand(_fetchService, this))
                 {
-                    Title = "⚠️ `winget configure` is unavailable",
+                    Title = "⚠️ DSC workloads are unavailable",
                     Subtitle = WingetConfigureHealthService.DescribeStatus(health)
                         + "  ·  Select to fix (elevates).",
                     Tags = [new Tag("blocker")],
@@ -61,12 +60,9 @@ internal sealed partial class QuickWingetSetupPage : ListPage
             }
 
             items.AddRange(manifest.Flows
-                // CmdPal is Windows-only today (the extension itself runs
-                // on Windows and the launch primitive is `winget configure`
-                // in a wt.exe tab). Hide flows that don't declare Windows
-                // support so users don't pick something the extension
-                // can't actually launch.
-                .Where(s => s.WindowsConfigurationPath is not null)
+                // CmdPal is Windows-only today. Hide flows without either a
+                // DSC configuration or a direct PowerShell installer.
+                .Where(s => s.WindowsLaunchPath is not null)
                 .OrderBy(s => CategoryRank(s.Category))
                 .ThenBy(s => s.Category)
                 .ThenBy(s => s.Name)

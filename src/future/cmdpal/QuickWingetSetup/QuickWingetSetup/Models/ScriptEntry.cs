@@ -88,6 +88,12 @@ public class ScriptEntry
         }
     }
 
+    public bool UsesPowerShellInstaller =>
+        string.Equals(Windows?.Execution, "powershell", System.StringComparison.OrdinalIgnoreCase);
+
+    public string? WindowsLaunchPath =>
+        UsesPowerShellInstaller ? Windows?.Install : WindowsConfigurationPath;
+
     /// <summary>WSL/Linux install script path, e.g. <c>scripts/linux/php/install.sh</c>.</summary>
     public string? LinuxInstallPath => Linux?.Install;
 }
@@ -96,6 +102,12 @@ public class WindowsTarget
 {
     [JsonPropertyName("install")]
     public string? Install { get; set; }
+
+    [JsonPropertyName("execution")]
+    public string? Execution { get; set; }
+
+    [JsonPropertyName("payloadFiles")]
+    public string[]? PayloadFiles { get; set; }
 
     [JsonPropertyName("configuration")]
     public string? Configuration { get; set; }

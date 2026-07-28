@@ -7,6 +7,38 @@ namespace QuickWingetSetup.Services;
 
 public static class ScriptRunnerService
 {
+    public static void RunPowerShellInstaller(string scriptPath)
+    {
+        if (!File.Exists(scriptPath))
+        {
+            throw new FileNotFoundException("PowerShell installer not found.", scriptPath);
+        }
+
+        var signatureCommand = "$signature=Get-AuthenticodeSignature -LiteralPath '"
+            + EscapeSingleQuotes(scriptPath)
+            + "'; if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation'){"
+            + "throw \"Invalid Microsoft signature: $($signature.Status) $($signature.SignerCertificate.Subject)\"}; ";
+        var sanitizedPath = scriptPath.Replace("\"", "");
+        var command = "$ErrorActionPreference='Stop'; "
+            + signatureCommand
+            + "& '"
+            + EscapeSingleQuotes(sanitizedPath)
+            + "'";
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+        var shell = ResolveShell();
+        var psi = new ProcessStartInfo
+        {
+            FileName = "wt.exe",
+            Arguments = $"new-tab -- \"{shell}\" -NoExit -NoProfile -ExecutionPolicy AllSigned -EncodedCommand {encoded}",
+            UseShellExecute = true,
+        };
+        var process = Process.Start(psi);
+        if (process == null)
+        {
+            throw new InvalidOperationException("Failed to launch Windows Terminal. Ensure wt.exe is available.");
+        }
+    }
+
     public static void RunWinGetConfig(string scriptPath)
     {
         RunWinGetConfig(scriptPath, postConfigureScriptPath: null, postConfigureArgs: null);

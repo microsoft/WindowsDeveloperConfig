@@ -59,8 +59,13 @@
 #     install:        path to PowerShell install shim
 #                     CI runs this from the `src/` directory, while CmdPal
 #                     assumes the extension's root is the repo root.
-#     configuration:  (optional) path to winget DSC configuration.winget the
-#                     extension applies via `winget configure`. Defaults to
+#     execution:      (optional) "powershell" for a direct PowerShell installer;
+#                     defaults to "wingetConfiguration".
+#     payloadFiles:   (optional) paths relative to the install script's directory
+#                     that must be present before CmdPal enables a multi-file
+#                     PowerShell payload.
+#     configuration:  path to the winget DSC configuration when execution is
+#                     "wingetConfiguration". Defaults to
 #                     "<dir of install>/configuration.winget" when omitted.
 #     build:          shell command to build the hello world (run from repo
 #                     root). "" to skip.
@@ -279,7 +284,7 @@ flows:
 
   - id: calm-os
     name: Calm OS
-    description: Distraction-free dev workstation — apps + OS settings + WSL, all in one DSC
+    description: Distraction-free dev workstation — apps + OS settings + WSL with reboot-safe resume
     category: user-experience
     tags: [user-experience, calm-os, distraction-free, taskbar, wsl, ubuntu]
     icon: 🧘
@@ -293,7 +298,17 @@ flows:
     os: [windows]
     windows:
       install: windows-dev-config/install.ps1
-      configuration: windows-dev-config/dev-config.winget
+      execution: powershell
+      payloadFiles:
+        - bootstrap/common.ps1
+        - bootstrap/controller.ps1
+        - bootstrap/platform.ps1
+        - bootstrap/resume.ps1
+        - bootstrap/configure.ps1
+        - bootstrap/user.ps1
+        - bootstrap/verify.ps1
+        - config/packages.json
+        - config/registry.json
       build: ""
       run: pwsh -NoProfile -File src/tests/calm-os/probe.ps1
       expected: src/tests/calm-os/expected.txt

@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "packages": [
+    {
+      "name": "Windows Terminal",
+      "id": "Microsoft.WindowsTerminal",
+      "source": "winget",
+      "verifyCommands": ["wt.exe"]
+    },
+    {
+      "name": "PowerShell 7",
+      "id": "Microsoft.PowerShell",
+      "source": "winget",
+      "verifyCommands": ["pwsh.exe"]
+    },
+    {
+      "name": "Git",
+      "id": "Git.Git",
+      "source": "winget",
+      "verifyCommands": ["git.exe"]
+    },
+    {
+      "name": "GitHub CLI",
+      "id": "GitHub.Cli",
+      "source": "winget",
+      "verifyCommands": ["gh.exe"]
+    },
+    {
+      "name": "GitHub Copilot CLI",
+      "id": "GitHub.Copilot",
+      "source": "winget",
+      "verifyCommands": ["copilot.exe"]
+    },
+    {
+      "name": "Visual Studio Code",
+      "id": "Microsoft.VisualStudioCode",
+      "source": "winget",
+      "verifyCommands": ["code.cmd"]
+    },
+    {
+      "name": ".NET 10 SDK",
+      "id": "Microsoft.dotnet.SDK.10",
+      "source": "winget",
+      "verifyCommands": ["dotnet.exe"]
+    },
+    {
+      "name": "Python 3.14",
+      "id": "Python.Python.3.14",
+      "source": "winget",
+      "verifyCommands": ["python.exe"]
+    },
+    {
+      "name": "uv",
+      "id": "astral-sh.uv",
+      "source": "winget",
+      "verifyCommands": ["uv.exe"]
+    },
+    {
+      "name": "Node.js LTS",
+      "id": "OpenJS.NodeJS.LTS",
+      "source": "winget",
+      "verifyCommands": ["node.exe", "npm.cmd"]
+    },
+    {
+      "name": "NVM for Windows",
+      "id": "CoreyButler.NVMforWindows",
+      "source": "winget",
+      "verifyCommands": ["nvm.exe"]
+    },
+    {
+      "name": "Coreutils for Windows",
+      "id": "Microsoft.Coreutils",
+      "source": "winget",
+      "verifyCommands": []
+    },
+    {
+      "name": "Oh My Posh",
+      "id": "JanDeDobbeleer.OhMyPosh",
+      "source": "winget",
+      "verifyCommands": ["oh-my-posh.exe"]
+    },
+    {
+      "name": "Windows Application CLI",
+      "id": "Microsoft.WinAppCli",
+      "source": "winget",
+      "verifyCommands": ["winapp.exe"]
+    },
+    {
+      "name": "PowerToys",
+      "id": "Microsoft.PowerToys",
+      "source": "winget",
+      "verifyCommands": []
+    }
+  ]
+}

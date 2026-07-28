@@ -15,9 +15,10 @@ resources:
       ref: refs/heads/main
 
 extends:
-  template: v2/OneBranch.Official.CrossPlat.yml@templates
-  # Use the non-official template for testing changes in non-production branches
-  # template: v2/OneBranch.NonOfficial.CrossPlat.yml@templates
+  # Slipstream preview: use non-official governance while validating signed
+  # artifacts from the development branch. Switch back to Official before the
+  # production release path is merged.
+  template: v2/OneBranch.NonOfficial.CrossPlat.yml@templates
   parameters:
     stages:
       - stage: release

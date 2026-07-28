@@ -3,15 +3,13 @@
 A [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview)
 extension that surfaces the developer flows defined in this repo's
 [`manifest.yml`](../../manifest.yml). Pick a flow, hit Enter, and the extension
-launches `winget configure` (Windows) or `wsl bash` (Linux) in a new Windows
-Terminal tab — no need to remember which `.winget` file goes with which
-toolchain.
+launches its `winget configure` document or signed PowerShell payload in a new
+Windows Terminal tab.
 
-## Prerequisite: `winget configure` must be enabled
+## Prerequisites
 
-This extension launches flows exclusively through `winget configure`. If
-that subcommand is not wired up on the host, no Windows flow surfaced by
-CmdPal can succeed. See the developer guide's
+Standalone workloads launch through `winget configure`. If that subcommand is
+not wired up on the host, those flows cannot succeed. See the developer guide's
 [`Prerequisites (Windows)`](../../docs/development.md#prerequisites-windows)
 section for the three conditions that must hold (current App Installer, the
 `configuration` feature enabled, and no blocking ADMX policy) and the
@@ -19,13 +17,17 @@ one-line smoke test. The shared preflight
 [`Workloads/_common/assert-winget-configure.ps1`](../../Workloads/_common/assert-winget-configure.ps1)
 enforces this at runtime with an actionable error message.
 
+Calm OS launches its signed, multi-file Slipstream PowerShell payload instead.
+The extension requires every `windows.payloadFiles` entry to be present and
+verifies the Microsoft Authenticode signature on the entry point. Slipstream
+then validates every sibling script and manifest before requesting elevation.
+
 ## Source of truth
 
 The extension reads the same `manifest.yml` that drives CI. Each flow's UX
 metadata (`name`, `description`, `category`, `tags`, `icon`, `onboardingUrl`,
-`dependsOn`) plus its `windows.configuration` / `linux.install` paths come
-straight from that file — adding a flow there makes it appear in CmdPal
-automatically.
+`dependsOn`) plus its `windows.configuration`, `windows.install`, and
+`windows.execution` fields come straight from that file.
 
 ## Categories and ordering
 
@@ -92,6 +94,8 @@ The project targets `net9.0-windows10.0.26100.0` and is AOT/trim friendly.
 | Manifest field                      | What the extension does                                     |
 | ----------------------------------- | ----------------------------------------------------------- |
 | `windows.configuration`             | `winget configure <path>` in a new Windows Terminal tab, after a confirmation dialog |
+| `windows.execution: powershell`      | Runs the signed `windows.install` payload directly |
+| `windows.payloadFiles`               | Requires every listed sibling before enabling a multi-file PowerShell payload |
 | `onboardingUrl`                     | Opens in the default browser via `📖 Official Docs` action  |
 | `icon`, `name`, `description`, ...  | Rendered on the list/detail pages                           |
 

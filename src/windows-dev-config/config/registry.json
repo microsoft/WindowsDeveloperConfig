@@ -1,0 +1,187 @@
+{
+  "schemaVersion": 1,
+  "values": [
+    {
+      "name": "Dark apps",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+      "valueName": "AppsUseLightTheme",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Dark system",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+      "valueName": "SystemUsesLightTheme",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Windows Sudo",
+      "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Sudo",
+      "valueName": "Enabled",
+      "type": "DWord",
+      "value": 3
+    },
+    {
+      "name": "Developer Mode",
+      "path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock",
+      "valueName": "AllowDevelopmentWithoutDevLicense",
+      "type": "DWord",
+      "value": 1
+    },
+    {
+      "name": "Long paths",
+      "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+      "valueName": "LongPathsEnabled",
+      "type": "DWord",
+      "value": 1
+    },
+    {
+      "name": "Remote Desktop",
+      "path": "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server",
+      "valueName": "fDenyTSConnections",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Show file extensions",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "HideFileExt",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Show hidden files",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "Hidden",
+      "type": "DWord",
+      "value": 1
+    },
+    {
+      "name": "Show full Explorer path",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "FullPathAddress",
+      "type": "DWord",
+      "value": 1
+    },
+    {
+      "name": "Open Explorer to This PC",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "LaunchTo",
+      "type": "DWord",
+      "value": 1
+    },
+    {
+      "name": "Hide frequent folders",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "ShowFrequent",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Hide recent files",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+      "valueName": "ShowRecent",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Hide cloud recommendations",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer",
+      "valueName": "ShowCloudFilesInQuickAccess",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Show Git folders",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "NavPaneShowVersionControl",
+      "type": "DWord",
+      "value": 1
+    },
+    {
+      "name": "Disable Explorer tips",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "ShowSyncProviderNotifications",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Disable toast notifications",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings",
+      "valueName": "NOC_GLOBAL_SETTING_TOASTS_ENABLED",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Hide taskbar Widgets",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "TaskbarDa",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Hide Bluetooth tray icon",
+      "path": "HKCU\\Control Panel\\Bluetooth",
+      "valueName": "Notification Area Icon",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Enable taskbar End Task",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "TaskbarEndTask",
+      "type": "DWord",
+      "value": 1
+    },
+    {
+      "name": "Disable Start web search",
+      "path": "HKCU\\SOFTWARE\\Policies\\Microsoft\\Windows\\Explorer",
+      "valueName": "DisableSearchBoxSuggestions",
+      "type": "DWord",
+      "value": 1
+    },
+    {
+      "name": "Disable search highlights",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\SearchSettings",
+      "valueName": "IsDynamicSearchBoxEnabled",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Disable Start recommendations",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "valueName": "Start_IrisRecommendations",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Disable Widgets service",
+      "path": "HKLM\\SOFTWARE\\Policies\\Microsoft\\Dsh",
+      "valueName": "AllowNewsAndInterests",
+      "type": "DWord",
+      "value": 0
+    },
+    {
+      "name": "Blank Edge new tab",
+      "path": "HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge",
+      "valueName": "NewTabPageLocation",
+      "type": "String",
+      "value": "about:blank"
+    },
+    {
+      "name": "Hide Edge first-run experience",
+      "path": "HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge",
+      "valueName": "HideFirstRunExperience",
+      "type": "DWord",
+      "value": 1
+    },
+    {
+      "name": "Disable PowerToys AOT notifications",
+      "path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\PowerToys",
+      "valueName": "Enabled",
+      "type": "DWord",
+      "value": 0
+    }
+  ]
+}

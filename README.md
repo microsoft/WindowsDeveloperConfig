@@ -32,7 +32,7 @@ Three developer setups live in this repo. Pick the one that matches what you wan
 | A polished WSL shell: zsh/bash, Starship, CLI tools, and a themed terminal profile. Interactive or unattended. | [WSL Comfort](#-wsl-comfort) |
 | A single language toolchain: Node, Python, SQL, PowerShell, .NET, Rust, Go, Java, PHP, WinForms, or WinUI 3. One command each. | [Workloads](#-single-language-workloads) |
 
-Most of them use [`winget configure`](https://learn.microsoft.com/en-us/windows/package-manager/winget/configure). If you've never used it before, enable it once:
+The single-language workloads use [`winget configure`](https://learn.microsoft.com/en-us/windows/package-manager/winget/configure). If you've never used one before, enable it once:
 
 ```powershell
 winget configure --enable
@@ -57,7 +57,10 @@ If that fails or `winget configure` is still not recognized, see [Troubleshootin
 
 *Turns a fresh Windows 11 box into a clean, distraction-free dev workstation in one shot.*
 
-A single [winget configuration](https://learn.microsoft.com/en-us/windows/package-manager/configuration/) file that installs dev tools, applies opinionated Windows settings, and bootstraps WSL + Ubuntu through the required reboot. Non-interactive. Idempotent. Safe to re-run on an existing machine.
+The Slipstream installer repairs its own prerequisites, installs dev tools,
+applies opinionated Windows settings, and bootstraps WSL + Ubuntu through the
+required reboot. It uses direct, checkpointed PowerShell rather than DSC so it
+can retain elevation and resume reliably.
 
 First, get the files onto the box. The config is invoked from a local path, but the bootstrap itself is what installs Git — so on a clean Windows install you'll typically download the repo as a ZIP. If Git is already there, clone it:
 
@@ -72,13 +75,15 @@ Expand-Archive .\WindowsDeveloperConfig.zip -DestinationPath .
 cd .\WindowsDeveloperConfig-main
 ```
 
-Then apply the configuration:
+Then run the installer:
 
 ```powershell
-winget configure -f .\windows-dev-config\dev-config.winget --accept-configuration-agreements --disable-interactivity
+.\windows-dev-config\install.ps1
 ```
 
-> ⚠️ **May reboot.** Enabling WSL needs a Windows optional feature that requires a restart. A `RunOnce` task picks the configuration back up after you sign in, installs Ubuntu, and finishes the run. Expect one hard reboot plus about a minute of post-login work. Save your work first.
+> ⚠️ **May reboot.** Enabling WSL needs a Windows optional feature that requires
+> a restart. An elevated interactive-user scheduled task resumes setup after
+> sign-in without another UAC prompt. Save your work first.
 
 <details>
 <summary><strong>What you get</strong></summary>
@@ -86,7 +91,7 @@ winget configure -f .\windows-dev-config\dev-config.winget --accept-configuratio
 - **Dev tools:** PowerShell 7, Git, GitHub CLI, VS Code, .NET SDK 10, Python 3.14 + uv, Node.js, Coreutils for Windows, Oh My Posh, and PowerToys.
 - **Terminal:** PowerShell 7 is the default profile, Oh My Posh is enabled, and Cascadia Mono NF is set as the default font.
 - **Windows settings:** Dark theme, developer mode, long paths, File Explorer defaults, Start/Search cleanup, Edge policies, and other workstation defaults.
-- **WSL:** WSL platform + Ubuntu, including the reboot and the `RunOnce` resume step.
+- **WSL:** WSL platform + Ubuntu, including reboot-safe elevated scheduled-task resume.
 
 </details>
 
@@ -164,7 +169,11 @@ See [`src/future/cmdpal/README.md`](./src/future/cmdpal/README.md) for build and
 <details>
 <summary><strong>"Unrecognized command: configure"</strong></summary>
 
-Run `winget configure --enable`. If `winget configure` is still not recognized after that, [`Workloads/_common/assert-winget-configure.ps1`](./Workloads/_common/assert-winget-configure.ps1) tells you whether App Installer is too old, policy has disabled configuration, or something else needs fixing.
+This only affects the single-language workloads. Run `winget configure --enable`.
+If it is still not recognized, [`Workloads/_common/assert-winget-configure.ps1`](./Workloads/_common/assert-winget-configure.ps1)
+identifies whether App Installer is stale or policy has disabled configuration.
+The full Windows Dev Config repairs direct WinGet prerequisites itself and does
+not use `winget configure`.
 
 </details>
 
@@ -195,7 +204,10 @@ Open a new terminal, or run the matching `install.ps1` shim to refresh PATH in t
 <details>
 <summary><strong>Windows Dev Config rebooted the machine and looks stuck</strong></summary>
 
-It registered a `RunOnce` entry, so `winget configure` resumes once you sign back in. Give it a minute after login.
+It registered an elevated scheduled task for the initiating user. Sign back in
+and give the setup window a minute to appear. Run
+`.\windows-dev-config\install.ps1 -Action Status` to see its checkpoint and log
+location.
 
 </details>
 

@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.IO.Compression;
+using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
@@ -146,6 +148,155 @@ public class ScriptFetchService
                 return null;
             }
         }
+    }
+
+    /// <summary>
+    /// Returns an entry point together with its sibling payload. Remote
+    /// PowerShell installers can span multiple files, unlike a DSC document,
+    /// so cache an extracted repository snapshot instead of one raw file.
+    /// </summary>
+    public async Task<string?> GetPayloadEntryPathAsync(
+        string relativePath,
+        string[]? requiredPayloadFiles = null)
+    {
+        if (relativePath.Contains("..") || Path.IsPathRooted(relativePath))
+            return null;
+
+        if (_config.Source == "local")
+        {
+            var localEntry = await GetScriptPathAsync(relativePath);
+            return HasRequiredPayloadFiles(localEntry, requiredPayloadFiles) ? localEntry : null;
+        }
+
+        var cacheDir = GetRepositoryCacheDirectory();
+        var expected = Path.Combine(cacheDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        if (IsPayloadCacheFresh(cacheDir, expected, requiredPayloadFiles))
+            return expected;
+
+        await _cacheLock.WaitAsync();
+        try
+        {
+            if (IsPayloadCacheFresh(cacheDir, expected, requiredPayloadFiles))
+                return expected;
+
+            if (Directory.Exists(cacheDir))
+                Directory.Delete(cacheDir, true);
+            Directory.CreateDirectory(cacheDir);
+
+            var archiveUrl =
+                $"https://github.com/{_config.GithubRepo}/archive/refs/heads/{_config.GithubBranch}.zip";
+            var archivePath = Path.Combine(cacheDir, "repository.zip");
+            await using (var source = await _httpClient.GetStreamAsync(archiveUrl))
+            await using (var destination = File.Create(archivePath))
+            {
+                await source.CopyToAsync(destination);
+            }
+
+            var extractRoot = Path.Combine(cacheDir, "extract");
+            ZipFile.ExtractToDirectory(archivePath, extractRoot);
+            File.Delete(archivePath);
+            var repositoryRoot = Directory.GetDirectories(extractRoot).FirstOrDefault();
+            if (repositoryRoot == null)
+                return null;
+
+            var extractedEntry = Path.Combine(
+                repositoryRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(extractedEntry))
+                return null;
+
+            var payloadDirectory = Path.GetDirectoryName(expected);
+            if (payloadDirectory == null)
+                return null;
+            Directory.CreateDirectory(payloadDirectory);
+
+            var sourceDirectory = Path.GetDirectoryName(extractedEntry);
+            if (sourceDirectory == null)
+                return null;
+            foreach (var sourcePath in Directory.EnumerateFiles(sourceDirectory, "*", SearchOption.AllDirectories))
+            {
+                var relative = Path.GetRelativePath(sourceDirectory, sourcePath);
+                var destinationPath = Path.Combine(payloadDirectory, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+                File.Copy(sourcePath, destinationPath, true);
+            }
+            if (!HasRequiredPayloadFiles(expected, requiredPayloadFiles))
+                return null;
+
+            File.WriteAllText(
+                Path.Combine(cacheDir, ".fetched-at"),
+                DateTime.UtcNow.ToString("O"));
+            return expected;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
+    }
+
+    private string GetRepositoryCacheDirectory()
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var safeRepo = string.Join("_", _config.GithubRepo.Split(invalid));
+        var safeBranch = string.Join("_", _config.GithubBranch.Split(invalid));
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "QuickWingetSetup", "cache", "repositories", safeRepo, safeBranch);
+    }
+
+    private bool IsPayloadCacheFresh(
+        string cacheDirectory,
+        string entryPath,
+        string[]? requiredPayloadFiles)
+    {
+        if (!HasRequiredPayloadFiles(entryPath, requiredPayloadFiles))
+            return false;
+
+        var stampPath = Path.Combine(cacheDirectory, ".fetched-at");
+        if (!File.Exists(stampPath))
+            return false;
+
+        var ttl = TimeSpan.FromDays(Math.Max(0, _config.CacheTTLDays));
+        return ttl > TimeSpan.Zero
+            && DateTime.UtcNow - File.GetLastWriteTimeUtc(stampPath) < ttl;
+    }
+
+    private static bool HasRequiredPayloadFiles(string? entryPath, string[]? requiredPayloadFiles)
+    {
+        if (string.IsNullOrEmpty(entryPath) || !File.Exists(entryPath))
+            return false;
+        if (requiredPayloadFiles == null || requiredPayloadFiles.Length == 0)
+            return true;
+
+        var payloadRoot = Path.GetDirectoryName(entryPath);
+        if (payloadRoot == null)
+            return false;
+        var trustedRoot = Path.GetFullPath(payloadRoot).TrimEnd(Path.DirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+
+        foreach (var relativePath in requiredPayloadFiles)
+        {
+            if (string.IsNullOrWhiteSpace(relativePath)
+                || relativePath.Contains("..")
+                || Path.IsPathRooted(relativePath))
+            {
+                return false;
+            }
+
+            var candidate = Path.GetFullPath(Path.Combine(
+                payloadRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+            if (!candidate.StartsWith(trustedRoot, StringComparison.OrdinalIgnoreCase)
+                || !File.Exists(candidate))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     public Task ForceRefreshAsync()

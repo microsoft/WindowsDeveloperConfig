@@ -8,16 +8,12 @@ Opinionated, CI-validated configurations for bootstrapping developer
 toolchains and Windows-desktop personalities using `winget` /
 `winget configure`.
 
-On Windows the **core artifact of each flow is a [winget DSC configuration
-file](https://learn.microsoft.com/windows/package-manager/configuration/)**
-(`configuration.winget` for language toolchains, `dev-config.winget` for the
-Calm OS flow) — a declarative, idempotent description of the machine state
-required for that flow. Where winget alone is not enough (e.g. `npm install
---global typescript`, registry tweaks, or a `RunOnce` reboot dance) the
-configuration calls a DSC `Script` / `RunCommandOnSet` / `Registry`
-resource, so everything the flow needs lives in one YAML file. A small
-`install.ps1` shim next to it applies the config with `winget configure`
-and handles session-level glue (PATH refresh, CI sentinel).
+On Windows, single-language flows use a `configuration.winget` DSC document plus
+a thin `install.ps1` shim. Calm OS is the exception: its Slipstream installer is
+a checkpointed PowerShell payload with declarative JSON package and registry
+manifests. It owns elevation, prerequisite repair, WSL restarts, resume, and
+verification directly because those lifecycle concerns do not fit reliably
+inside a single DSC invocation.
 
 Every flow is **exercised on a real GitHub-hosted runner** on every push, pull
 request, and nightly: the DSC config is applied, then a canonical "hello
@@ -27,8 +23,8 @@ configuration actually produced a working toolchain.
 
 ## Supported flows
 
-Each flow's `configuration.winget` (or `dev-config.winget` for Calm OS)
-is the source of truth for what gets installed; the table below
+Each flow's configuration artifact is the source of truth for what gets
+installed; the table below
 summarizes it for quick scanning. Flows marked **manual** are excluded
 from the automated CI matrix (they need an interactive desktop session
 or pull multi-GB workloads we don't want to chew minutes on), but are
@@ -48,7 +44,7 @@ extension.
 | PowerShell        | ✅ automated   | `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCLI` + WinUI/Universal/ManagedDesktop VS workloads |
-| Calm OS           | 🙋 manual     | A full distraction-free workstation: apps + ~24 registry tweaks + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
+| Calm OS           | 🙋 manual     | PowerShell Slipstream: apps + registry settings + WSL + Ubuntu with one-UAC reboot resume (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
 | Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative
@@ -80,7 +76,7 @@ Workloads/
   rust/            # configuration.winget (core) + install.ps1 (thin shim)
   winforms/        # configuration.winget (core) + install.ps1 (thin shim)
   winui/           # configuration.winget (core) + install.ps1 (thin shim)
-windows-dev-config/    # Calm OS — dev-config.winget (single-file DSC) + install.ps1 + README.md
+windows-dev-config/    # Calm OS — signed Slipstream scripts + JSON manifests + README.md
 wsl-comfort/           # Comfort Shell — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
 tests/
   _harness/          # build-run-diff harness used by CI:
@@ -122,7 +118,11 @@ This repo carries **two parallel copies** of every flow:
 | `src/docs/development.md`     | Contributor docs (CI, validation, how to add a language).         | **Yes**  | n/a      |
 | `src/tests/`                  | Hello-world programs + expected stdout used by the CI harness.    | **Yes**  | CI only  |
 
-**End users**: the commands in the top-level [README](../../README.md) point at the **top-level signed copies** on purpose. If you're following the README on a Windows box you don't need to know `src/` exists. Every `winget configure -f .\windows-dev-config\dev-config.winget`-style invocation in the README is correct as written.
+**End users**: the commands in the top-level [README](../../README.md) point at
+the **top-level signed copies** on purpose. If you're following the README on a
+Windows box you don't need to know `src/` exists. Calm OS runs its signed
+`windows-dev-config\install.ps1`; standalone workloads keep their
+`winget configure` commands.
 
 **Contributors**: edit `src/`. The top-level paths are **regenerated** by [`.pipelines/OneBranch.SignAndPackage.yml`](../../.pipelines/OneBranch.SignAndPackage.yml), which Authenticode-signs every `src/**/*.ps1` and ships them (plus the `.winget` configs and the manifest) as the release artifact. The signed copies were merged into `main` from the `signed` branch in [PR #6](https://github.com/microsoft/WindowsDeveloperConfig/pull/6). A change to a `src/` script becomes a new signed top-level copy on the next sign cycle, not at PR merge, so the two can briefly disagree on a script's body until that cycle runs.
 
@@ -144,9 +144,8 @@ Maintainers: once this guard has landed, add **`Signed copy guard`** to the requ
 
 ## Prerequisites (Windows)
 
-Every flow — and the [Command Palette extension](../future/cmdpal/) — installs
-toolchains through `winget configure`. That subcommand must be available on
-your machine before anything in this repo can succeed:
+Standalone language flows install toolchains through `winget configure`. That
+subcommand must be available before those flows can succeed:
 
 - **App Installer (winget)** must be current. Update from the Microsoft
   Store, or grab the latest MSIX from
@@ -166,11 +165,14 @@ winget configure --help | Select-Object -First 3
 ```
 
 If the help text prints, you're good. If it errors or prints
-"Unrecognized command", fix the above before running any flow. Each
-`install.ps1` shim runs
+"Unrecognized command", fix the above before running a standalone workload.
+Each workload `install.ps1` shim runs
 [`Workloads/_common/assert-winget-configure.ps1`](../Workloads/_common/assert-winget-configure.ps1)
 first and will emit an actionable message describing exactly which of the
 three conditions above needs attention.
+
+Calm OS does not require `winget configure`; Slipstream repairs direct WinGet
+prerequisites before installing anything.
 
 ## Running a flow locally (Windows)
 
@@ -201,9 +203,8 @@ problems before pushing.
 
 > A clean Windows VM (e.g. a throwaway Hyper-V / Dev Box / Windows Sandbox
 > image) is strongly recommended for any step that actually installs
-> toolchains. Applying a DSC config on your daily-driver machine will happily
-> install Node, PHP, etc. system-wide — and since these flows are idempotent,
-> that is generally harmless but not always what you want.
+> toolchains. These flows intentionally install machine software and change
+> developer settings.
 
 ### 1. Static checks (any OS, fast)
 
@@ -226,6 +227,9 @@ Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
         $_.FullName, [ref]$null, [ref]$errs)
     if ($errs) { Write-Error "$($_.FullName): $errs" } else { "OK: $($_.Name)" }
 }
+
+# Slipstream payload, manifest hashes, and task definition (no mutation).
+./windows-dev-config/install.ps1 -Action Validate -AllowUnsigned
 ```
 
 If you have [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer)
