@@ -18,14 +18,12 @@ function Suspend-DevConfigForReboot {
         [Parameter(Mandatory)] [string] $ScriptPath
     )
 
-    $shell   = Get-DevConfigShellExe
-    $logPath = Join-Path (Split-Path -Path $ScriptPath -Parent) 'resume-output.log'
+    $shell       = Get-DevConfigShellExe
+    $wrapperPath = Join-Path $PSScriptRoot '_resume-wrapper.ps1'
 
-    # Task Scheduler actions have no redirection of their own, and in-script '*>' misses
-    # unhandled thrown errors; wrap in cmd.exe for real process-level stdout/stderr capture.
-    $innerCommand = "`"$shell`" -NoProfile -ExecutionPolicy Bypass -File `"`"$ScriptPath`"`" -NoElevate > `"$logPath`" 2>&1"
-    $arguments    = "/c `"$innerCommand`""
-    $action       = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument $arguments
+    # The wrapper (not cmd.exe) handles output capture, so the resumed run stays visible on screen.
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperPath`" -ScriptPath `"$ScriptPath`""
+    $action    = New-ScheduledTaskAction -Execute $shell -Argument $arguments
 
     # WindowsIdentity's Name gives DOMAIN\User (or MACHINE\User for local accounts),
     # which is what the scheduled task's logon matching needs.
