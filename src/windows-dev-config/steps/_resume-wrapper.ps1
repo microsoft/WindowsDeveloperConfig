@@ -11,7 +11,17 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Own console needs the same UTF-8 fix as dev-config.ps1, so relayed glyphs render correctly here too.
+try {
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [Console]::OutputEncoding = $utf8NoBom
+    $OutputEncoding           = $utf8NoBom
+} catch {
+    Write-Verbose "Could not force UTF-8 console encoding: $($_.Exception.Message)"
+}
+
 . (Join-Path $PSScriptRoot '_elevation.ps1')
+. (Join-Path $PSScriptRoot '_console.ps1')
 
 $logDir    = Split-Path -Path $ScriptPath -Parent
 $masterLog = Join-Path $logDir 'resume-output.log'
@@ -21,18 +31,19 @@ Remove-Item $masterLog, $innerOut, $innerErr -ErrorAction SilentlyContinue
 
 $shell = Get-DevConfigShellExe
 $proc = Start-Process -FilePath $shell `
-    -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath, '-NoElevate') `
+    -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath, '-NoElevate', '-Resumed') `
     -RedirectStandardOutput $innerOut -RedirectStandardError $innerErr -NoNewWindow -PassThru
 
 # Tee: mirror new lines to the console (visible on screen) and one combined log file.
 $shown = 0
 function Show-DevConfigResumeNewLines {
     # @() forces array semantics; Get-Content returns a bare string for single-line files.
-    $lines = @(Get-Content -Path $innerOut -ErrorAction SilentlyContinue)
+    # -Encoding UTF8 matches how the redirected child process actually writes its output.
+    $lines = @(Get-Content -Path $innerOut -Encoding UTF8 -ErrorAction SilentlyContinue)
     if ($lines.Count -gt $script:shown) {
         $lines[$script:shown..($lines.Count - 1)] | ForEach-Object {
             Write-Host $_
-            Add-Content -Path $masterLog -Value $_
+            Add-Content -Path $masterLog -Value $_ -Encoding UTF8
         }
         $script:shown = $lines.Count
     }
@@ -46,10 +57,13 @@ Show-DevConfigResumeNewLines
 
 # Errors are terminal, so showing them last matches when they actually happened.
 if (Test-Path -LiteralPath $innerErr) {
-    Get-Content -Path $innerErr | ForEach-Object {
+    Get-Content -Path $innerErr -Encoding UTF8 | ForEach-Object {
         Write-Host $_ -ForegroundColor Red
-        Add-Content -Path $masterLog -Value $_
+        Add-Content -Path $masterLog -Value $_ -Encoding UTF8
     }
 }
+
+# This window is what's actually visible after the reboot, so it owns the "don't just vanish" pause.
+Wait-DevConfigKeyPress
 
 exit $proc.ExitCode

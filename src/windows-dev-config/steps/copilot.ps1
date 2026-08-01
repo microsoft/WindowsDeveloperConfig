@@ -60,7 +60,11 @@ function Test-DevConfigWinUITemplatesInstalled {
 }
 
 function Install-DevConfigWinUITemplates {
-    dotnet new install Microsoft.WindowsAppSDK.WinUI.CSharp.Templates
+    $output = dotnet new install Microsoft.WindowsAppSDK.WinUI.CSharp.Templates 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host $output
+        throw "dotnet new install failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Test-DevConfigWinSkillsMarketplaceAdded {
@@ -68,7 +72,11 @@ function Test-DevConfigWinSkillsMarketplaceAdded {
 }
 
 function Add-DevConfigWinSkillsMarketplace {
-    copilot plugin marketplace add microsoft/win-dev-skills
+    $output = copilot plugin marketplace add microsoft/win-dev-skills 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host $output
+        throw "copilot plugin marketplace add failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Test-DevConfigWinUIPluginInstalled {
@@ -76,23 +84,33 @@ function Test-DevConfigWinUIPluginInstalled {
 }
 
 function Install-DevConfigWinUIPlugin {
-    copilot plugin install winui@win-dev-skills
+    $output = copilot plugin install winui@win-dev-skills 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host $output
+        throw "copilot plugin install winui failed with exit code $LASTEXITCODE"
+    }
 }
 
 function Invoke-CopilotPhase {
+    # BestEffort throughout: these are bonus integrations layered on top of Calm OS, all network-dependent
+    # (GitHub asset CDN, NuGet.org, Copilot marketplace) -- a hiccup in any of them must not block Phase 10 (WSL + reboot).
     $steps = @(
         New-DevConfigStep -Name 'GitHubCopilotProfile' -Description 'Add a GitHub Copilot profile to Windows Terminal' `
             -Check { Test-DevConfigCopilotTerminalProfile } `
-            -Apply { Set-DevConfigCopilotTerminalProfile }
+            -Apply { Set-DevConfigCopilotTerminalProfile } `
+            -BestEffort
         New-DevConfigStep -Name 'WinUITemplates' -Description 'Install WinUI dotnet-new templates' `
             -Check { Test-DevConfigWinUITemplatesInstalled } `
-            -Apply { Install-DevConfigWinUITemplates }
+            -Apply { Install-DevConfigWinUITemplates } `
+            -BestEffort
         New-DevConfigStep -Name 'WinSkillsMarketplace' -Description 'Add win-dev-skills to the Copilot plugin marketplace' `
             -Check { Test-DevConfigWinSkillsMarketplaceAdded } `
-            -Apply { Add-DevConfigWinSkillsMarketplace }
+            -Apply { Add-DevConfigWinSkillsMarketplace } `
+            -BestEffort
         New-DevConfigStep -Name 'WinUIPlugin' -Description 'Install the WinUI Copilot plugin from win-dev-skills' `
             -Check { Test-DevConfigWinUIPluginInstalled } `
-            -Apply { Install-DevConfigWinUIPlugin }
+            -Apply { Install-DevConfigWinUIPlugin } `
+            -BestEffort
     )
 
     Invoke-DevConfigSteps -Steps $steps

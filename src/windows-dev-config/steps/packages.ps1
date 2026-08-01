@@ -6,18 +6,52 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Required: every check/install below is a Microsoft.WinGet.Client cmdlet, so the module has to load.
+function Install-DevConfigWinGetModule {
+    if (-not (Get-Module -ListAvailable -Name Microsoft.WinGet.Client)) {
+        Write-Host '  Setting up the WinGet PowerShell module...' -ForegroundColor DarkCyan
+        Write-Host '  (First time only. This can take a few minutes.)' -ForegroundColor DarkGray
+        # A fresh machine can prompt to install the NuGet provider on first use; bootstrap it non-interactively first.
+        if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -Force -ErrorAction Stop | Out-Null
+        }
+        Install-Module -Name Microsoft.WinGet.Client -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
+    }
+    Import-Module -Name Microsoft.WinGet.Client -ErrorAction Stop
+}
+
+# Best-effort: fixes the odd App Execution Alias glitches winget occasionally hits, before any real installs start.
+# Get-WinGetVersion is a quick health check -- only pay for the slower repair when it says WinGet isn't responding.
+function Repair-DevConfigWinget {
+    try {
+        $version = Get-WinGetVersion -ErrorAction Stop
+        Write-Host "  WinGet $version looks healthy -- skipping repair." -ForegroundColor DarkGray
+        return
+    } catch {
+        Write-Host '  WinGet is not responding as expected -- repairing...' -ForegroundColor DarkCyan
+        Write-Host '  (This can take a few minutes.)' -ForegroundColor DarkGray
+    }
+
+    try {
+        Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop | Out-Null
+        Write-Host '  WinGet repair finished.' -ForegroundColor DarkGray
+    } catch {
+        Write-Warning "WinGet repair skipped: $($_.Exception.Message) (continuing anyway)"
+    }
+}
+
 function Test-DevConfigWingetPackageInstalled {
     param(
         [Parameter(Mandatory)] [string] $Id
     )
-    $listOutput = & winget list --id $Id --exact --source winget --accept-source-agreements 2>&1 | Out-String
-    if ($listOutput -match 'No installed package found') {
+    # EqualsCaseInsensitive avoids ambiguous substring matches (e.g. an MSIX-correlated entry sharing the same Id text).
+    $pkg = Get-WinGetPackage -Id $Id -Source winget -MatchOption EqualsCaseInsensitive
+    if (-not $pkg) {
         return $false
     }
 
     # useLatest: true in the original -- an available upgrade means this step isn't satisfied yet.
-    $upgradeOutput = & winget list --id $Id --exact --upgrade-available --source winget --accept-source-agreements 2>&1 | Out-String
-    return $upgradeOutput -match 'No installed package found'
+    return -not $pkg.IsUpdateAvailable
 }
 
 function Install-DevConfigWingetPackage {
@@ -25,14 +59,20 @@ function Install-DevConfigWingetPackage {
         [Parameter(Mandatory)] [string] $Id
     )
     Invoke-DevConfigRetry -Name "winget install $Id" -ScriptBlock {
-        & winget install --id $Id --exact --source winget --silent --accept-package-agreements --accept-source-agreements
-        if ($LASTEXITCODE -ne 0) {
-            throw "winget install $Id failed with exit code $LASTEXITCODE"
+        $result = Install-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive
+        # NoApplicableUpgrade: already installed and up to date, not a failure (module's equivalent of the
+        # CLI's APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE exit code).
+        if (-not $result.Succeeded() -and $result.Status -ne 'NoApplicableUpgrade') {
+            throw "winget install $Id failed: $($result.ErrorMessage())"
         }
     }
 }
 
 function Invoke-PackagesPhase {
+    Show-DevConfigPhaseHeader
+    Install-DevConfigWinGetModule
+    Repair-DevConfigWinget
+
     $packages = @(
         @{ Name = 'Terminal';      Id = 'Microsoft.WindowsTerminal' }
         @{ Name = 'PowerShell';    Id = 'Microsoft.PowerShell' }

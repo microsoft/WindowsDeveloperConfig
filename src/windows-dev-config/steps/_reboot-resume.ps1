@@ -33,8 +33,12 @@ function Suspend-DevConfigForReboot {
 
     Clear-DevConfigResume
     Register-ScheduledTask -TaskName $Script:DevConfigResumeTask -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+    Save-DevConfigTally -Path (Join-Path (Split-Path -Path $ScriptPath -Parent) 'devconfig-tally.json')
 
-    Write-Host 'Registered a one-time resume task; rebooting now to finish WSL setup after you log back in...' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host 'WSL needs a restart to finish. Rebooting in 10s -- setup continues automatically' -ForegroundColor Yellow
+    Write-Host 'after you log back in. This is expected, not an error.' -ForegroundColor Yellow
+    Start-Sleep -Seconds 10
     Restart-Computer -Force
 
     # Restart-Computer -Force signals the reboot but returns immediately; sleep so this

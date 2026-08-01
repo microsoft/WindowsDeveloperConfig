@@ -14,7 +14,8 @@ function Test-DevConfigVmComputePresent {
 
 function Install-DevConfigWslComponents {
     Invoke-DevConfigRetry -Name 'wsl --install --no-distribution' -ScriptBlock {
-        Write-Host 'Running wsl --install --no-distribution...'
+        Write-Host 'Installing WSL platform components (wsl --install --no-distribution)...'
+        Write-Host '(A separate WSL window may pop up briefly -- that is normal. This can take a few minutes.)' -ForegroundColor DarkGray
         # No -NoNewWindow / -Redirect*: wsl's install bootstrap needs a real console to run against.
         $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--install', '--no-distribution' -Wait -PassThru
         if ($p.ExitCode -eq 3010 -or $p.ExitCode -eq 1641) {
@@ -52,7 +53,8 @@ function Install-DevConfigUbuntu {
     Set-ItemProperty -Path $lxssPath -Name 'OOBEComplete' -Value 1 -Type DWord -Force
 
     Invoke-DevConfigRetry -Name 'wsl --install -d Ubuntu' -ScriptBlock {
-        Write-Host 'Running wsl --install -d Ubuntu --no-launch...'
+        Write-Host 'Downloading and installing Ubuntu (wsl --install -d Ubuntu --no-launch)...'
+        Write-Host '(A separate WSL window may pop up briefly -- that is normal. This can take a few minutes.)' -ForegroundColor DarkGray
         $p = Start-Process -FilePath 'wsl.exe' -ArgumentList '--install', '-d', 'Ubuntu', '--no-launch' -Wait -PassThru
         if ($p.ExitCode -ne 0) {
             throw "wsl --install -d Ubuntu --no-launch failed with exit code $($p.ExitCode)"
