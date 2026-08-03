@@ -21,26 +21,32 @@ function Set-DevConfigCopilotTerminalProfile {
     $fragmentsDir = Get-DevConfigCopilotFragmentDir
     New-Item -ItemType Directory -Path $fragmentsDir -Force | Out-Null
 
-    # Icon lives alongside the fragment file so its relative path resolves correctly.
+    # Icon lives alongside the fragment file so its relative path resolves correctly. A missing icon
+    # only costs the profile its picture, so a download failure must not fail the step.
     $iconPath = Join-Path $fragmentsDir 'copilot.png'
-    Invoke-WebRequest -Uri 'https://github.githubassets.com/favicons/favicon-dark.png' -OutFile $iconPath -UseBasicParsing
-
-    $fragment = @{
-        profiles = @(
-            @{
-                guid              = $Script:CopilotFragmentGuid
-                name              = 'GitHub Copilot'
-                commandline       = 'pwsh.exe -NoExit -Command "copilot"'
-                icon              = 'copilot.png'
-                startingDirectory = '%USERPROFILE%'
-                hidden            = $false
-                tabTitle          = 'Copilot'
-            }
-        )
+    $iconName = $null
+    try {
+        Invoke-WebRequest -Uri 'https://github.githubassets.com/favicons/favicon-dark.png' -OutFile $iconPath -UseBasicParsing -TimeoutSec 60
+        $iconName = 'copilot.png'
+    } catch {
+        Write-Host "  (Couldn't download the Copilot icon -- the profile will use the default one.)"
     }
 
+    $profileEntry = [ordered]@{
+        guid              = $Script:CopilotFragmentGuid
+        name              = 'GitHub Copilot'
+        commandline       = 'pwsh.exe -NoExit -Command "copilot"'
+        startingDirectory = '%USERPROFILE%'
+        hidden            = $false
+        tabTitle          = 'Copilot'
+    }
+    if ($iconName) {
+        $profileEntry['icon'] = $iconName
+    }
+    $fragment = @{ profiles = @($profileEntry) }
+
     $fragmentFile = Join-Path $fragmentsDir 'github-copilot.fragment.json'
-    $fragment | ConvertTo-Json -Depth 8 | Out-File -FilePath $fragmentFile -Encoding Utf8
+    Write-DevConfigTextFile -Path $fragmentFile -Content ($fragment | ConvertTo-Json -Depth 8)
 
     # Touch settings.json so Windows Terminal's hot-reload re-scans Fragments\*.json.
     @(
@@ -56,38 +62,59 @@ function Set-DevConfigCopilotTerminalProfile {
 }
 
 function Test-DevConfigWinUITemplatesInstalled {
-    return [bool](dotnet new list 2>&1 | Select-String -Pattern 'winui' -CaseSensitive:$false)
+    if (-not (Get-Command 'dotnet' -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+    $r = Invoke-DevConfigNativeCommand -FilePath 'dotnet' -Arguments @('new', 'list')
+    return $r.ExitCode -eq 0 -and $r.Output -match '(?i)winui'
 }
 
 function Install-DevConfigWinUITemplates {
-    $output = dotnet new install Microsoft.WindowsAppSDK.WinUI.CSharp.Templates 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host $output
-        throw "dotnet new install failed with exit code $LASTEXITCODE"
+    if (-not (Get-Command 'dotnet' -ErrorAction SilentlyContinue)) {
+        throw 'dotnet is not on PATH yet, so the WinUI templates cannot be installed. Re-run once the .NET SDK is in place.'
+    }
+    $r = Invoke-DevConfigNativeCommand -FilePath 'dotnet' -Arguments @('new', 'install', 'Microsoft.WindowsAppSDK.WinUI.CSharp.Templates')
+    if ($r.ExitCode -ne 0) {
+        Write-Host $r.Output
+        throw "dotnet new install failed with exit code $($r.ExitCode)"
     }
 }
 
 function Test-DevConfigWinSkillsMarketplaceAdded {
-    return [bool](copilot plugin marketplace list 2>&1 | Select-String 'win-dev-skills')
+    if (-not (Get-Command 'copilot' -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+    $r = Invoke-DevConfigNativeCommand -FilePath 'copilot' -Arguments @('plugin', 'marketplace', 'list')
+    return $r.ExitCode -eq 0 -and $r.Output -match 'win-dev-skills'
 }
 
 function Add-DevConfigWinSkillsMarketplace {
-    $output = copilot plugin marketplace add microsoft/win-dev-skills 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host $output
-        throw "copilot plugin marketplace add failed with exit code $LASTEXITCODE"
+    if (-not (Get-Command 'copilot' -ErrorAction SilentlyContinue)) {
+        throw 'The copilot command is not on PATH yet, so its marketplace cannot be configured. Re-run once GitHub Copilot CLI is in place.'
+    }
+    $r = Invoke-DevConfigNativeCommand -FilePath 'copilot' -Arguments @('plugin', 'marketplace', 'add', 'microsoft/win-dev-skills')
+    if ($r.ExitCode -ne 0) {
+        Write-Host $r.Output
+        throw "copilot plugin marketplace add failed with exit code $($r.ExitCode)"
     }
 }
 
 function Test-DevConfigWinUIPluginInstalled {
-    return [bool](copilot plugin list 2>&1 | Select-String 'winui')
+    if (-not (Get-Command 'copilot' -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+    $r = Invoke-DevConfigNativeCommand -FilePath 'copilot' -Arguments @('plugin', 'list')
+    return $r.ExitCode -eq 0 -and $r.Output -match '(?i)winui'
 }
 
 function Install-DevConfigWinUIPlugin {
-    $output = copilot plugin install winui@win-dev-skills 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host $output
-        throw "copilot plugin install winui failed with exit code $LASTEXITCODE"
+    if (-not (Get-Command 'copilot' -ErrorAction SilentlyContinue)) {
+        throw 'The copilot command is not on PATH yet, so the WinUI plugin cannot be installed. Re-run once GitHub Copilot CLI is in place.'
+    }
+    $r = Invoke-DevConfigNativeCommand -FilePath 'copilot' -Arguments @('plugin', 'install', 'winui@win-dev-skills')
+    if ($r.ExitCode -ne 0) {
+        Write-Host $r.Output
+        throw "copilot plugin install winui failed with exit code $($r.ExitCode)"
     }
 }
 

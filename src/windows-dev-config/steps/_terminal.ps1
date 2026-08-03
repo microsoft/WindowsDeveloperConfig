@@ -65,7 +65,7 @@ function Read-DevConfigTerminalSettings {
 
     # Get-Content -Raw hands back $null (not an empty string) for a zero-byte file, and a write
     # interrupted partway through leaves exactly that.
-    $raw = Get-Content -LiteralPath $Path -Raw
+    $raw = Read-DevConfigTextFile -Path $Path
     if ([string]::IsNullOrWhiteSpace($raw)) {
         return [pscustomobject]@{}
     }
@@ -76,7 +76,15 @@ function Read-DevConfigTerminalSettings {
     if ([string]::IsNullOrWhiteSpace($clean)) {
         return [pscustomobject]@{}
     }
-    return $clean | ConvertFrom-Json
+
+    # A hand-edited settings.json can be genuinely invalid. Treating that as "no settings yet" would
+    # overwrite the user's file, so stop instead, and say which file and why rather than surfacing a
+    # parser's character offset.
+    try {
+        return $clean | ConvertFrom-Json
+    } catch {
+        throw "Windows Terminal's settings file couldn't be read as JSON, so it was left untouched. Fix or rename $Path and run this again."
+    }
 }
 
 # Keeps a .bak alongside the file: the JSONC round-trip above drops any comments the user had written.
@@ -85,15 +93,11 @@ function Save-DevConfigTerminalSettings {
         [Parameter(Mandatory)] [string] $Path,
         [Parameter(Mandatory)] [object] $Settings
     )
-    $parent = Split-Path -Parent $Path
-    if (-not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
     if (Test-Path -LiteralPath $Path) {
         Copy-Item -LiteralPath $Path -Destination "$Path.bak" -Force
     }
-    $Settings | ConvertTo-Json -Depth $Script:DevConfigTerminalJsonDepth |
-        Set-Content -LiteralPath $Path -Encoding UTF8
+    $json = $Settings | ConvertTo-Json -Depth $Script:DevConfigTerminalJsonDepth
+    Write-DevConfigTextFile -Path $Path -Content $json
 }
 
 # Walks an object path such as profiles -> defaults -> font, creating any level that's missing,

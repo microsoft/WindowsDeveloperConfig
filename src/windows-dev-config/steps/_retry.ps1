@@ -21,10 +21,19 @@ function Invoke-DevConfigRetry {
             & $ScriptBlock
             return
         } catch {
+            # A step that had to be stopped for running too long already had its full allowance, so
+            # trying it a second time only spends that allowance again before reaching the same
+            # fallback. Give up on it immediately and let the caller take the other route.
+            if ($_.Exception -is [System.TimeoutException]) {
+                throw
+            }
             if ($attempt -ge $MaxAttempts) {
                 throw
             }
-            Write-Warning "${Name}: attempt $attempt failed ($($_.Exception.Message)); retrying in ${delay}s..."
+            # Write-Host, not Write-Warning: the warning stream becomes stderr once this process is
+            # relaunched with redirected output after the reboot, and would then only surface at the
+            # very end, in red, long after the retry it describes.
+            Write-Host "  ... $Name didn't take on attempt $attempt ($($_.Exception.Message)). Trying again in ${delay}s." -ForegroundColor DarkYellow
             Start-Sleep -Seconds $delay
             $delay = $delay * 2
         }

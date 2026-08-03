@@ -6,17 +6,16 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$Script:DevConfigThemeKey = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+
 function Test-DevConfigDarkThemeSet {
-    $regPath = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-    $apps    = Get-ItemPropertyValue $regPath -Name AppsUseLightTheme    -ErrorAction SilentlyContinue
-    $system  = Get-ItemPropertyValue $regPath -Name SystemUsesLightTheme -ErrorAction SilentlyContinue
-    return ($apps -eq 0 -and $system -eq 0)
+    return (Test-DevConfigRegistryValue -KeyPath $Script:DevConfigThemeKey -ValueName 'AppsUseLightTheme'    -Value 0) -and
+           (Test-DevConfigRegistryValue -KeyPath $Script:DevConfigThemeKey -ValueName 'SystemUsesLightTheme' -Value 0)
 }
 
 function Set-DevConfigDarkTheme {
-    $regPath = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-    Set-ItemProperty -Path $regPath -Name 'AppsUseLightTheme' -Value 0
-    Set-ItemProperty -Path $regPath -Name 'SystemUsesLightTheme' -Value 0
+    Set-DevConfigRegistryValue -KeyPath $Script:DevConfigThemeKey -ValueName 'AppsUseLightTheme'    -Value 0
+    Set-DevConfigRegistryValue -KeyPath $Script:DevConfigThemeKey -ValueName 'SystemUsesLightTheme' -Value 0
 }
 
 function Test-DevConfigPs7DefaultProfile {
@@ -63,11 +62,14 @@ function Set-DevConfigPs7DefaultProfile {
 }
 
 function Invoke-TerminalPhase {
+    # Both of these are appearance preferences that nothing else depends on, and the settings file
+    # belongs to the user: it can be unreadable, mid-edit or held open by Windows Terminal itself.
+    # Letting that end the run cost the profile, Copilot and WSL phases behind it over a colour scheme.
     $steps = @(
-        New-DevConfigStep -Name 'DarkTheme' -Description 'Force dark app/system theme' `
+        New-DevConfigStep -Name 'DarkTheme' -Description 'Force dark app/system theme' -BestEffort `
             -Check { Test-DevConfigDarkThemeSet } `
             -Apply { Set-DevConfigDarkTheme }
-        New-DevConfigStep -Name 'Ps7DefaultProfile' -Description 'Set PowerShell 7 as the default Windows Terminal profile' `
+        New-DevConfigStep -Name 'Ps7DefaultProfile' -Description 'Set PowerShell 7 as the default Windows Terminal profile' -BestEffort `
             -Check { Test-DevConfigPs7DefaultProfile } `
             -Apply { Set-DevConfigPs7DefaultProfile }
     )

@@ -116,6 +116,9 @@ function New-DevConfigStep {
 }
 
 # Dedup by name: a permanently-blocked step would otherwise flag again every leg, forever.
+# Printed with Write-Host rather than Write-Warning on purpose: after the reboot this process writes
+# to a pipe, and PowerShell puts the warning stream on stderr, which the resume wrapper can only show
+# once the run is over. A flag that matters mid-run has to appear where it happened.
 function Write-DevConfigStepFlag {
     param(
         [Parameter(Mandatory)] [string] $Name,
@@ -126,8 +129,8 @@ function Write-DevConfigStepFlag {
         $Script:DevConfigWarnedSteps += $Name
     }
     $Script:DevConfigTally.Warned = $Script:DevConfigWarnedSteps.Count
-    Write-Warning "${Name}: $Message"
-    Write-Host "  ! $Label flagged (see warning above)" -ForegroundColor Yellow
+    Write-Host "  ! $Label flagged" -ForegroundColor Yellow
+    Write-Host "    $Message" -ForegroundColor Yellow
 }
 
 # Called by a step's Apply when the work went through but couldn't be confirmed -- e.g. WinGet's
@@ -163,7 +166,7 @@ function Invoke-DevConfigSteps {
             $stepArgs = $step.ArgumentList
             $alreadyDone = [bool](& $step.Check @stepArgs)
         } catch {
-            Write-Warning "$($step.Name): Check threw ($($_.Exception.Message)); applying anyway."
+            Write-Host "  ? $($step.Name): couldn't tell whether this was already done ($($_.Exception.Message)); doing it anyway." -ForegroundColor DarkYellow
         }
         # Tallied here (not in the print loop below) so a collapsed/silent-skipped phase still counts correctly.
         if ($alreadyDone) {

@@ -6,84 +6,9 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# Required: every check/install below is a Microsoft.WinGet.Client cmdlet, so the module has to load.
-function Install-DevConfigWinGetModule {
-    if (-not (Get-Module -ListAvailable -Name Microsoft.WinGet.Client)) {
-        Write-Host '  Setting up the WinGet PowerShell module...' -ForegroundColor DarkCyan
-        Write-Host '  (First time only. This can take a few minutes.)' -ForegroundColor DarkGray
-        # A fresh machine can prompt to install the NuGet provider on first use; bootstrap it non-interactively first.
-        if (-not (Get-PackageProvider -Name NuGet -ListAvailable -ErrorAction SilentlyContinue)) {
-            Install-PackageProvider -Name NuGet -Force -ErrorAction Stop | Out-Null
-        }
-        Install-Module -Name Microsoft.WinGet.Client -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
-    }
-    Import-Module -Name Microsoft.WinGet.Client -ErrorAction Stop
-}
-
-# Best-effort: fixes the odd App Execution Alias glitches winget occasionally hits, before any real installs start.
-# Get-WinGetVersion is a quick health check -- only pay for the slower repair when it says WinGet isn't responding.
-function Repair-DevConfigWinget {
-    try {
-        $version = Get-WinGetVersion -ErrorAction Stop
-        Write-Host "  WinGet $version looks healthy -- skipping repair." -ForegroundColor DarkGray
-        return
-    } catch {
-        Write-Host '  WinGet is not responding as expected -- repairing...' -ForegroundColor DarkCyan
-        Write-Host '  (This can take a few minutes.)' -ForegroundColor DarkGray
-    }
-
-    try {
-        Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop | Out-Null
-        Write-Host '  WinGet repair finished.' -ForegroundColor DarkGray
-    } catch {
-        Write-Warning "WinGet repair skipped: $($_.Exception.Message) (continuing anyway)"
-    }
-}
-
-function Test-DevConfigWingetPackageInstalled {
-    param(
-        [Parameter(Mandatory)] [string] $Id
-    )
-    # EqualsCaseInsensitive avoids ambiguous substring matches (e.g. an MSIX-correlated entry sharing the same Id text).
-    $pkg = Get-WinGetPackage -Id $Id -Source winget -MatchOption EqualsCaseInsensitive
-    if (-not $pkg) {
-        return $false
-    }
-
-    # useLatest: true in the original -- an available upgrade means this step isn't satisfied yet.
-    return -not $pkg.IsUpdateAvailable
-}
-
-function Install-DevConfigWingetPackage {
-    param(
-        [Parameter(Mandatory)] [string] $Id
-    )
-    Invoke-DevConfigRetry -Name "winget install $Id" -ScriptBlock {
-        $result = Install-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive
-        # NoApplicableUpgrade: already installed and up to date, not a failure (module's equivalent of the
-        # CLI's APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE exit code).
-        if (-not $result.Succeeded() -and $result.Status -ne 'NoApplicableUpgrade') {
-            throw "winget install $Id failed: $($result.ErrorMessage())"
-        }
-    }
-
-    # Get-WinGetPackage's catalog read can lag right after a successful install (an upstream WinGet
-    # quirk, not specific to one PowerShell edition), so give it a moment before judging the result.
-    for ($attempt = 1; $attempt -le 5; $attempt++) {
-        if (Test-DevConfigWingetPackageInstalled -Id $Id) {
-            return
-        }
-        if ($attempt -eq 1) {
-            Write-Host '  (Installed -- just waiting for it to finish registering...)' -ForegroundColor DarkGray
-        }
-        Start-Sleep -Seconds 3
-    }
-    Set-DevConfigStepUnverified -Reason "WinGet reported $Id installed, but its catalog still doesn't list it as current 15s later. It's on the machine -- re-run to confirm."
-}
-
 function Invoke-PackagesPhase {
     Show-DevConfigPhaseHeader
-    Install-DevConfigWinGetModule
+    Initialize-DevConfigWinGet
     Repair-DevConfigWinget
 
     $packages = @(
@@ -92,8 +17,8 @@ function Invoke-PackagesPhase {
         @{ Name = 'Git';           Id = 'Git.Git' }
         @{ Name = 'GitHubCLI';     Id = 'GitHub.cli' }
         @{ Name = 'GitHubCopilot'; Id = 'GitHub.Copilot' }
-        @{ Name = 'VSCode';        Id = 'Microsoft.VisualStudioCode' }
-        @{ Name = 'DotnetSdk';     Id = 'Microsoft.DotNet.SDK.10' }
+        @{ Name = 'VSCode';        Id = 'Microsoft.VisualStudioCode'; Large = $true }
+        @{ Name = 'DotnetSdk';     Id = 'Microsoft.DotNet.SDK.10';    Large = $true }
         @{ Name = 'Python';        Id = 'Python.Python.3.14' }
         @{ Name = 'UV';            Id = 'astral-sh.uv' }
         @{ Name = 'NodeJS';        Id = 'OpenJS.NodeJS.LTS' }
@@ -101,15 +26,26 @@ function Invoke-PackagesPhase {
         @{ Name = 'Coreutils';     Id = 'Microsoft.Coreutils' }
         @{ Name = 'OhMyPosh';      Id = 'JanDeDobbeleer.OhMyPosh' }
         @{ Name = 'winappCli';     Id = 'Microsoft.WinAppCli' }
-        @{ Name = 'PowerToys';     Id = 'Microsoft.PowerToys' }
+        @{ Name = 'PowerToys';     Id = 'Microsoft.PowerToys';        Large = $true }
     )
 
     # ArgumentList binds each package's Id at call time instead of relying on closure capture.
+    # BestEffort: one package having a bad day upstream is no reason to abandon the other fourteen and
+    # the nine phases behind them. Everything that depends on a package checks for it first, and the
+    # summary names whatever was flagged. A WinGet that is broken outright is caught above instead,
+    # where it can be reported once rather than fifteen times.
     $steps = foreach ($pkg in $packages) {
-        New-DevConfigStep -Name $pkg.Name -Description "winget install $($pkg.Id)" `
-            -Check { param($Id) Test-DevConfigWingetPackageInstalled -Id $Id } `
-            -Apply { param($Id) Install-DevConfigWingetPackage -Id $Id } `
-            -ArgumentList @($pkg.Id)
+        New-DevConfigStep -Name $pkg.Name -Description "winget install $($pkg.Id)" -BestEffort `
+            -Check { param($Id, $Large) Test-DevConfigWingetPackageInstalled -Id $Id } `
+            -Apply {
+                param($Id, $Large)
+                # WinGet gives no progress back while it downloads, and these three take long enough
+                # that a bare "->" line reads as a hung console. Say so before the quiet starts.
+                if ($Large) { Write-Host '  (Large download -- several quiet minutes here are normal.)' -ForegroundColor DarkGray }
+                Install-DevConfigWingetPackage -Id $Id
+                Wait-DevConfigWingetPackageSettled -Id $Id
+            } `
+            -ArgumentList @($pkg.Id, $pkg.ContainsKey('Large'))
     }
 
     $steps += New-DevConfigStep -Name 'PowerToysAOT' -Description 'Turn off PowerToys always-on-top notifications' `

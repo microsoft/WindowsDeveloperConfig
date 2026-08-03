@@ -31,7 +31,7 @@ Remove-Item $masterLog, $innerOut, $innerErr -ErrorAction SilentlyContinue
 
 $shell = Get-DevConfigShellExe
 $proc = Start-Process -FilePath $shell `
-    -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath, '-NoElevate', '-Resumed') `
+    -ArgumentList (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed) `
     -RedirectStandardOutput $innerOut -RedirectStandardError $innerErr -NoNewWindow -PassThru
 
 # Tee: mirror new lines to the console (visible on screen) and one combined log file.

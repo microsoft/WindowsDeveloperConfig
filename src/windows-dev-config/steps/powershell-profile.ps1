@@ -38,7 +38,7 @@ function Test-DevConfigOhMyPoshInitLinePresent {
     }
 
     # Scan from the end: the last non-comment matching line is what counts, matching the source resource.
-    $lines = @(Get-Content -LiteralPath $ProfilePath)
+    $lines = @((Read-DevConfigTextFile -Path $ProfilePath) -split "`r?`n")
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
         if ($lines[$i].TrimStart().StartsWith('#')) {
             continue
@@ -64,17 +64,12 @@ function Set-DevConfigOhMyPoshProfile {
         throw 'pwsh.exe not found; install the PowerShell package first.'
     }
 
-    if (-not (Test-Path -LiteralPath $profilePath)) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $profilePath) -Force | Out-Null
-        New-Item -ItemType File -Path $profilePath -Force | Out-Null
-    }
-
     if (Test-DevConfigOhMyPoshInitLinePresent -ProfilePath $profilePath) {
         return
     }
 
     # Mirrors the resource's own shellCommand(): the whole block piped to Invoke-Expression.
-    $content = Get-Content -LiteralPath $profilePath -Raw
+    $content = Read-DevConfigTextFile -Path $profilePath
     if (-not $content) {
         $content = ''
     }
@@ -83,13 +78,15 @@ function Set-DevConfigOhMyPoshProfile {
     }
     $content += "$Script:OhMyPoshInitCommand`n | Invoke-Expression`n"
 
-    Set-Content -LiteralPath $profilePath -Value $content -NoNewline
+    Write-DevConfigTextFile -Path $profilePath -Content $content
     Write-Host "Added Oh My Posh init to $profilePath"
 }
 
 function Invoke-PowerShellProfilePhase {
+    # BestEffort: this only changes what the prompt looks like, so it must never cost the run the
+    # Copilot and WSL phases behind it.
     $steps = @(
-        New-DevConfigStep -Name 'OhMyPoshProfile' -Description 'Add Oh My Posh init to the PowerShell 7 profile' `
+        New-DevConfigStep -Name 'OhMyPoshProfile' -Description 'Add Oh My Posh init to the PowerShell 7 profile' -BestEffort `
             -Check { Test-DevConfigOhMyPoshProfileConfigured } `
             -Apply { Set-DevConfigOhMyPoshProfile }
     )

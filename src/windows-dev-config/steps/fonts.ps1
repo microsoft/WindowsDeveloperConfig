@@ -36,15 +36,18 @@ function Install-DevConfigCascadiaFonts {
     New-Item -ItemType Directory -Path $fontsDir -Force | Out-Null
 
     Write-Host "Downloading $zipUrl ..."
+    Write-Host '  (About 10 MB from GitHub. This usually takes a few seconds.)' -ForegroundColor DarkGray
     $ProgressPreference = 'SilentlyContinue'
-    Invoke-DevConfigRetry -Name 'Cascadia fonts download' -ScriptBlock {
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-    }
 
-    $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
-    if ($actualHash -ne $Script:CascadiaZipSha256) {
-        Remove-Item $zipPath -Force
-        throw "Hash mismatch for CascadiaCode-$version.zip: expected $($Script:CascadiaZipSha256), got $actualHash"
+    # Bounded and hash-checked inside the retry: a stalled CDN connection would otherwise hang the
+    # run with no way out, and a truncated download is exactly the transient failure retrying fixes.
+    Invoke-DevConfigRetry -Name 'Cascadia fonts download' -ScriptBlock {
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 300
+        $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
+        if ($actualHash -ne $Script:CascadiaZipSha256) {
+            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+            throw "the downloaded file didn't match the expected contents (expected hash $($Script:CascadiaZipSha256), got $actualHash)"
+        }
     }
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -55,7 +58,7 @@ function Install-DevConfigCascadiaFonts {
         foreach ($name in $Script:CascadiaWantedFonts) {
             $entry = $zip.Entries | Where-Object { $_.Name -eq $name } | Select-Object -First 1
             if (-not $entry) {
-                Write-Warning "Not found in archive: $name"
+                Write-Host "  ! $name is not in the downloaded archive; skipping it." -ForegroundColor Yellow
                 continue
             }
 

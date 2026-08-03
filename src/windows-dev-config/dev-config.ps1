@@ -36,14 +36,26 @@ $stepsDir = Join-Path $PSScriptRoot 'steps'
 . (Join-Path $stepsDir '_environment.ps1')
 . (Join-Path $stepsDir '_retry.ps1')
 . (Join-Path $stepsDir '_terminal.ps1')
+. (Join-Path $stepsDir '_winget.ps1')
 . (Join-Path $stepsDir '_pwsh-bootstrap.ps1')
 
-Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate
+# Everything downstream downloads something, so settle the transport before the first request.
+Enable-DevConfigModernTls
+
+Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed
 
 # WinGet's PowerShell module is unreliable on Windows PowerShell, so get onto PowerShell 7 before anything else.
 Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed
 
 # Past both relaunches, so this is the process that does the work and owns the log file.
+if (-not (Enter-DevConfigSingleInstance)) {
+    Write-Host ''
+    Write-Host 'Calm OS setup is already running in another window.' -ForegroundColor Yellow
+    Write-Host 'Switch to it rather than starting a second copy -- they would fight over the same installs.' -ForegroundColor DarkGray
+    Wait-DevConfigKeyPress
+    exit 1
+}
+
 Start-DevConfigLog -Path (Join-Path $PSScriptRoot 'devconfig-log.txt') -Append:$Resumed
 
 # Whether this is a fresh start or the post-reboot resume, any leftover task is done with.
@@ -115,6 +127,11 @@ try {
         $summaryParts += "$($tally.Warned) flagged"
     }
     Write-Host "  $($summaryParts -join ', ')" -ForegroundColor DarkGray
+    # Naming them beats a bare count: the flags themselves scrolled past a long time ago.
+    if ($tally.Warned -gt 0) {
+        Write-Host "  Flagged: $($Script:DevConfigWarnedSteps -join ', ')" -ForegroundColor Yellow
+        Write-Host '  These were skipped or could not be confirmed. Running this again retries just those.' -ForegroundColor DarkGray
+    }
     Write-Host '  A few Explorer and taskbar changes appear once you sign out and back in.' -ForegroundColor DarkGray
 } catch {
     $failure = $_
@@ -135,6 +152,9 @@ $logPath = Get-DevConfigLogPath
 if ($logPath) {
     Write-Host "  Full log: $logPath" -ForegroundColor DarkGray
 }
+
+# The work is done and the summary is on screen; let the next run start even while this window waits.
+Exit-DevConfigSingleInstance
 
 if (-not $Script:DevConfigResumed) {
     # When resumed, the wrapper's own window owns the final pause instead (see _resume-wrapper.ps1).
