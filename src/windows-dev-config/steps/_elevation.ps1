@@ -35,8 +35,16 @@ function Invoke-DevConfigElevate {
 
     $shell        = Get-DevConfigShellExe
     $relaunchArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath, '-NoElevate')
-    Start-Process -FilePath $shell -ArgumentList $relaunchArgs -Verb RunAs -Wait
+    try {
+        $proc = Start-Process -FilePath $shell -ArgumentList $relaunchArgs -Verb RunAs -Wait -PassThru
+    } catch {
+        # Declining the UAC prompt lands here; it's a choice, not a crash, so say so plainly.
+        Write-Host ''
+        Write-Host 'Setup needs Administrator rights to continue, so nothing was changed.' -ForegroundColor Yellow
+        Write-Host 'Run it again and accept the prompt, or start it from an elevated terminal.' -ForegroundColor Yellow
+        exit 1
+    }
 
-    # The elevated relaunch already did the work; nothing left for this process to do.
-    exit 0
+    # The elevated relaunch did the work, so this process reports whatever that one concluded.
+    exit $proc.ExitCode
 }

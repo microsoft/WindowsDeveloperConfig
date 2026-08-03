@@ -83,83 +83,43 @@ function Install-DevConfigCascadiaFonts {
     Write-Host "`nDone. Restart any running apps (terminal, editors) to pick up the new fonts."
 }
 
-function Get-DevConfigTerminalSettingsPath {
-    # Packaged (MSIX) Terminal first, then the unpackaged/portable location.
-    $candidates = @(
-        Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter 'Microsoft.WindowsTerminal*' -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName 'LocalState\settings.json' }
-        "$env:LOCALAPPDATA\Microsoft\Windows Terminal\settings.json"
-    )
-    return $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-}
-
-function Get-DevConfigTerminalSettingsRaw {
-    param(
-        [Parameter(Mandatory)] [string] $Path
-    )
-    # Terminal's settings.json is JSONC; strip block and line comments before parsing.
-    $raw   = Get-Content -LiteralPath $Path -Raw
-    $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
-    return [regex]::Replace($clean, '(?m)^\s*//.*$', '')
-}
-
-function Get-DevConfigTerminalDefaultFontFace {
-    param(
-        [Parameter(Mandatory)] [object] $Settings
-    )
-    # Walk profiles.defaults.font.face defensively: any level may be absent, and strict
-    # mode throws on a direct dot-access to a missing property.
-    $profilesProp = $Settings.PSObject.Properties['profiles']
-    if (-not $profilesProp) { return $null }
-    $defaultsProp = $profilesProp.Value.PSObject.Properties['defaults']
-    if (-not $defaultsProp) { return $null }
-    $fontProp = $defaultsProp.Value.PSObject.Properties['font']
-    if (-not $fontProp) { return $null }
-    $faceProp = $fontProp.Value.PSObject.Properties['face']
-    if (-not $faceProp) { return $null }
-    return $faceProp.Value
-}
-
 function Test-DevConfigCascadiaDefaultFont {
     $path = Get-DevConfigTerminalSettingsPath
     if (-not $path) {
-        return $true
+        # Terminal writes settings.json on its first launch. Installed-but-never-opened still has work
+        # to do -- answering "already OK" here is what made this step silently do nothing on a fresh machine.
+        return (-not (Get-DevConfigTerminalSettingsTarget))
     }
-    $settings = Get-DevConfigTerminalSettingsRaw -Path $path | ConvertFrom-Json
-    return (Get-DevConfigTerminalDefaultFontFace -Settings $settings) -eq $Script:CascadiaDefaultFontFace
+    $settings = Read-DevConfigTerminalSettings -Path $path
+    return (Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face') -eq $Script:CascadiaDefaultFontFace
 }
 
 function Set-DevConfigCascadiaDefaultFont {
-    $path = Get-DevConfigTerminalSettingsPath
+    $path = Get-DevConfigTerminalSettingsTarget
     if (-not $path) {
-        throw 'Windows Terminal settings.json not found.'
-    }
-    Write-Host "Using: $path"
-    Copy-Item -LiteralPath $path -Destination "$path.bak" -Force
-
-    # Plain ConvertFrom-Json (not -AsHashtable, which needs PowerShell 6+) so this also runs on Windows PowerShell 5.1.
-    $json = Get-DevConfigTerminalSettingsRaw -Path $path | ConvertFrom-Json
-    if (-not $json.PSObject.Properties['profiles'])               { $json | Add-Member -NotePropertyName profiles -NotePropertyValue ([pscustomobject]@{}) }
-    if (-not $json.profiles.PSObject.Properties['defaults'])      { $json.profiles | Add-Member -NotePropertyName defaults -NotePropertyValue ([pscustomobject]@{}) }
-    if (-not $json.profiles.defaults.PSObject.Properties['font']) { $json.profiles.defaults | Add-Member -NotePropertyName font -NotePropertyValue ([pscustomobject]@{}) }
-    if ($json.profiles.defaults.font.PSObject.Properties['face']) {
-        $json.profiles.defaults.font.face = $Script:CascadiaDefaultFontFace
-    } else {
-        $json.profiles.defaults.font | Add-Member -NotePropertyName face -NotePropertyValue $Script:CascadiaDefaultFontFace
+        throw 'Windows Terminal is not installed, so its default font cannot be set.'
     }
 
-    $json | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $path -Encoding utf8
-    Write-Host "Set Terminal default font to '$($Script:CascadiaDefaultFontFace)' (backup: $path.bak)"
+    $settings = Read-DevConfigTerminalSettings -Path $path
+    $font     = Resolve-DevConfigJsonBranch -Object $settings -Path 'profiles', 'defaults', 'font'
+    Set-DevConfigJsonProperty -Object $font -Name 'face' -Value $Script:CascadiaDefaultFontFace
+
+    Save-DevConfigTerminalSettings -Path $path -Settings $settings
+    Write-Host "Set the Windows Terminal default font to '$($Script:CascadiaDefaultFontFace)' in $path"
 }
 
 function Invoke-FontsPhase {
+    # BestEffort: both steps are cosmetic and the download depends on GitHub's release CDN, so a hiccup
+    # here must not stop the substantive phases that follow (Terminal, profile, Copilot, WSL).
     $steps = @(
         New-DevConfigStep -Name 'CascadiaFonts' -Description 'Install Cascadia Code Nerd Fonts' `
             -Check { Test-DevConfigCascadiaFontsInstalled } `
-            -Apply { Install-DevConfigCascadiaFonts }
+            -Apply { Install-DevConfigCascadiaFonts } `
+            -BestEffort
         New-DevConfigStep -Name 'CascadiaDefaultFont' -Description 'Set Cascadia Mono NF as the Windows Terminal default font' `
             -Check { Test-DevConfigCascadiaDefaultFont } `
-            -Apply { Set-DevConfigCascadiaDefaultFont }
+            -Apply { Set-DevConfigCascadiaDefaultFont } `
+            -BestEffort
     )
 
     Invoke-DevConfigSteps -Steps $steps

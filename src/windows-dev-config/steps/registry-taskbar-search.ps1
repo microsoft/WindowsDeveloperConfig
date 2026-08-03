@@ -11,13 +11,12 @@ function Invoke-RegistryTaskbarSearchPhase {
 
     $tweaks = @(
         @{ Name = 'DoNotDisturb';          KeyPath = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings'; ValueName = 'NOC_GLOBAL_SETTING_TOASTS_ENABLED'; Value = 0; Description = 'Enable Do Not Disturb (disable all notifications)' }
-        # Windows 24H2+ blocks direct writes to TaskbarDa even for admins; WidgetServiceOff below covers the same intent.
-        @{ Name = 'TaskbarHideWidgets';     KeyPath = $advanced;                                                              ValueName = 'TaskbarDa';                           Value = 0; Description = 'Hide Widgets button on the taskbar'; BestEffort = $true }
         @{ Name = 'BluetoothOff';           KeyPath = 'HKCU\Control Panel\Bluetooth';                                        ValueName = 'Notification Area Icon';              Value = 0; Description = 'Hide Bluetooth icon in taskbar notification area' }
         @{ Name = 'EndTask';                KeyPath = $advanced;                                                              ValueName = 'TaskbarEndTask';                      Value = 1; Description = 'Enable "End Task" on right-click of taskbar icons' }
         @{ Name = 'WebSearchOff';           KeyPath = 'HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer';                    ValueName = 'DisableSearchBoxSuggestions';         Value = 1; Description = 'Disable web search in Start/Search' }
         @{ Name = 'SearchHightlightOff';    KeyPath = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\SearchSettings';        ValueName = 'IsDynamicSearchBoxEnabled';           Value = 0; Description = 'Disable Show search highlights' }
         @{ Name = 'StartRecommendations';   KeyPath = $advanced;                                                              ValueName = 'Start_IrisRecommendations';           Value = 0; Description = 'Disable Start menu recommendations' }
+        # Disables Widgets at the OS policy level; the direct taskbar-icon key is blocked outright on Windows 24H2+, so this is the only Widgets tweak.
         @{ Name = 'WidgetServiceOff';       KeyPath = 'HKLM\SOFTWARE\Policies\Microsoft\Dsh';                                 ValueName = 'AllowNewsAndInterests';               Value = 0; Description = 'Disable Widget service' }
     )
 
@@ -26,8 +25,7 @@ function Invoke-RegistryTaskbarSearchPhase {
         New-DevConfigStep -Name $tweak.Name -Description $tweak.Description `
             -Check { param($KeyPath, $ValueName, $Value) Test-DevConfigRegistryValue -KeyPath $KeyPath -ValueName $ValueName -Value $Value } `
             -Apply { param($KeyPath, $ValueName, $Value) Set-DevConfigRegistryValue -KeyPath $KeyPath -ValueName $ValueName -Value $Value } `
-            -ArgumentList @($tweak.KeyPath, $tweak.ValueName, $tweak.Value) `
-            -BestEffort:($tweak.Contains('BestEffort') -and $tweak.BestEffort)
+            -ArgumentList @($tweak.KeyPath, $tweak.ValueName, $tweak.Value)
     }
 
     Invoke-DevConfigSteps -Steps $steps

@@ -66,6 +66,19 @@ function Install-DevConfigWingetPackage {
             throw "winget install $Id failed: $($result.ErrorMessage())"
         }
     }
+
+    # Get-WinGetPackage's catalog read can lag right after a successful install (an upstream WinGet
+    # quirk, not specific to one PowerShell edition), so give it a moment before judging the result.
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        if (Test-DevConfigWingetPackageInstalled -Id $Id) {
+            return
+        }
+        if ($attempt -eq 1) {
+            Write-Host '  (Installed -- just waiting for it to finish registering...)' -ForegroundColor DarkGray
+        }
+        Start-Sleep -Seconds 3
+    }
+    Set-DevConfigStepUnverified -Reason "WinGet reported $Id installed, but its catalog still doesn't list it as current 15s later. It's on the machine -- re-run to confirm."
 }
 
 function Invoke-PackagesPhase {

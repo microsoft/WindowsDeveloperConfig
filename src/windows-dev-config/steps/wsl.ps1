@@ -40,7 +40,10 @@ function Test-DevConfigUbuntuInstalled {
         $distros = @(Get-Content -LiteralPath $out -Encoding UTF8 |
             ForEach-Object { ($_ -replace "`0", '').Trim() } |
             Where-Object { $_ })
-        return $distros.Count -gt 0
+        # Match Ubuntu specifically, including versioned registrations such as Ubuntu-24.04. Counting
+        # any distro at all let an unrelated one (docker-desktop, Debian) satisfy this step, so a
+        # machine that uses Docker would silently never get Ubuntu.
+        return @($distros | Where-Object { $_ -like 'Ubuntu*' }).Count -gt 0
     } finally {
         Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
     }
@@ -62,21 +65,44 @@ function Install-DevConfigUbuntu {
     }
 }
 
+$Script:DevConfigWslInactiveMessage = @'
+WSL's platform components are installed but still inactive after a restart, so restarting
+again would not help. This machine most likely has virtualization turned off: enable it in
+the BIOS/UEFI, or turn on nested virtualization if this is a virtual machine, then run this
+script again.
+'@
+
+function Install-DevConfigWslPlatform {
+    param(
+        [Parameter(Mandatory)] [string] $OrchestratorPath
+    )
+
+    Install-DevConfigWslComponents
+    if (Test-DevConfigVmComputePresent) {
+        return
+    }
+
+    # One restart activates the components. If they are still inactive after it, another restart
+    # would only repeat the same result, so stop with an explanation instead of rebooting in a loop.
+    if ($Script:DevConfigResumed) {
+        throw $Script:DevConfigWslInactiveMessage
+    }
+
+    # Never returns: registers the resume task, reboots, and exits this process.
+    Suspend-DevConfigForReboot -ScriptPath $OrchestratorPath
+}
+
 function Invoke-WslPhase {
     param(
         [Parameter(Mandatory)] [string] $OrchestratorPath
     )
 
+    # ArgumentList binds the orchestrator path at call time instead of relying on closure capture.
     $steps = @(
         New-DevConfigStep -Name 'WslComponents' -Description 'Install WSL platform components' `
             -Check { Test-DevConfigVmComputePresent } `
-            -Apply {
-                Install-DevConfigWslComponents
-                if (-not (Test-DevConfigVmComputePresent)) {
-                    # Never returns: registers the resume task, reboots, and exits this process.
-                    Suspend-DevConfigForReboot -ScriptPath $OrchestratorPath
-                }
-            }
+            -Apply { param($OrchestratorPath) Install-DevConfigWslPlatform -OrchestratorPath $OrchestratorPath } `
+            -ArgumentList @($OrchestratorPath)
         New-DevConfigStep -Name 'WslUbuntu' -Description 'Install the default Ubuntu distro' `
             -Check { Test-DevConfigUbuntuInstalled } `
             -Apply { Install-DevConfigUbuntu }

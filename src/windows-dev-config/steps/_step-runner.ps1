@@ -16,6 +16,7 @@ $Script:DevConfigTally       = @{ Done = 0; AlreadyOk = 0; Warned = 0 }
 # Names of steps ever flagged, so a permanently-blocked step doesn't count twice across the reboot.
 $Script:DevConfigWarnedSteps      = @()
 $Script:DevConfigSilentSkips      = 0
+$Script:DevConfigStepUnverified   = $null
 $Script:DevConfigPhaseIndex       = 0
 $Script:DevConfigPhaseTotal       = 0
 $Script:DevConfigPhaseTitle       = ''
@@ -114,13 +115,48 @@ function New-DevConfigStep {
     }
 }
 
+# Dedup by name: a permanently-blocked step would otherwise flag again every leg, forever.
+function Write-DevConfigStepFlag {
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [string] $Label,
+        [Parameter(Mandatory)] [string] $Message
+    )
+    if ($Script:DevConfigWarnedSteps -notcontains $Name) {
+        $Script:DevConfigWarnedSteps += $Name
+    }
+    $Script:DevConfigTally.Warned = $Script:DevConfigWarnedSteps.Count
+    Write-Warning "${Name}: $Message"
+    Write-Host "  ! $Label flagged (see warning above)" -ForegroundColor Yellow
+}
+
+# Called by a step's Apply when the work went through but couldn't be confirmed -- e.g. WinGet's
+# catalog still not listing a package it just installed. The step is reported honestly as flagged
+# with the reason, rather than given a green tick it hasn't earned or failing the whole run.
+function Set-DevConfigStepUnverified {
+    param(
+        [Parameter(Mandatory)] [string] $Reason
+    )
+    $Script:DevConfigStepUnverified = $Reason
+}
+
 function Invoke-DevConfigSteps {
     param(
         [Parameter(Mandatory)] [object[]] $Steps
     )
 
+    # A fresh run has nothing to collapse, so announce the phase before the checks rather than after.
+    # Otherwise a phase with slow checks (fifteen package lookups) sits silent with nothing on screen
+    # to explain the wait.
+    if (-not $Script:DevConfigResumed) {
+        Show-DevConfigPhaseHeader
+        Write-Host "  Checking what's already set up..." -ForegroundColor DarkGray
+    }
+
     # Check first (cheap by design) so a fully-idle resumed phase can collapse before printing anything.
-    $checked = foreach ($step in $Steps) {
+    # @() forces array semantics; a single-step phase would otherwise yield a bare object, and .Count
+    # on one of those throws under StrictMode in Windows PowerShell 5.1.
+    $checked = @(foreach ($step in $Steps) {
         $alreadyDone = $false
         try {
             # Splat (@) needs a plain variable, not a property-access expression.
@@ -134,7 +170,7 @@ function Invoke-DevConfigSteps {
             $Script:DevConfigTally.AlreadyOk++
         }
         [pscustomobject]@{ Step = $step; AlreadyDone = $alreadyDone }
-    }
+    })
 
     # After a reboot, collapse a fully no-op phase into a running count instead of repeating every step.
     $allAlreadyOk = -not ($checked | Where-Object { -not $_.AlreadyDone })
@@ -161,22 +197,20 @@ function Invoke-DevConfigSteps {
         Write-Host "  -> $what..." -ForegroundColor DarkCyan
 
         # BestEffort steps warn and move on instead of blocking the whole run (e.g. OS-blocked registry values).
+        $Script:DevConfigStepUnverified = $null
         try {
             & $step.Apply @stepArgs
-            if (-not [bool](& $step.Check @stepArgs)) {
+            if ($Script:DevConfigStepUnverified) {
+                Write-DevConfigStepFlag -Name $step.Name -Label $label -Message $Script:DevConfigStepUnverified
+            } elseif (-not [bool](& $step.Check @stepArgs)) {
                 throw "ran, but the follow-up check still says it isn't done."
+            } else {
+                $Script:DevConfigTally.Done++
+                Write-Host "  $Script:DevConfigCheckMark $label done" -ForegroundColor Green
             }
-            $Script:DevConfigTally.Done++
-            Write-Host "  $Script:DevConfigCheckMark $label done" -ForegroundColor Green
         } catch {
             if ($step.BestEffort) {
-                # Dedup by name: a permanently-blocked step would otherwise flag again every leg, forever.
-                if ($Script:DevConfigWarnedSteps -notcontains $step.Name) {
-                    $Script:DevConfigWarnedSteps += $step.Name
-                }
-                $Script:DevConfigTally.Warned = $Script:DevConfigWarnedSteps.Count
-                Write-Warning "$($step.Name): $($_.Exception.Message) (best-effort step, continuing)"
-                Write-Host "  ! $label flagged (see warning above)" -ForegroundColor Yellow
+                Write-DevConfigStepFlag -Name $step.Name -Label $label -Message "$($_.Exception.Message) (best-effort step, continuing)"
             } else {
                 throw
             }

@@ -19,63 +19,47 @@ function Set-DevConfigDarkTheme {
     Set-ItemProperty -Path $regPath -Name 'SystemUsesLightTheme' -Value 0
 }
 
-function Get-DevConfigTerminalSettingsPath {
-    # Packaged (MSIX) Terminal first, then the unpackaged/portable location.
-    $candidates = @(
-        Get-ChildItem "$env:LOCALAPPDATA\Packages" -Filter 'Microsoft.WindowsTerminal*' -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName 'LocalState\settings.json' }
-        "$env:LOCALAPPDATA\Microsoft\Windows Terminal\settings.json"
-    )
-    return $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-}
-
-function Get-DevConfigTerminalSettings {
-    param(
-        [Parameter(Mandatory)] [string] $Path
-    )
-    # Terminal's settings.json is JSONC; strip block and line comments before parsing.
-    $raw   = Get-Content -LiteralPath $Path -Raw
-    $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
-    $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
-    return $clean | ConvertFrom-Json
-}
-
-function Find-DevConfigPs7Profile {
-    param(
-        [Parameter(Mandatory)] [object] $Settings
-    )
-    # Some built-in profiles (e.g. "Windows PowerShell") have no 'source' property at all;
-    # index into PSObject.Properties instead of dotting into it so strict mode doesn't throw.
-    return $Settings.profiles.list | Where-Object {
-        $sourceProp = $_.PSObject.Properties['source']
-        (($sourceProp) -and ($sourceProp.Value -eq 'Windows.Terminal.PowershellCore')) -or ($_.name -eq 'PowerShell')
-    } | Select-Object -First 1
-}
-
 function Test-DevConfigPs7DefaultProfile {
     $path = Get-DevConfigTerminalSettingsPath
     if (-not $path) {
+        # Terminal writes settings.json on its first launch. Installed-but-never-opened still has work
+        # to do -- answering "already OK" here is what made this step silently do nothing on a fresh machine.
+        return (-not (Get-DevConfigTerminalSettingsTarget))
+    }
+
+    $settings = Read-DevConfigTerminalSettings -Path $path
+    $current  = Get-DevConfigJsonValue -Object $settings -Path 'defaultProfile'
+    if (-not $current) {
+        return $false
+    }
+    if ($current -eq $Script:DevConfigPs7ProfileName) {
         return $true
     }
-    $settings = Get-DevConfigTerminalSettings -Path $path
+
     $ps7 = Find-DevConfigPs7Profile -Settings $settings
-    if (-not $ps7) {
-        return $true
-    }
-    return ($settings.defaultProfile -eq $ps7.guid)
+    return [bool]($ps7 -and $current -eq (Get-DevConfigJsonValue -Object $ps7 -Path 'guid'))
 }
 
 function Set-DevConfigPs7DefaultProfile {
-    $path = Get-DevConfigTerminalSettingsPath
+    $path = Get-DevConfigTerminalSettingsTarget
     if (-not $path) {
-        return
+        throw 'Windows Terminal is not installed, so its default profile cannot be set.'
     }
-    $settings = Get-DevConfigTerminalSettings -Path $path
-    $ps7 = Find-DevConfigPs7Profile -Settings $settings
-    if ($ps7 -and $settings.defaultProfile -ne $ps7.guid) {
-        $settings.defaultProfile = $ps7.guid
-        $settings | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path -Encoding UTF8
+
+    $settings = Read-DevConfigTerminalSettings -Path $path
+    $ps7      = Find-DevConfigPs7Profile -Settings $settings
+
+    # Terminal only lists its PowerShell 7 profile once it has run since PowerShell 7 was installed.
+    # Until then the documented name form still resolves, and keeps working after Terminal fills the list in.
+    $profileRef = if ($ps7) {
+        Get-DevConfigJsonValue -Object $ps7 -Path 'guid'
+    } else {
+        $Script:DevConfigPs7ProfileName
     }
+
+    Set-DevConfigJsonProperty -Object $settings -Name 'defaultProfile' -Value $profileRef
+    Save-DevConfigTerminalSettings -Path $path -Settings $settings
+    Write-Host "Set the Windows Terminal default profile to '$profileRef'."
 }
 
 function Invoke-TerminalPhase {

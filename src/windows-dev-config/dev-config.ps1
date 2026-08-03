@@ -35,8 +35,16 @@ $stepsDir = Join-Path $PSScriptRoot 'steps'
 . (Join-Path $stepsDir '_registry.ps1')
 . (Join-Path $stepsDir '_environment.ps1')
 . (Join-Path $stepsDir '_retry.ps1')
+. (Join-Path $stepsDir '_terminal.ps1')
+. (Join-Path $stepsDir '_pwsh-bootstrap.ps1')
 
 Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate
+
+# WinGet's PowerShell module is unreliable on Windows PowerShell, so get onto PowerShell 7 before anything else.
+Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed
+
+# Past both relaunches, so this is the process that does the work and owns the log file.
+Start-DevConfigLog -Path (Join-Path $PSScriptRoot 'devconfig-log.txt') -Append:$Resumed
 
 # Whether this is a fresh start or the post-reboot resume, any leftover task is done with.
 Clear-DevConfigResume
@@ -67,46 +75,73 @@ $phases = @(
     @{ File = 'wsl.ps1';                     Function = 'Invoke-WslPhase';                    Title = 'WSL + Ubuntu' }
 )
 
-$phaseIndex = 0
-foreach ($phase in $phases) {
-    $phaseIndex++
-    $path = Join-Path $stepsDir $phase.File
-    if (-not (Test-Path -LiteralPath $path)) {
-        Write-Host "-- $($phase.File) not written yet, skipping" -ForegroundColor DarkGray
-        continue
+$failure = $null
+try {
+    $phaseIndex = 0
+    foreach ($phase in $phases) {
+        $phaseIndex++
+        $path = Join-Path $stepsDir $phase.File
+        if (-not (Test-Path -LiteralPath $path)) {
+            Write-Host "-- $($phase.File) not written yet, skipping" -ForegroundColor DarkGray
+            continue
+        }
+
+        # Read by Invoke-DevConfigSteps to print this phase's header, without threading params through every phase file.
+        $Script:DevConfigPhaseIndex       = $phaseIndex
+        $Script:DevConfigPhaseTotal       = $phases.Count
+        $Script:DevConfigPhaseTitle       = $phase.Title
+        $Script:DevConfigPhaseHeaderShown = $false
+
+        . $path
+        if ($phase.File -eq 'wsl.ps1') {
+            # The WSL phase needs the orchestrator's own path to register the reboot-resume task.
+            Invoke-WslPhase -OrchestratorPath $PSCommandPath
+        } else {
+            & $phase.Function
+        }
+
+        if ($phase.File -eq 'packages.ps1') {
+            # Packages installed above (pwsh, dotnet, git, ...) won't resolve on PATH until this refreshes.
+            Update-DevConfigSessionPath
+        }
     }
 
-    # Read by Invoke-DevConfigSteps to print this phase's header, without threading params through every phase file.
-    $Script:DevConfigPhaseIndex       = $phaseIndex
-    $Script:DevConfigPhaseTotal       = $phases.Count
-    $Script:DevConfigPhaseTitle       = $phase.Title
-    $Script:DevConfigPhaseHeaderShown = $false
-
-    . $path
-    if ($phase.File -eq 'wsl.ps1') {
-        # The WSL phase needs the orchestrator's own path to register the reboot-resume task.
-        Invoke-WslPhase -OrchestratorPath $PSCommandPath
-    } else {
-        & $phase.Function
+    Show-DevConfigSilentSkipSummary
+    Write-Host ''
+    Write-Host 'Calm OS setup complete.' -ForegroundColor Green
+    $tally = $Script:DevConfigTally
+    $summaryParts = @("$($tally.Done) changed", "$($tally.AlreadyOk) already up to date")
+    if ($tally.Warned -gt 0) {
+        $summaryParts += "$($tally.Warned) flagged"
     }
-
-    if ($phase.File -eq 'packages.ps1') {
-        # Packages installed above (pwsh, dotnet, git, ...) won't resolve on PATH until this refreshes.
-        Update-DevConfigSessionPath
-    }
+    Write-Host "  $($summaryParts -join ', ')" -ForegroundColor DarkGray
+    Write-Host '  A few Explorer and taskbar changes appear once you sign out and back in.' -ForegroundColor DarkGray
+} catch {
+    $failure = $_
 }
 
-Show-DevConfigSilentSkipSummary
-Write-Host ''
-Write-Host 'Calm OS setup complete.' -ForegroundColor Green
-$tally = $Script:DevConfigTally
-$summaryParts = @("$($tally.Done) changed", "$($tally.AlreadyOk) already up to date")
-if ($tally.Warned -gt 0) {
-    $summaryParts += "$($tally.Warned) flagged"
+if ($failure) {
+    Write-Host ''
+    Write-Host 'Calm OS setup stopped early.' -ForegroundColor Red
+    Write-Host "  $($failure.Exception.Message)" -ForegroundColor Red
+    $origin = $failure.InvocationInfo
+    if ($origin -and $origin.ScriptName) {
+        Write-Host "  ($(Split-Path -Leaf $origin.ScriptName) line $($origin.ScriptLineNumber))" -ForegroundColor DarkGray
+    }
+    Write-Host '  Nothing already applied was undone -- running this again picks up where it left off.' -ForegroundColor DarkGray
 }
-Write-Host "  $($summaryParts -join ', ')" -ForegroundColor DarkGray
+
+$logPath = Get-DevConfigLogPath
+if ($logPath) {
+    Write-Host "  Full log: $logPath" -ForegroundColor DarkGray
+}
 
 if (-not $Script:DevConfigResumed) {
     # When resumed, the wrapper's own window owns the final pause instead (see _resume-wrapper.ps1).
     Wait-DevConfigKeyPress
+}
+
+Stop-DevConfigLog
+if ($failure) {
+    exit 1
 }
