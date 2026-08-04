@@ -16,11 +16,11 @@ function Invoke-RegistryTaskbarSearchPhase {
         @{ Name = 'WebSearchOff';           KeyPath = 'HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer';                    ValueName = 'DisableSearchBoxSuggestions';         Value = 1; Description = 'Disable web search in Start/Search' }
         @{ Name = 'SearchHightlightOff';    KeyPath = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\SearchSettings';        ValueName = 'IsDynamicSearchBoxEnabled';           Value = 0; Description = 'Disable Show search highlights' }
         @{ Name = 'StartRecommendations';   KeyPath = $advanced;                                                              ValueName = 'Start_IrisRecommendations';           Value = 0; Description = 'Disable Start menu recommendations' }
-        # Disables Widgets at the OS policy level; the direct taskbar-icon key is blocked outright on Windows 24H2+, so this is the only Widgets tweak.
+        # Widgets are configured at OS policy level because the direct taskbar icon key is blocked on 24H2+.
         @{ Name = 'WidgetServiceOff';       KeyPath = 'HKLM\SOFTWARE\Policies\Microsoft\Dsh';                                 ValueName = 'AllowNewsAndInterests';               Value = 0; Description = 'Disable Widget service' }
     )
 
-    # ArgumentList binds each tweak's values at call time instead of relying on closure capture.
+    # ArgumentList binds each tweak's values at call time instead of closure capture.
     $steps = foreach ($tweak in $tweaks) {
         New-DevConfigStep -Name $tweak.Name -Description $tweak.Description `
             -Check { param($KeyPath, $ValueName, $Value) Test-DevConfigRegistryValue -KeyPath $KeyPath -ValueName $ValueName -Value $Value } `

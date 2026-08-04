@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Retries a script block with exponential backoff, for flaky network calls.
+  Retries a script block with exponential backoff for transient failures.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -21,18 +21,14 @@ function Invoke-DevConfigRetry {
             & $ScriptBlock
             return
         } catch {
-            # A step that had to be stopped for running too long already had its full allowance, so
-            # trying it a second time only spends that allowance again before reaching the same
-            # fallback. Give up on it immediately and let the caller take the other route.
+            # Timeout exceptions already consumed their allowance, so callers handle the fallback path.
             if ($_.Exception -is [System.TimeoutException]) {
                 throw
             }
             if ($attempt -ge $MaxAttempts) {
                 throw
             }
-            # Write-Host, not Write-Warning: the warning stream becomes stderr once this process is
-            # relaunched with redirected output after the reboot, and would then only surface at the
-            # very end, in red, long after the retry it describes.
+            # Write-Warning becomes redirected stderr after reboot and would appear after the retry.
             Write-Host "  ... $Name didn't take on attempt $attempt ($($_.Exception.Message)). Trying again in ${delay}s." -ForegroundColor DarkYellow
             Start-Sleep -Seconds $delay
             $delay = $delay * 2

@@ -10,7 +10,7 @@ function Convert-DevConfigRegistryPath {
     param(
         [Parameter(Mandatory)] [string] $KeyPath
     )
-    # Source data uses paths with no drive colon (HKCU\...); the registry PS provider needs one (HKCU:\...).
+    # Source data omits the drive colon required by the registry PowerShell provider.
     return $KeyPath -replace '^(HKCU|HKLM|HKCR|HKU|HKCC)\\', '$1:\'
 }
 

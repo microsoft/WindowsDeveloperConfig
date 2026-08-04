@@ -1,7 +1,6 @@
 <#
 .SYNOPSIS
-  Post-reboot scheduled-task entry point: runs the orchestrator with output both shown live
-  on screen and mirrored to a log file, without masking the real exit code.
+  Post-reboot scheduled-task entry point that shows output live and mirrors it to a log.
 #>
 
 param(
@@ -11,7 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# Own console needs the same UTF-8 fix as dev-config.ps1, so relayed glyphs render correctly here too.
+# This wrapper sets UTF-8 output so relayed characters render consistently.
 try {
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     [Console]::OutputEncoding = $utf8NoBom
@@ -34,11 +33,11 @@ $proc = Start-Process -FilePath $shell `
     -ArgumentList (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed) `
     -RedirectStandardOutput $innerOut -RedirectStandardError $innerErr -NoNewWindow -PassThru
 
-# Tee: mirror new lines to the console (visible on screen) and one combined log file.
+# Mirroring new lines keeps resumed output visible while preserving one combined log.
 $shown = 0
 function Show-DevConfigResumeNewLines {
-    # @() forces array semantics; Get-Content returns a bare string for single-line files.
-    # -Encoding UTF8 matches how the redirected child process actually writes its output.
+    # @() keeps single-line files from being treated as a scalar string.
+    # UTF-8 matches the encoding used by the redirected child process output.
     $lines = @(Get-Content -Path $innerOut -Encoding UTF8 -ErrorAction SilentlyContinue)
     if ($lines.Count -gt $script:shown) {
         $lines[$script:shown..($lines.Count - 1)] | ForEach-Object {
@@ -55,7 +54,7 @@ while (-not $proc.HasExited) {
 }
 Show-DevConfigResumeNewLines
 
-# Errors are terminal, so showing them last matches when they actually happened.
+# Errors are read after process exit, which preserves their terminal placement.
 if (Test-Path -LiteralPath $innerErr) {
     Get-Content -Path $innerErr -Encoding UTF8 | ForEach-Object {
         Write-Host $_ -ForegroundColor Red
@@ -63,7 +62,7 @@ if (Test-Path -LiteralPath $innerErr) {
     }
 }
 
-# This window is what's actually visible after the reboot, so it owns the "don't just vanish" pause.
+# The post-reboot window owns the closing pause because it is the visible process.
 Wait-DevConfigKeyPress
 
 exit $proc.ExitCode

@@ -14,7 +14,7 @@ function Invoke-RegistrySystemPhase {
         @{ Name = 'RemoteDesktop'; KeyPath = 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server';         ValueName = 'fDenyTSConnections';             Value = 0; Description = 'Enable Remote Desktop (firewall rule still needs separate enable)' }
     )
 
-    # ArgumentList binds each tweak's values at call time instead of relying on closure capture.
+    # ArgumentList binds each tweak's values at call time instead of closure capture.
     $steps = foreach ($tweak in $tweaks) {
         New-DevConfigStep -Name $tweak.Name -Description $tweak.Description `
             -Check { param($KeyPath, $ValueName, $Value) Test-DevConfigRegistryValue -KeyPath $KeyPath -ValueName $ValueName -Value $Value } `

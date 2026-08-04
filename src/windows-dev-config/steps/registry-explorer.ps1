@@ -22,7 +22,7 @@ function Invoke-RegistryExplorerPhase {
         @{ Name = 'TipsOff';            KeyPath = $advanced; ValueName = 'ShowSyncProviderNotifications'; Value = 0; Description = 'Disable sync provider notifications (tips)' }
     )
 
-    # ArgumentList binds each tweak's values at call time instead of relying on closure capture.
+    # ArgumentList binds each tweak's values at call time instead of closure capture.
     $steps = foreach ($tweak in $tweaks) {
         New-DevConfigStep -Name $tweak.Name -Description $tweak.Description `
             -Check { param($KeyPath, $ValueName, $Value) Test-DevConfigRegistryValue -KeyPath $KeyPath -ValueName $ValueName -Value $Value } `

@@ -21,8 +21,7 @@ function Set-DevConfigCopilotTerminalProfile {
     $fragmentsDir = Get-DevConfigCopilotFragmentDir
     New-Item -ItemType Directory -Path $fragmentsDir -Force | Out-Null
 
-    # Icon lives alongside the fragment file so its relative path resolves correctly. A missing icon
-    # only costs the profile its picture, so a download failure must not fail the step.
+    # The icon is colocated with the fragment so the relative path resolves; download failure is non-fatal.
     $iconPath = Join-Path $fragmentsDir 'copilot.png'
     $iconName = $null
     try {
@@ -48,7 +47,7 @@ function Set-DevConfigCopilotTerminalProfile {
     $fragmentFile = Join-Path $fragmentsDir 'github-copilot.fragment.json'
     Write-DevConfigTextFile -Path $fragmentFile -Content ($fragment | ConvertTo-Json -Depth 8)
 
-    # Touch settings.json so Windows Terminal's hot-reload re-scans Fragments\*.json.
+    # Touch settings.json so Windows Terminal hot reload re-scans Fragments\*.json.
     @(
         "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json",
         "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json",
@@ -119,8 +118,7 @@ function Install-DevConfigWinUIPlugin {
 }
 
 function Invoke-CopilotPhase {
-    # BestEffort throughout: these are bonus integrations layered on top of Calm OS, all network-dependent
-    # (GitHub asset CDN, NuGet.org, Copilot marketplace) -- a hiccup in any of them must not block Phase 10 (WSL + reboot).
+    # BestEffort keeps network-dependent integrations from blocking the WSL and reboot phase.
     $steps = @(
         New-DevConfigStep -Name 'GitHubCopilotProfile' -Description 'Add a GitHub Copilot profile to Windows Terminal' `
             -Check { Test-DevConfigCopilotTerminalProfile } `

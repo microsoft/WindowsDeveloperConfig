@@ -21,8 +21,7 @@ function Set-DevConfigDarkTheme {
 function Test-DevConfigPs7DefaultProfile {
     $path = Get-DevConfigTerminalSettingsPath
     if (-not $path) {
-        # Terminal writes settings.json on its first launch. Installed-but-never-opened still has work
-        # to do -- answering "already OK" here is what made this step silently do nothing on a fresh machine.
+        # Missing settings still need configuration when Terminal is installed but has not launched.
         return (-not (Get-DevConfigTerminalSettingsTarget))
     }
 
@@ -48,8 +47,7 @@ function Set-DevConfigPs7DefaultProfile {
     $settings = Read-DevConfigTerminalSettings -Path $path
     $ps7      = Find-DevConfigPs7Profile -Settings $settings
 
-    # Terminal only lists its PowerShell 7 profile once it has run since PowerShell 7 was installed.
-    # Until then the documented name form still resolves, and keeps working after Terminal fills the list in.
+    # The documented profile name works before Terminal has listed the PowerShell 7 profile.
     $profileRef = if ($ps7) {
         Get-DevConfigJsonValue -Object $ps7 -Path 'guid'
     } else {
@@ -62,9 +60,7 @@ function Set-DevConfigPs7DefaultProfile {
 }
 
 function Invoke-TerminalPhase {
-    # Both of these are appearance preferences that nothing else depends on, and the settings file
-    # belongs to the user: it can be unreadable, mid-edit or held open by Windows Terminal itself.
-    # Letting that end the run cost the profile, Copilot and WSL phases behind it over a colour scheme.
+    # These user preferences are best-effort so later setup phases can continue.
     $steps = @(
         New-DevConfigStep -Name 'DarkTheme' -Description 'Force dark app/system theme' -BestEffort `
             -Check { Test-DevConfigDarkThemeSet } `

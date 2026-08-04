@@ -1,7 +1,6 @@
 <#
 .SYNOPSIS
-  Makes sure PowerShell 7 is installed and in use before any real work starts -- the WinGet
-  module the rest of this script relies on is documented as unreliable on Windows PowerShell.
+  Installs PowerShell 7 when needed and relaunches setup before WinGet module work starts.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -11,13 +10,11 @@ function Test-DevConfigHasPwsh {
     [bool](Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue)
 }
 
-# Verified via Get-Command (PATH) afterward, not a WinGet read cmdlet -- that's the part that's unreliable here.
+# PATH is checked directly because WinGet read cmdlets are not used during bootstrap.
 function Install-DevConfigPwshBootstrap {
     for ($attempt = 1; $attempt -le 2; $attempt++) {
         try {
-            # Bounded: a machine whose App Installer is half-broken can leave winget waiting on the
-            # Store forever, and this runs before anything has been printed, so a hang here looks
-            # exactly like a script that never started.
+            # The timeout keeps early bootstrap visible if winget waits without producing output.
             Invoke-DevConfigProcess -FilePath 'winget.exe' -NoNewWindow -TimeoutSeconds 600 -Arguments @(
                 'install', '--id', 'Microsoft.PowerShell', '--source', 'winget', '--silent',
                 '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity'
@@ -59,6 +56,6 @@ function Invoke-DevConfigEnsurePwsh {
     $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed
     $proc = Start-Process -FilePath 'pwsh.exe' -ArgumentList $relaunchArgs -Wait -NoNewWindow -PassThru
 
-    # The relaunch already did the work; nothing left for this (Windows PowerShell) process to do.
+    # The relaunch performs the setup work, so this Windows PowerShell process exits with its code.
     exit $proc.ExitCode
 }

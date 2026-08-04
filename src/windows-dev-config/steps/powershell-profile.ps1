@@ -6,8 +6,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# Matches the oh-my-posh DSC resource's own detection: any non-commented line calling
-# "oh-my-posh init" is treated as a valid, already-configured init, ours or user-customized.
+# Any oh-my-posh init line that is not commented out means the profile is already configured.
 $Script:OhMyPoshInitLineRegex = 'oh-my-posh(?:\.exe)?\s+init'
 
 $Script:OhMyPoshInitCommand = @'
@@ -25,7 +24,7 @@ function Get-DevConfigPwshProfilePath {
     if (-not $pwsh) {
         return $null
     }
-    # Ask pwsh itself for $PROFILE rather than hardcoding the path.
+    # Ask pwsh for $PROFILE so the path follows the installed shell.
     return & $pwsh.Source -NoProfile -Command '$PROFILE'
 }
 
@@ -37,7 +36,7 @@ function Test-DevConfigOhMyPoshInitLinePresent {
         return $false
     }
 
-    # Scan from the end: the last non-comment matching line is what counts, matching the source resource.
+    # Scan from the end so the last non-comment matching line controls the result.
     $lines = @((Read-DevConfigTextFile -Path $ProfilePath) -split "`r?`n")
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
         if ($lines[$i].TrimStart().StartsWith('#')) {
@@ -68,7 +67,7 @@ function Set-DevConfigOhMyPoshProfile {
         return
     }
 
-    # Mirrors the resource's own shellCommand(): the whole block piped to Invoke-Expression.
+    # The whole block is piped to Invoke-Expression, which is the documented Oh My Posh init form.
     $content = Read-DevConfigTextFile -Path $profilePath
     if (-not $content) {
         $content = ''
@@ -83,8 +82,7 @@ function Set-DevConfigOhMyPoshProfile {
 }
 
 function Invoke-PowerShellProfilePhase {
-    # BestEffort: this only changes what the prompt looks like, so it must never cost the run the
-    # Copilot and WSL phases behind it.
+    # BestEffort keeps prompt customization from blocking later phases.
     $steps = @(
         New-DevConfigStep -Name 'OhMyPoshProfile' -Description 'Add Oh My Posh init to the PowerShell 7 profile' -BestEffort `
             -Check { Test-DevConfigOhMyPoshProfileConfigured } `

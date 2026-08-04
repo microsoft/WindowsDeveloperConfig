@@ -7,8 +7,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 function Invoke-PackagesPhase {
-    # See prerequisites.ps1: header first so any WinGet setup message lands under it, but not on the
-    # resumed leg, where this phase collapses into the running "already OK" count.
+    # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
     if (-not $Script:DevConfigResumed) {
         Show-DevConfigPhaseHeader
     }
@@ -33,17 +32,13 @@ function Invoke-PackagesPhase {
     )
 
     # ArgumentList binds each package's Id at call time instead of relying on closure capture.
-    # BestEffort: one package having a bad day upstream is no reason to abandon the other fourteen and
-    # the phases behind them. Everything that depends on a package checks for it first, and the
-    # summary names whatever was flagged. A WinGet that is broken outright is caught before this,
-    # where it can be reported once rather than fifteen times.
+    # BestEffort lets independent packages continue; dependent phases verify packages before use.
     $steps = foreach ($pkg in $packages) {
         New-DevConfigStep -Name $pkg.Name -Description "winget install $($pkg.Id)" -BestEffort `
             -Check { param($Id, $Large) Test-DevConfigWingetPackageInstalled -Id $Id } `
             -Apply {
                 param($Id, $Large)
-                # WinGet gives no progress back while it downloads, and these three take long enough
-                # that a bare "->" line reads as a hung console. Say so before the quiet starts.
+                # Large packages can have several quiet download minutes because WinGet reports no progress here.
                 if ($Large) { Write-Host '  (Large download -- several quiet minutes here are normal.)' -ForegroundColor DarkGray }
                 Install-DevConfigWingetPackage -Id $Id
                 Wait-DevConfigWingetPackageSettled -Id $Id

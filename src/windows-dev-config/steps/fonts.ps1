@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Downloads and installs Cascadia Code Nerd Fonts, and sets Cascadia Mono NF as the Windows Terminal default font.
+  Installs Cascadia Code Nerd Fonts.
+  Sets Cascadia Mono NF as the Windows Terminal default font.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -39,8 +40,7 @@ function Install-DevConfigCascadiaFonts {
     Write-Host '  (About 10 MB from GitHub. This usually takes a few seconds.)' -ForegroundColor DarkGray
     $ProgressPreference = 'SilentlyContinue'
 
-    # Bounded and hash-checked inside the retry: a stalled CDN connection would otherwise hang the
-    # run with no way out, and a truncated download is exactly the transient failure retrying fixes.
+    # The retry covers timeout-bound download stalls and hash mismatches from incomplete downloads.
     Invoke-DevConfigRetry -Name 'Cascadia fonts download' -ScriptBlock {
         Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 300
         $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
@@ -89,8 +89,7 @@ function Install-DevConfigCascadiaFonts {
 function Test-DevConfigCascadiaDefaultFont {
     $path = Get-DevConfigTerminalSettingsPath
     if (-not $path) {
-        # Terminal writes settings.json on its first launch. Installed-but-never-opened still has work
-        # to do -- answering "already OK" here is what made this step silently do nothing on a fresh machine.
+        # Terminal writes settings.json on first launch; no target path means no default font can be verified.
         return (-not (Get-DevConfigTerminalSettingsTarget))
     }
     $settings = Read-DevConfigTerminalSettings -Path $path
@@ -112,8 +111,7 @@ function Set-DevConfigCascadiaDefaultFont {
 }
 
 function Invoke-FontsPhase {
-    # BestEffort: both steps are cosmetic and the download depends on GitHub's release CDN, so a hiccup
-    # here must not stop the substantive phases that follow (Terminal, profile, Copilot, WSL).
+    # BestEffort keeps later setup phases running if the font download or settings update cannot complete.
     $steps = @(
         New-DevConfigStep -Name 'CascadiaFonts' -Description 'Install Cascadia Code Nerd Fonts' `
             -Check { Test-DevConfigCascadiaFontsInstalled } `

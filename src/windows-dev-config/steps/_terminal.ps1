@@ -1,22 +1,18 @@
 <#
 .SYNOPSIS
-  Shared Windows Terminal settings helpers: locating settings.json, reading it as JSONC,
-  writing it back safely, and the small JSON object helpers those need.
+  Shared helpers for locating, reading, and safely writing Windows Terminal settings.
 #>
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# Terminal's settings nest several levels deep (profiles.list[].font.face, actions, schemes).
-# Too small a depth makes ConvertTo-Json silently truncate a customized file into a string.
+# Terminal settings are deeply nested, so ConvertTo-Json needs a depth that preserves custom files.
 $Script:DevConfigTerminalJsonDepth = 32
 
-# Terminal's name for the PowerShell 7 profile. Usable in place of a GUID: the settings schema
-# documents defaultProfile as accepting "GUID or profile name as a string".
+# The settings schema accepts a profile name for defaultProfile when a GUID is not available.
 $Script:DevConfigPs7ProfileName = 'PowerShell'
 
-# Where a packaged (MSIX) Terminal keeps its settings, whether or not the file exists yet.
-# Stable before Preview, so a machine with both configures the one it actually launches.
+# Stable Terminal is preferred over Preview because it is the profile users launch by default.
 function Get-DevConfigTerminalPackagedSettingsPath {
     $packagesDir = Join-Path $env:LOCALAPPDATA 'Packages'
     foreach ($pattern in 'Microsoft.WindowsTerminal_*', 'Microsoft.WindowsTerminalPreview_*') {
@@ -33,7 +29,6 @@ function Get-DevConfigTerminalUnpackagedSettingsPath {
     Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\settings.json'
 }
 
-# The settings file as it exists right now, or $null when Terminal has never written one.
 function Get-DevConfigTerminalSettingsPath {
     $candidates = @(
         Get-DevConfigTerminalPackagedSettingsPath
@@ -42,8 +37,7 @@ function Get-DevConfigTerminalSettingsPath {
     return $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
 }
 
-# Where the settings file belongs, whether or not it has been written yet.
-# $null means Terminal isn't installed, so there is genuinely nothing to configure.
+# A null target means Terminal is not installed, so configuration can be skipped.
 function Get-DevConfigTerminalSettingsTarget {
     $existing = Get-DevConfigTerminalSettingsPath
     if ($existing) {
@@ -52,9 +46,7 @@ function Get-DevConfigTerminalSettingsTarget {
     return Get-DevConfigTerminalPackagedSettingsPath
 }
 
-# Terminal only writes settings.json on its first launch, so on a freshly installed machine the file
-# is missing. An empty object lets callers treat "not written yet" like any other starting point:
-# Terminal fills in everything we leave out from its own defaults.
+# An empty object lets first-run Terminal settings merge with Terminal defaults.
 function Read-DevConfigTerminalSettings {
     param(
         [Parameter(Mandatory)] [string] $Path
@@ -63,23 +55,20 @@ function Read-DevConfigTerminalSettings {
         return [pscustomobject]@{}
     }
 
-    # Get-Content -Raw hands back $null (not an empty string) for a zero-byte file, and a write
-    # interrupted partway through leaves exactly that.
+    # A zero-byte settings file is treated like an unwritten first-run file.
     $raw = Read-DevConfigTextFile -Path $Path
     if ([string]::IsNullOrWhiteSpace($raw)) {
         return [pscustomobject]@{}
     }
 
-    # settings.json is JSONC; strip block and line comments before parsing.
+    # Terminal settings are JSONC, so comments are removed before ConvertFrom-Json.
     $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
     $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
     if ([string]::IsNullOrWhiteSpace($clean)) {
         return [pscustomobject]@{}
     }
 
-    # A hand-edited settings.json can be genuinely invalid. Treating that as "no settings yet" would
-    # overwrite the user's file, so stop instead, and say which file and why rather than surfacing a
-    # parser's character offset.
+    # Invalid JSON stops the run so a hand-edited settings file is not overwritten.
     try {
         return $clean | ConvertFrom-Json
     } catch {
@@ -87,7 +76,7 @@ function Read-DevConfigTerminalSettings {
     }
 }
 
-# Keeps a .bak alongside the file: the JSONC round-trip above drops any comments the user had written.
+# Backup preserves the original JSONC because JSON conversion drops comments.
 function Save-DevConfigTerminalSettings {
     param(
         [Parameter(Mandatory)] [string] $Path,
@@ -100,8 +89,6 @@ function Save-DevConfigTerminalSettings {
     Write-DevConfigTextFile -Path $Path -Content $json
 }
 
-# Walks an object path such as profiles -> defaults -> font, creating any level that's missing,
-# and hands back the leaf so a caller can set values on it.
 function Resolve-DevConfigJsonBranch {
     param(
         [Parameter(Mandatory)] [object] $Object,
@@ -117,7 +104,7 @@ function Resolve-DevConfigJsonBranch {
     return $node
 }
 
-# Add-Member only creates; assignment only updates. This does whichever applies.
+# Add-Member cannot update existing properties, so creation and assignment are handled separately.
 function Set-DevConfigJsonProperty {
     param(
         [Parameter(Mandatory)] [object] $Object,
@@ -131,7 +118,7 @@ function Set-DevConfigJsonProperty {
     }
 }
 
-# Reads a nested value without throwing under strict mode when any level along the way is absent.
+# Strict mode requires defensive reads when any nested setting may be absent.
 function Get-DevConfigJsonValue {
     param(
         [Parameter(Mandatory)] [object] $Object,
@@ -151,8 +138,7 @@ function Get-DevConfigJsonValue {
     return $node
 }
 
-# Terminal's PowerShell 7 entry. Built-in profiles such as "Windows PowerShell" have no 'source'
-# property at all, so every level is read defensively rather than dotted into.
+# Built-in profiles may omit source, so profile fields are read defensively.
 function Find-DevConfigPs7Profile {
     param(
         [Parameter(Mandatory)] [object] $Settings

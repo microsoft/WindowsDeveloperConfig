@@ -1,12 +1,6 @@
 <#
 .SYNOPSIS
-  Calm OS developer workstation setup, in plain PowerShell.
-
-.DESCRIPTION
-  Configures apps, desktop/taskbar tweaks, the PowerShell profile, and WSL + Ubuntu.
-  Safe to re-run: each phase skips work that's already done. The WSL phase runs
-  last on purpose, so the one disruptive reboot it needs happens after everything
-  else is configured; it resumes automatically after you log back in.
+  Configures a Windows developer workstation and resumes after the WSL reboot.
 #>
 
 [CmdletBinding()]
@@ -18,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# Windows PowerShell 5.1 defaults to the ANSI code page; force UTF-8 so glyphs render correctly.
+# Windows PowerShell 5.1 defaults to ANSI; force UTF-8 for console symbols.
 try {
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     [Console]::OutputEncoding = $utf8NoBom
@@ -39,15 +33,15 @@ $stepsDir = Join-Path $PSScriptRoot 'steps'
 . (Join-Path $stepsDir '_winget.ps1')
 . (Join-Path $stepsDir '_pwsh-bootstrap.ps1')
 
-# Everything downstream downloads something, so settle the transport before the first request.
+# TLS is configured before any download step runs.
 Enable-DevConfigModernTls
 
 Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed
 
-# WinGet's PowerShell module is unreliable on Windows PowerShell, so get onto PowerShell 7 before anything else.
+# WinGet module behavior is more consistent in PowerShell 7 than in Windows PowerShell 5.1.
 Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed
 
-# Past both relaunches, so this is the process that does the work and owns the log file.
+# The lock starts after relaunches so the worker process owns the log file.
 if (-not (Enter-DevConfigSingleInstance)) {
     Write-Host ''
     Write-Host 'Calm OS setup is already running in another window.' -ForegroundColor Yellow
@@ -58,12 +52,12 @@ if (-not (Enter-DevConfigSingleInstance)) {
 
 Start-DevConfigLog -Path (Join-Path $PSScriptRoot 'devconfig-log.txt') -Append:$Resumed
 
-# Whether this is a fresh start or the post-reboot resume, any leftover task is done with.
+# Any prior resume task is stale once this run starts.
 Clear-DevConfigResume
 
 $Script:DevConfigResumed = [bool]$Resumed
 if ($Script:DevConfigResumed) {
-    # Brings back the tally from before the reboot so the final summary covers the whole run.
+    # Restore the pre-reboot tally so the final summary covers the whole run.
     Restore-DevConfigTally -Path (Join-Path $PSScriptRoot 'devconfig-tally.json')
 }
 Write-Host ''
@@ -73,7 +67,7 @@ if ($Script:DevConfigResumed) {
     Write-Host 'Calm OS setup -- 11 phases, one reboot along the way (expected, not an error)' -ForegroundColor Cyan
 }
 
-# WSL is last on purpose -- see the file header.
+# WSL stays last so its required reboot happens after other phases.
 $phases = @(
     @{ File = 'prerequisites.ps1';           Function = 'Invoke-PrerequisitesPhase';          Title = 'Getting ready' }
     @{ File = 'packages.ps1';               Function = 'Invoke-PackagesPhase';               Title = 'Packages' }
@@ -99,7 +93,7 @@ try {
             continue
         }
 
-        # Read by Invoke-DevConfigSteps to print this phase's header, without threading params through every phase file.
+        # Script-scoped phase metadata avoids passing header state through every phase file.
         $Script:DevConfigPhaseIndex       = $phaseIndex
         $Script:DevConfigPhaseTotal       = $phases.Count
         $Script:DevConfigPhaseTitle       = $phase.Title
@@ -107,14 +101,14 @@ try {
 
         . $path
         if ($phase.File -eq 'wsl.ps1') {
-            # The WSL phase needs the orchestrator's own path to register the reboot-resume task.
+            # The WSL phase registers resume using this orchestrator path.
             Invoke-WslPhase -OrchestratorPath $PSCommandPath
         } else {
             & $phase.Function
         }
 
         if ($phase.File -eq 'packages.ps1') {
-            # Packages installed above (pwsh, dotnet, git, ...) won't resolve on PATH until this refreshes.
+            # New package locations are visible in this process only after PATH is refreshed.
             Update-DevConfigSessionPath
         }
     }
@@ -128,7 +122,7 @@ try {
         $summaryParts += "$($tally.Warned) flagged"
     }
     Write-Host "  $($summaryParts -join ', ')" -ForegroundColor DarkGray
-    # Naming them beats a bare count: the flags themselves scrolled past a long time ago.
+    # Names are shown because the detailed flags may have scrolled off screen.
     if ($tally.Warned -gt 0) {
         Write-Host "  Flagged: $($Script:DevConfigWarnedSteps -join ', ')" -ForegroundColor Yellow
         Write-Host '  These were skipped or could not be confirmed. Running this again retries just those.' -ForegroundColor DarkGray
@@ -154,11 +148,11 @@ if ($logPath) {
     Write-Host "  Full log: $logPath" -ForegroundColor DarkGray
 }
 
-# The work is done and the summary is on screen; let the next run start even while this window waits.
+# Release the run lock before the final pause so a completed run does not block the next start.
 Exit-DevConfigSingleInstance
 
 if (-not $Script:DevConfigResumed) {
-    # When resumed, the wrapper's own window owns the final pause instead (see _resume-wrapper.ps1).
+    # On resume, the wrapper window owns the final pause instead.
     Wait-DevConfigKeyPress
 }
 

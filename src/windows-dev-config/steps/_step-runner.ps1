@@ -1,19 +1,18 @@
 <#
 .SYNOPSIS
-  Runs a named list of steps; each step checks first, and only applies itself if needed.
+  Runs named setup steps, applying only the steps that are not already complete.
 #>
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# [char] avoids embedding a literal multi-byte glyph in the source file, which Windows PowerShell
-# 5.1 can misread without a BOM.
+# [char] avoids a literal multi-byte glyph that Windows PowerShell 5.1 can misread without a BOM.
 $Script:DevConfigCheckMark = [char]0x2713
 
-# dev-config.ps1 sets these; defaults here cover the fresh-run case.
+# Defaults allow the step runner to load before the orchestrator sets run state.
 $Script:DevConfigResumed     = $false
 $Script:DevConfigTally       = @{ Done = 0; AlreadyOk = 0; Warned = 0 }
-# Names of steps ever flagged, so a permanently-blocked step doesn't count twice across the reboot.
+# Persist flagged names so a blocked step is counted once across the reboot.
 $Script:DevConfigWarnedSteps      = @()
 $Script:DevConfigSilentSkips      = 0
 $Script:DevConfigStepUnverified   = $null
@@ -32,8 +31,7 @@ function Write-DevConfigPhaseHeader {
     Write-Host "Phase $Index/$Total -- $Title" -ForegroundColor Cyan
 }
 
-# Guarded so a phase that does work before its step list even starts (e.g. Packages' WinGet bootstrap)
-# can show the header up front without Invoke-DevConfigSteps printing it a second time afterwards.
+# The guard lets phases print early without a duplicate header.
 function Show-DevConfigPhaseHeader {
     if ($Script:DevConfigPhaseHeaderShown -or -not $Script:DevConfigPhaseTitle) {
         return
@@ -42,7 +40,7 @@ function Show-DevConfigPhaseHeader {
     $Script:DevConfigPhaseHeaderShown = $true
 }
 
-# Hands the tally across the reboot so the final summary covers the whole run, not just the resumed leg.
+# Save the tally across the reboot so the final summary covers the whole run.
 function Save-DevConfigTally {
     param(
         [Parameter(Mandatory)] [string] $Path
@@ -59,7 +57,7 @@ function Save-DevConfigTally {
     }
 }
 
-# Best-effort: a missing or unreadable file just means the summary covers only this leg.
+# Best-effort restore: a missing or unreadable file limits the summary to this process.
 function Restore-DevConfigTally {
     param(
         [Parameter(Mandatory)] [string] $Path
@@ -86,7 +84,7 @@ function Restore-DevConfigTally {
     }
 }
 
-# Flushes the running count of steps collapsed during resume, right before anything else prints.
+# Flush silent-skip counts before later output so the summary stays in context.
 function Show-DevConfigSilentSkipSummary {
     if ($Script:DevConfigSilentSkips -gt 0) {
         Write-Host ''
@@ -104,7 +102,7 @@ function New-DevConfigStep {
         [object[]] $ArgumentList = @(),
         [switch] $BestEffort
     )
-    # ArgumentList is passed positionally to Check/Apply at call time, not captured by closure.
+    # ArgumentList is passed positionally at call time, not captured by closure.
     [pscustomobject]@{
         Name         = $Name
         Description  = $Description
@@ -115,10 +113,7 @@ function New-DevConfigStep {
     }
 }
 
-# Dedup by name: a permanently-blocked step would otherwise flag again every leg, forever.
-# Printed with Write-Host rather than Write-Warning on purpose: after the reboot this process writes
-# to a pipe, and PowerShell puts the warning stream on stderr, which the resume wrapper can only show
-# once the run is over. A flag that matters mid-run has to appear where it happened.
+# Deduplicate flags and keep them on the main stream so resume output shows them immediately.
 function Write-DevConfigStepFlag {
     param(
         [Parameter(Mandatory)] [string] $Name,
@@ -133,9 +128,7 @@ function Write-DevConfigStepFlag {
     Write-Host "    $Message" -ForegroundColor Yellow
 }
 
-# Called by a step's Apply when the work went through but couldn't be confirmed -- e.g. WinGet's
-# catalog still not listing a package it just installed. The step is reported honestly as flagged
-# with the reason, rather than given a green tick it hasn't earned or failing the whole run.
+# Allows unverified work to be flagged without failing the run when confirmation lags the apply action.
 function Set-DevConfigStepUnverified {
     param(
         [Parameter(Mandatory)] [string] $Reason
@@ -148,17 +141,13 @@ function Invoke-DevConfigSteps {
         [Parameter(Mandatory)] [object[]] $Steps
     )
 
-    # A fresh run has nothing to collapse, so announce the phase before the checks rather than after.
-    # Otherwise a phase with slow checks (fifteen package lookups) sits silent with nothing on screen
-    # to explain the wait.
+    # Fresh runs print before slow checks so the console shows why it is waiting.
     if (-not $Script:DevConfigResumed) {
         Show-DevConfigPhaseHeader
         Write-Host "  Checking what's already set up..." -ForegroundColor DarkGray
     }
 
-    # Check first (cheap by design) so a fully-idle resumed phase can collapse before printing anything.
-    # @() forces array semantics; a single-step phase would otherwise yield a bare object, and .Count
-    # on one of those throws under StrictMode in Windows PowerShell 5.1.
+    # Checks run before output so no-op resumed phases collapse; @() preserves StrictMode array behavior.
     $checked = @(foreach ($step in $Steps) {
         $alreadyDone = $false
         try {
@@ -168,7 +157,7 @@ function Invoke-DevConfigSteps {
         } catch {
             Write-Host "  ? $($step.Name): couldn't tell whether this was already done ($($_.Exception.Message)); doing it anyway." -ForegroundColor DarkYellow
         }
-        # Tallied here (not in the print loop below) so a collapsed/silent-skipped phase still counts correctly.
+        # Tally before printing so collapsed phases still count.
         if ($alreadyDone) {
             $Script:DevConfigTally.AlreadyOk++
         }
@@ -195,11 +184,11 @@ function Invoke-DevConfigSteps {
             continue
         }
 
-        # Printed live, right before the (possibly slow) Apply runs, so the console never sits silent unexplained.
+        # Print before slow apply work so the console shows current progress.
         $what = if ($step.Description) { $step.Description } else { $step.Name }
         Write-Host "  -> $what..." -ForegroundColor DarkCyan
 
-        # BestEffort steps warn and move on instead of blocking the whole run (e.g. OS-blocked registry values).
+        # BestEffort steps flag and continue instead of blocking the whole run.
         $Script:DevConfigStepUnverified = $null
         try {
             & $step.Apply @stepArgs

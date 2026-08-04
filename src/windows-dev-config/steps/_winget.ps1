@@ -1,26 +1,19 @@
 <#
 .SYNOPSIS
-  How this script talks to WinGet: acquiring a working front end, repairing a broken install,
-  and querying or installing individual packages.
+  Selects a WinGet front end and installs or queries packages.
 #>
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# WinGet has two front ends: the PowerShell module (preferred -- structured results, nothing to
-# parse) and winget.exe. The module comes from the PowerShell Gallery, which a proxied, offline or
-# locked-down network may not reach, so fall back to the CLI that already ships with Windows rather
-# than failing the whole run over it.
+# Prefer the WinGet module for structured results; fall back to winget.exe when PSGallery is unreachable.
 $Script:DevConfigWinGetMode = 'Module'
 
-# WinGet's own exit codes, which are stable across locales -- unlike its console text.
+# Exit codes are stable across locales; console text is not.
 $Script:DevConfigWingetNotFound  = -1978335212   # 0x8A150014 no installed package matched
 $Script:DevConfigWingetNoUpgrade = -1978335189   # 0x8A15002B already at the latest applicable version
 
-# The oldest WinGet this script is willing to drive. Every install below passes --disable-interactivity,
-# which older builds reject outright as an unknown argument, and the Microsoft.WinGet.Client module
-# needs a comparable vintage to talk to the package manager at all. Answering a version probe is not
-# enough on its own: a WinGet can respond perfectly while being too old to accept the work.
+# --disable-interactivity requires WinGet 1.6.0 or newer.
 $Script:DevConfigWinGetMinimumVersion = [version]'1.6.0'
 
 function Install-DevConfigWinGetModule {
@@ -34,8 +27,7 @@ function Install-DevConfigWinGetModule {
         Register-PSRepository -Default -ErrorAction Stop
     }
 
-    # A VPN reconnect or a waking proxy routinely outlasts a couple of seconds, and this is the most
-    # network-dependent call in the whole run.
+    # Retry module download because it is the most network-dependent call in the run.
     Invoke-DevConfigRetry -Name 'WinGet module download' -MaxAttempts 4 -InitialDelaySeconds 10 -ScriptBlock {
         Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
     }
@@ -56,9 +48,7 @@ function Initialize-DevConfigWinGet {
             $Script:DevConfigWinGetMode = 'Module'
             return
         } catch {
-            # A module folder left half-written by an interrupted run imports no better on a second
-            # attempt, but reinstalling over it usually does fix it -- so fall through rather than
-            # failing phase 1 outright with winget.exe sitting right there unused.
+            # Reinstall the module if an earlier run left a partial module folder.
             $reason = $_.Exception.Message
             Write-Host '  The WinGet module is installed but did not load -- reinstalling it.' -ForegroundColor Yellow
         }
@@ -84,7 +74,7 @@ function Initialize-DevConfigWinGet {
     $Script:DevConfigWinGetMode = 'Cli'
 }
 
-# Exit code, not console text: winget's output is localised and reformatted between versions.
+# Exit code, not console text: winget output is localized and reformatted between versions.
 function Invoke-DevConfigWingetCli {
     param(
         [Parameter(Mandatory)] [string[]] $Arguments
@@ -92,10 +82,7 @@ function Invoke-DevConfigWingetCli {
     return Invoke-DevConfigNativeCommand -FilePath 'winget.exe' -Arguments $Arguments
 }
 
-# winget.exe on PATH is an App Execution Alias: a zero-byte stub that satisfies Get-Command even when
-# the App Installer package behind it isn't registered for this account -- which is one of the very
-# failure modes this script exists to survive. Launching such a stub fails outright instead of
-# returning an exit code, so only a real invocation settles whether the CLI is usable.
+# App Execution Alias stubs can exist without a registered App Installer package, so invoke winget.exe.
 function Test-DevConfigWingetCliUsable {
     if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
         return $false
@@ -108,9 +95,7 @@ function Test-DevConfigWingetCliUsable {
     }
 }
 
-# Reads the version from whichever front end is in use, as a [version] that can be compared.
-# WinGet reports it as text ("v1.29.280", sometimes with a -preview suffix), so it needs parsing
-# rather than casting. Returns $null when WinGet does not answer at all.
+# WinGet reports versions as text with optional prefixes or suffixes, so parse before comparing.
 function Get-DevConfigWinGetVersion {
     $text = $null
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
@@ -141,7 +126,6 @@ function Get-DevConfigWinGetVersion {
     return [version]"$($match.Groups[1].Value).$($match.Groups[2].Value).$build"
 }
 
-# WinGet is ready when it answers and is new enough to accept the work this script gives it.
 function Test-DevConfigWinGetReady {
     $version = Get-DevConfigWinGetVersion
     if (-not $version) {
@@ -154,8 +138,7 @@ function Test-DevConfigWinGetReady {
     return $true
 }
 
-# Only reached when the check above found WinGet missing, broken, or too old, so a healthy machine
-# never pays for the slow repair.
+# Repair runs only after readiness checks fail, so healthy machines skip the slower path.
 function Repair-DevConfigWinget {
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
         # Repair-WinGetPackageManager has no winget.exe equivalent, so there is nothing to try here.
@@ -165,18 +148,14 @@ function Repair-DevConfigWinget {
 
     Write-Host '  (This can take a few minutes.)' -ForegroundColor DarkGray
     try {
-        # *>&1 into $null so nothing the repair narrates can reach the console: it probes for a
-        # winget that is missing or broken by definition here, and says so in its own streams.
-        # A genuine failure still throws to the catch below, and the follow-up check still decides.
+        # Suppress repair output; exceptions and the follow-up readiness check decide the result.
         $null = Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop *>&1
         return
     } catch {
         Write-Host "  WinGet repair did not complete: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 
-    # Repair failed outright, so the module front end is unlikely to work for any package. winget.exe
-    # is a separate implementation and usually still answers; switching now beats letting every
-    # package step fail one at a time for the same underlying reason.
+    # If module repair fails, winget.exe may still be usable for package operations.
     if (Test-DevConfigWingetCliUsable) {
         Write-Host '  Falling back to the built-in winget command instead.' -ForegroundColor Yellow
         $Script:DevConfigWinGetMode = 'Cli'
@@ -195,19 +174,17 @@ function Test-DevConfigWingetPackageInstalled {
         if ($listed.ExitCode -ne 0) {
             throw "winget list $Id failed with exit code $($listed.ExitCode)"
         }
-        # No upgrade probe here: winget list --upgrade-available exits 0 for any installed package,
-        # upgrade or not, so testing its exit code marked every package as missing and reinstalled
-        # and flagged all of them on every run. Installed is the bar the CLI can actually answer for.
+        # winget list --upgrade-available exits 0 for any installed package, with or without an upgrade.
         return $true
     }
 
-    # EqualsCaseInsensitive avoids ambiguous substring matches (e.g. an MSIX-correlated entry sharing the same Id text).
+    # EqualsCaseInsensitive avoids ambiguous substring matches.
     $pkg = Get-WinGetPackage -Id $Id -Source winget -MatchOption EqualsCaseInsensitive
     if (-not $pkg) {
         return $false
     }
 
-    # useLatest: true in the original -- an available upgrade means this step isn't satisfied yet.
+    # useLatest requires the package to be current, not only installed.
     return -not $pkg.IsUpdateAvailable
 }
 
@@ -225,16 +202,14 @@ function Install-DevConfigWingetPackage {
         }
 
         $result = Install-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive
-        # NoApplicableUpgrade: already installed and up to date, not a failure (module's equivalent of the
-        # CLI's APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE exit code).
+        # NoApplicableUpgrade means the package is already installed and current.
         if (-not $result.Succeeded() -and $result.Status -ne 'NoApplicableUpgrade') {
             throw "winget install $Id failed: $($result.ErrorMessage())"
         }
     }
 }
 
-# Get-WinGetPackage's catalog read can lag right after a successful install (an upstream WinGet
-# quirk, not specific to one PowerShell edition), so give it a moment before judging the result.
+# Get-WinGetPackage catalog reads can lag after install, so wait before checking the result.
 function Wait-DevConfigWingetPackageSettled {
     param(
         [Parameter(Mandatory)] [string] $Id

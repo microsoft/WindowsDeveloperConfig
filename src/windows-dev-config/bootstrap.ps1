@@ -7,11 +7,10 @@
 
       irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/bootstrap.ps1 | iex
 
-  That is the signed copy the release pipeline publishes; src/windows-dev-config/bootstrap.ps1 is
-  the same script, so either address works and both install the signed setup when there is one.
+  src/windows-dev-config/bootstrap.ps1 is the same script, so either address works.
 
-  The setup itself cannot run from a piped-in string: it loads two dozen files from its own folder,
-  relaunches itself elevated, and resumes after a reboot. So this puts it somewhere real first.
+  The setup cannot run from a piped-in string: it loads two dozen files from its own folder,
+  relaunches itself elevated, and resumes after a reboot. This puts it somewhere real first.
 
   To pick a branch or pin a tag, run it as a script block instead:
 

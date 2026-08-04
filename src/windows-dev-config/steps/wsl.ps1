@@ -6,19 +6,12 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# Windows sets this key while a component change waits on a restart, and clears it once the restart
-# happens. It is the signal that matters straight after wsl --install: wsl.exe answers --version and
-# --status perfectly well at that point, while the platform underneath it is not live yet -- which is
-# how an Ubuntu install could report success and put nothing on the machine at all. Component
-# servicing only, deliberately: PendingFileRenameOperations is set by ordinary app installers too
-# (the fifteen packages in phase 1 among them) and would force a restart on almost every run.
+# This CBS key signals component servicing pending restart; app installer restart flags are ignored.
 function Test-DevConfigServicingRebootPending {
     return (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')
 }
 
-# Runs a short wsl query with its output redirected and the wait bounded, and hands back the exit
-# code -- or $null when wsl.exe cannot be launched at all, which is what the App Execution Alias stub
-# does on a machine that has never had WSL. Exit codes only, deliberately: wsl's text is localised.
+# WSL output is redirected and bounded; exit codes are used because message text is localized.
 function Get-DevConfigWslExitCode {
     param(
         [Parameter(Mandatory)] [string[]] $Arguments,
@@ -41,18 +34,12 @@ function Get-DevConfigWslExitCode {
     }
 }
 
-# Windows ships an old WSL inside the image, and the modern WSL that can actually install and host a
-# distro comes separately. Only the modern one understands --version; the inbox one answers -1. That
-# single exit code is the difference that matters, and nothing else reports it honestly: on a 22H2
-# machine with the inbox WSL and no kernel at all, "wsl --status" still exits 0 and cheerfully says
-# the default version is 2 -- after which every distro install fails with exit -1.
+# The current WSL package supports --version; the inbox WSL returns a nonzero exit code.
 function Test-DevConfigWslPlatformActive {
     return ((Get-DevConfigWslExitCode -Arguments @('--version')) -eq 0)
 }
 
-# wsl --update fetches the modern WSL and its kernel. The Store route is tried first because it is
-# the one Microsoft keeps current; --web-download is the same package without the Store, for machines
-# where policy has removed it. Nothing here is fatal on its own: the caller decides what happens next.
+# The Store update is tried first; --web-download provides the same package when Store access is unavailable.
 function Update-DevConfigWslRuntime {
     Write-Host '  This machine has the older WSL that ships inside Windows; a distro needs the current one.' -ForegroundColor DarkGray
     Write-Host '  Updating WSL (wsl --update)...' -ForegroundColor DarkCyan
@@ -85,26 +72,19 @@ function Install-DevConfigWslComponents {
             }
         }
     } catch {
-        # Older builds, machines where the Microsoft Store is blocked by policy, and machines where
-        # wsl's own bootstrap simply never returns. The underlying Windows features still get us a
-        # working WSL, so that path is worth taking rather than failing the phase.
+        # Direct feature enablement can still prepare WSL when wsl --install is unavailable.
         Write-Host "  WSL's own installer could not run here ($($_.Exception.Message))." -ForegroundColor Yellow
         Write-Host '  Turning on the WSL Windows features directly instead.' -ForegroundColor Yellow
         Enable-DevConfigWslFeatures
     }
 
-    # Turning the Windows features on is only half the job. A 22H2 machine that took the dism path is
-    # left with both features enabled, the inbox WSL, and no WSL2 kernel at all -- a state in which
-    # every distro install fails with exit -1. Fetching the current WSL is what closes that gap, and
-    # it is a quick no-op on any machine that already has it.
+    # Enabling features may leave only the inbox WSL; updating ensures the current WSL package is present.
     if (-not (Test-DevConfigWslPlatformActive)) {
         Update-DevConfigWslRuntime | Out-Null
     }
 }
 
-# dism.exe rather than Enable-WindowsOptionalFeature: its exit codes are stable and locale-independent,
-# and it avoids pulling the DISM module through PowerShell 7's Windows PowerShell compatibility layer.
-# Re-enabling an already-enabled feature is a fast no-op, so no state query is needed first.
+# dism.exe provides stable exit codes and avoids the Windows PowerShell compatibility layer.
 function Enable-DevConfigWslFeatures {
     foreach ($feature in @('VirtualMachinePlatform', 'Microsoft-Windows-Subsystem-Linux')) {
         Write-Host "  Turning on the $feature Windows feature..." -ForegroundColor DarkCyan
@@ -121,8 +101,7 @@ function Enable-DevConfigWslFeatures {
 }
 
 function Test-DevConfigUbuntuInstalled {
-    # Windows 10 builds without the WSL feature have no wsl.exe at all; that is a clean "not installed",
-    # not an error worth surfacing.
+    # Without wsl.exe, Ubuntu is treated as not installed rather than as an error.
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
         return $false
     }
@@ -131,9 +110,7 @@ function Test-DevConfigUbuntuInstalled {
     $out = [System.IO.Path]::GetTempFileName()
     $err = [System.IO.Path]::GetTempFileName()
     try {
-        # Redirect wsl's output here: this is a query, not a bootstrap step, so no console is needed.
-        # A wedged LxssManager can make even this listing hang, and a check that never returns would
-        # strand the run before the phase has printed anything, so treat "no answer" as "not there".
+        # This query is bounded and redirected so a nonresponsive listing is treated as not installed.
         $exitCode = Invoke-DevConfigProcess -FilePath 'wsl.exe' -Arguments @('--list', '--quiet') `
             -NoNewWindow -TimeoutSeconds 120 -RedirectStandardOutput $out -RedirectStandardError $err
         if ($exitCode -ne 0) {
@@ -142,9 +119,7 @@ function Test-DevConfigUbuntuInstalled {
         $distros = @(Get-Content -LiteralPath $out -Encoding UTF8 |
             ForEach-Object { ($_ -replace "`0", '').Trim() } |
             Where-Object { $_ })
-        # Match Ubuntu specifically, including versioned registrations such as Ubuntu-24.04. Counting
-        # any distro at all let an unrelated one (docker-desktop, Debian) satisfy this step, so a
-        # machine that uses Docker would silently never get Ubuntu.
+        # Match Ubuntu specifically, including versioned registrations such as Ubuntu-24.04.
         return @($distros | Where-Object { $_ -like 'Ubuntu*' }).Count -gt 0
     } catch {
         Write-Verbose "Could not list WSL distros: $($_.Exception.Message)"
@@ -154,9 +129,7 @@ function Test-DevConfigUbuntuInstalled {
     }
 }
 
-# A distro installed with --no-launch is not always listed by wsl --list the instant the install
-# exits. Observed on both 22621 and 26663, so give the listing a moment to catch up before deciding
-# the install did nothing -- the same shape as the WinGet catalog lag.
+# A --no-launch install can complete before wsl --list shows the distro, so the listing is retried.
 function Wait-DevConfigUbuntuVisible {
     for ($attempt = 1; $attempt -le 10; $attempt++) {
         if (Test-DevConfigUbuntuInstalled) {
@@ -170,9 +143,7 @@ function Wait-DevConfigUbuntuVisible {
     return $false
 }
 
-# Runs one install route and reports whether Ubuntu actually arrived. Both halves matter: wsl can
-# fail loudly (non-zero exit) and it can also exit 0 having installed nothing at all, and only the
-# listing afterwards tells those apart from a real success.
+# Success requires both a zero exit code and Ubuntu appearing in wsl --list afterward.
 function Install-DevConfigUbuntuVia {
     param(
         [Parameter(Mandatory)] [string[]] $Arguments,
@@ -188,8 +159,7 @@ function Install-DevConfigUbuntuVia {
 }
 
 function Install-DevConfigUbuntu {
-    # Without the platform components there is nothing for a distro to run on, and every install
-    # attempt would fail slowly. Say so once instead.
+    # A distro install requires active platform components, so fail early when they are not active.
     if (-not (Test-DevConfigWslPlatformActive)) {
         throw "WSL isn't active on this machine, so Ubuntu can't be installed yet (see the note above)."
     }
@@ -203,8 +173,7 @@ function Install-DevConfigUbuntu {
         return
     }
 
-    # Reached both when the Store is unreachable and when it accepted the request and quietly did
-    # nothing; the web download does not depend on the Store either way.
+    # The web-download path does not depend on Store access or Store registration timing.
     Write-Host '  The Store copy of Ubuntu did not take. Downloading Ubuntu from the web instead.' -ForegroundColor Yellow
     if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', 'Ubuntu', '--no-launch', '--web-download')) {
         return
@@ -244,22 +213,18 @@ function Install-DevConfigWslPlatform {
     $Script:DevConfigWslRestartSignalled = $false
     Install-DevConfigWslComponents
 
-    # Skip the restart only when nothing was actually staged. Asking WSL again is not enough on its
-    # own: a component change Windows is holding until reboot leaves wsl.exe answering --status
-    # normally while the platform beneath it is dead, and Ubuntu then "installs" into nothing.
+    # Skip restart only when no servicing restart is pending and the WSL platform is active.
     if (-not $Script:DevConfigWslRestartSignalled -and
         -not (Test-DevConfigServicingRebootPending) -and
         (Test-DevConfigWslPlatformActive)) {
         return
     }
 
-    # One restart activates the components. If they are still inactive after it, another restart
-    # would only repeat the same result, so stop with an explanation instead of rebooting in a loop.
+    # After one resume, stop instead of repeating restarts if the platform is still inactive.
     if ($Script:DevConfigResumed) {
         throw $Script:DevConfigWslInactiveMessage
     }
 
-    # Never returns: registers the resume task, reboots, and exits this process.
     Suspend-DevConfigForReboot -ScriptPath $OrchestratorPath
 }
 
@@ -268,9 +233,7 @@ function Invoke-WslPhase {
         [Parameter(Mandatory)] [string] $OrchestratorPath
     )
 
-    # ArgumentList binds the orchestrator path at call time instead of relying on closure capture.
-    # BestEffort: a machine with virtualization switched off in firmware genuinely cannot run WSL, and
-    # that is no reason to throw away the phases that already succeeded -- say so and finish.
+    # ArgumentList binds the path at call time; BestEffort preserves prior phases if WSL cannot start.
     $steps = @(
         New-DevConfigStep -Name 'WslComponents' -Description 'Install WSL platform components' -BestEffort `
             -Check { Test-DevConfigWslPlatformActive } `
