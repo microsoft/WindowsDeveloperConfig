@@ -70,11 +70,12 @@ Write-Host ''
 if ($Script:DevConfigResumed) {
     Write-Host 'Welcome back. Resuming Calm OS setup after the reboot...' -ForegroundColor Cyan
 } else {
-    Write-Host 'Calm OS setup -- 10 phases, one reboot along the way (expected, not an error)' -ForegroundColor Cyan
+    Write-Host 'Calm OS setup -- 11 phases, one reboot along the way (expected, not an error)' -ForegroundColor Cyan
 }
 
 # WSL is last on purpose -- see the file header.
 $phases = @(
+    @{ File = 'prerequisites.ps1';           Function = 'Invoke-PrerequisitesPhase';          Title = 'Getting ready' }
     @{ File = 'packages.ps1';               Function = 'Invoke-PackagesPhase';               Title = 'Packages' }
     @{ File = 'registry-system.ps1';         Function = 'Invoke-RegistrySystemPhase';         Title = 'System settings' }
     @{ File = 'registry-explorer.ps1';       Function = 'Invoke-RegistryExplorerPhase';       Title = 'File Explorer tweaks' }

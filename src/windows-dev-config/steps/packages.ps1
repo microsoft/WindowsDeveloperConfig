@@ -7,9 +7,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 function Invoke-PackagesPhase {
-    Show-DevConfigPhaseHeader
+    # See prerequisites.ps1: header first so any WinGet setup message lands under it, but not on the
+    # resumed leg, where this phase collapses into the running "already OK" count.
+    if (-not $Script:DevConfigResumed) {
+        Show-DevConfigPhaseHeader
+    }
     Initialize-DevConfigWinGet
-    Repair-DevConfigWinget
 
     $packages = @(
         @{ Name = 'Terminal';      Id = 'Microsoft.WindowsTerminal' }
@@ -31,8 +34,8 @@ function Invoke-PackagesPhase {
 
     # ArgumentList binds each package's Id at call time instead of relying on closure capture.
     # BestEffort: one package having a bad day upstream is no reason to abandon the other fourteen and
-    # the nine phases behind them. Everything that depends on a package checks for it first, and the
-    # summary names whatever was flagged. A WinGet that is broken outright is caught above instead,
+    # the phases behind them. Everything that depends on a package checks for it first, and the
+    # summary names whatever was flagged. A WinGet that is broken outright is caught before this,
     # where it can be reported once rather than fifteen times.
     $steps = foreach ($pkg in $packages) {
         New-DevConfigStep -Name $pkg.Name -Description "winget install $($pkg.Id)" -BestEffort `

@@ -270,7 +270,7 @@ function Invoke-WslPhase {
 
     # ArgumentList binds the orchestrator path at call time instead of relying on closure capture.
     # BestEffort: a machine with virtualization switched off in firmware genuinely cannot run WSL, and
-    # that is no reason to throw away the nine phases that already succeeded -- say so and finish.
+    # that is no reason to throw away the phases that already succeeded -- say so and finish.
     $steps = @(
         New-DevConfigStep -Name 'WslComponents' -Description 'Install WSL platform components' -BestEffort `
             -Check { Test-DevConfigWslPlatformActive } `

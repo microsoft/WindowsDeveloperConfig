@@ -13,12 +13,15 @@ Set-StrictMode -Version Latest
 # than failing the whole run over it.
 $Script:DevConfigWinGetMode = 'Module'
 
-# The health probe is worth doing once per run, not once per caller.
-$Script:DevConfigWingetRepairChecked = $false
-
 # WinGet's own exit codes, which are stable across locales -- unlike its console text.
 $Script:DevConfigWingetNotFound  = -1978335212   # 0x8A150014 no installed package matched
 $Script:DevConfigWingetNoUpgrade = -1978335189   # 0x8A15002B already at the latest applicable version
+
+# The oldest WinGet this script is willing to drive. Every install below passes --disable-interactivity,
+# which older builds reject outright as an unknown argument, and the Microsoft.WinGet.Client module
+# needs a comparable vintage to talk to the package manager at all. Answering a version probe is not
+# enough on its own: a WinGet can respond perfectly while being too old to accept the work.
+$Script:DevConfigWinGetMinimumVersion = [version]'1.6.0'
 
 function Install-DevConfigWinGetModule {
     Enable-DevConfigModernTls
@@ -105,33 +108,67 @@ function Test-DevConfigWingetCliUsable {
     }
 }
 
-# Best-effort: fixes the odd App Execution Alias glitches winget occasionally hits, before any real installs start.
-# Get-WinGetVersion is a quick health check -- only pay for the slower repair when it says WinGet isn't responding.
-function Repair-DevConfigWinget {
-    if ($Script:DevConfigWingetRepairChecked) {
-        return
-    }
-    $Script:DevConfigWingetRepairChecked = $true
-
+# Reads the version from whichever front end is in use, as a [version] that can be compared.
+# WinGet reports it as text ("v1.29.280", sometimes with a -preview suffix), so it needs parsing
+# rather than casting. Returns $null when WinGet does not answer at all.
+function Get-DevConfigWinGetVersion {
+    $text = $null
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
-        # Repair-WinGetPackageManager has no CLI equivalent, and CLI mode is only ever entered after
-        # winget.exe has answered a version probe, so there is nothing left to repair here.
-        Write-Host '  Using the built-in winget command.' -ForegroundColor DarkGray
+        try {
+            $result = Invoke-DevConfigWingetCli -Arguments @('--version')
+            if ($result.ExitCode -eq 0) {
+                $text = $result.Output
+            }
+        } catch {
+            Write-Verbose "winget.exe --version could not run: $($_.Exception.Message)"
+        }
+    } else {
+        try {
+            $text = Get-WinGetVersion -ErrorAction Stop
+        } catch {
+            Write-Verbose "Get-WinGetVersion failed: $($_.Exception.Message)"
+        }
+    }
+
+    if (-not $text) {
+        return $null
+    }
+    $match = [regex]::Match([string]$text, '(\d+)\.(\d+)(?:\.(\d+))?')
+    if (-not $match.Success) {
+        return $null
+    }
+    $build = if ($match.Groups[3].Success) { $match.Groups[3].Value } else { '0' }
+    return [version]"$($match.Groups[1].Value).$($match.Groups[2].Value).$build"
+}
+
+# WinGet is ready when it answers and is new enough to accept the work this script gives it.
+function Test-DevConfigWinGetReady {
+    $version = Get-DevConfigWinGetVersion
+    if (-not $version) {
+        return $false
+    }
+    if ($version -lt $Script:DevConfigWinGetMinimumVersion) {
+        Write-Host "  WinGet $version is older than $($Script:DevConfigWinGetMinimumVersion), which this script needs." -ForegroundColor DarkGray
+        return $false
+    }
+    return $true
+}
+
+# Only reached when the check above found WinGet missing, broken, or too old, so a healthy machine
+# never pays for the slow repair.
+function Repair-DevConfigWinget {
+    if ($Script:DevConfigWinGetMode -eq 'Cli') {
+        # Repair-WinGetPackageManager has no winget.exe equivalent, so there is nothing to try here.
+        Set-DevConfigStepUnverified -Reason 'The built-in winget command is too old for this script and cannot be updated from here. Update App Installer from the Microsoft Store, then run this again.'
         return
     }
 
+    Write-Host '  (This can take a few minutes.)' -ForegroundColor DarkGray
     try {
-        $version = Get-WinGetVersion -ErrorAction Stop
-        Write-Host "  WinGet $version looks healthy -- skipping repair." -ForegroundColor DarkGray
-        return
-    } catch {
-        Write-Host '  WinGet is not responding as expected -- repairing...' -ForegroundColor DarkCyan
-        Write-Host '  (This can take a few minutes.)' -ForegroundColor DarkGray
-    }
-
-    try {
-        Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop | Out-Null
-        Write-Host '  WinGet repair finished.' -ForegroundColor DarkGray
+        # *>&1 into $null so nothing the repair narrates can reach the console: it probes for a
+        # winget that is missing or broken by definition here, and says so in its own streams.
+        # A genuine failure still throws to the catch below, and the follow-up check still decides.
+        $null = Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop *>&1
         return
     } catch {
         Write-Host "  WinGet repair did not complete: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -143,8 +180,6 @@ function Repair-DevConfigWinget {
     if (Test-DevConfigWingetCliUsable) {
         Write-Host '  Falling back to the built-in winget command instead.' -ForegroundColor Yellow
         $Script:DevConfigWinGetMode = 'Cli'
-    } else {
-        Write-Host '  WinGet could not be repaired and winget.exe is unavailable; the package steps below may not succeed.' -ForegroundColor Yellow
     }
 }
 
