@@ -5,12 +5,13 @@
 .DESCRIPTION
   Meant to be run straight from the web:
 
-      irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1 | iex
+      irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/bootstrap.ps1 | iex
 
-  The setup itself cannot run from a piped-in string: it loads two dozen files from its own
-  folder, relaunches itself elevated and on PowerShell 7, and registers a task to resume after
-  the one reboot it needs. All of that wants real files in a real folder, so this puts them
-  somewhere that survives a restart and then hands over.
+  That is the signed copy the release pipeline publishes; src/windows-dev-config/bootstrap.ps1 is
+  the same script, so either address works and both install the signed setup when there is one.
+
+  The setup itself cannot run from a piped-in string: it loads two dozen files from its own folder,
+  relaunches itself elevated, and resumes after a reboot. So this puts it somewhere real first.
 
   To pick a branch or pin a tag, run it as a script block instead:
 
@@ -30,8 +31,7 @@ Set-StrictMode -Version Latest
 $repo = 'microsoft/WindowsDeveloperConfig'
 
 if (-not $InstallRoot) {
-    # Per-user and outside the profile's roaming path: it has to still be there after the reboot,
-    # and the elevated relaunch is the same user, so this resolves to the same place either way.
+    # Per-user and outside the roaming profile: it has to still be there after the reboot.
     $base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
     $InstallRoot = Join-Path $base 'CalmOS'
 }
@@ -59,8 +59,7 @@ function Save-CalmOsArchive {
     foreach ($url in $candidates) {
         foreach ($attempt in 1..3) {
             try {
-                # -UseBasicParsing because a freshly imaged machine may have no Internet Explorer
-                # engine for the parser to initialise, which fails the download for no real reason.
+                # -UseBasicParsing: a freshly imaged machine may have no Internet Explorer engine.
                 Invoke-WebRequest -Uri $url -OutFile $Destination -UseBasicParsing -TimeoutSec 300
                 return
             } catch {
@@ -100,28 +99,46 @@ try {
     $expanded = Join-Path $work 'expanded'
     Expand-Archive -LiteralPath $zip -DestinationPath $expanded -Force
 
-    # The archive's top folder is named after the ref, so find the orchestrator rather than
-    # rebuilding that name and getting it wrong for a branch with slashes in it.
-    $orchestrator = Get-ChildItem -LiteralPath $expanded -Recurse -Filter 'dev-config.ps1' -File |
-        Where-Object { Test-Path (Join-Path $_.DirectoryName 'steps') } |
-        Select-Object -First 1
-    if (-not $orchestrator) {
-        throw "The download from '$Ref' doesn't contain the setup files. Check that the branch or tag name is right."
+    # The signed copy the release pipeline publishes, then the source it was built from.
+    $top = Get-ChildItem -LiteralPath $expanded -Directory | Select-Object -First 1
+    if (-not $top) {
+        throw "The download from '$Ref' was empty. Check that the branch or tag name is right."
+    }
+
+    $signed = Join-Path $top.FullName 'windows-dev-config'
+    $source = Join-Path (Join-Path $top.FullName 'src') 'windows-dev-config'
+
+    $setupDir = $null
+    foreach ($candidate in @($signed, $source)) {
+        if ((Test-Path (Join-Path $candidate 'dev-config.ps1')) -and (Test-Path (Join-Path $candidate 'steps'))) {
+            $setupDir = $candidate
+            break
+        }
+    }
+
+    if (-not $setupDir) {
+        # A folder having moved is not on its own a reason to give up.
+        $found = Get-ChildItem -LiteralPath $expanded -Recurse -Filter 'dev-config.ps1' -File |
+            Where-Object { Test-Path (Join-Path $_.DirectoryName 'steps') } |
+            Select-Object -First 1
+        if (-not $found) {
+            throw "The download from '$Ref' doesn't contain the setup files. Check that the branch or tag name is right."
+        }
+        $setupDir = $found.DirectoryName
+    } elseif ($setupDir -eq $source) {
+        Write-Host "  '$Ref' has no signed copy yet, so its source files are being used." -ForegroundColor DarkGray
     }
 
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 
-    # Copied over the top rather than replacing the folder: a run that is waiting on its reboot
-    # keeps its log and its tally of what has already been done sitting right here.
-    Copy-Item -LiteralPath $orchestrator.FullName -Destination $InstallRoot -Force
-    Copy-Item -LiteralPath (Join-Path $orchestrator.DirectoryName 'steps') -Destination $InstallRoot -Recurse -Force
+    # Copied over the top so a run waiting on its reboot keeps its log and its tally.
+    Copy-Item -LiteralPath (Join-Path $setupDir 'dev-config.ps1') -Destination $InstallRoot -Force
+    Copy-Item -LiteralPath (Join-Path $setupDir 'steps') -Destination $InstallRoot -Recurse -Force
 
-    # Files that arrived in a zip from the internet are marked as such, and PowerShell refuses to
-    # load a marked file under the default policy -- which would stop the setup on its first line.
+    # PowerShell refuses to load a file marked as downloaded, which is every file in this zip.
     Get-ChildItem -LiteralPath $InstallRoot -Recurse -Filter '*.ps1' -File | Unblock-File
 
-    # Cleared here rather than in the finally block below: the setup restarts the machine partway
-    # through, so this process never comes back to run it, and the download would be left behind.
+    # Cleared here because the setup restarts the machine, so the finally block never runs.
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 
     $target = Join-Path $InstallRoot 'dev-config.ps1'
@@ -134,15 +151,12 @@ try {
         return
     }
 
-    # A child process with an explicit policy, because the file on disk is subject to the machine's
-    # execution policy even though this bootstrap arrived as a string that wasn't. Same window: the
-    # setup asks for elevation itself, and that prompt opens the window it actually runs in.
+    # The file on disk is subject to the execution policy even though this script wasn't.
     $shell = if (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue) { 'pwsh.exe' } else { 'powershell.exe' }
     $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$target`"")
     $proc = Start-Process -FilePath $shell -ArgumentList $arguments -NoNewWindow -Wait -PassThru
 
-    # Deliberately no 'exit': this script is usually running inside the user's own console, and
-    # exiting would close their window along with whatever the setup just told them.
+    # No 'exit': this usually runs in the user's own console and would close their window.
     if ($proc.ExitCode -ne 0) {
         Write-Host ''
         Write-Host "Setup finished with exit code $($proc.ExitCode). The log is in $InstallRoot." -ForegroundColor Yellow
