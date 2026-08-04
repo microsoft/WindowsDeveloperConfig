@@ -427,3 +427,7 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Windows Dev Config run artifacts, written next to dev-config.ps1 when the
+# flow is run from a checkout (*.log above already covers devconfig-log.txt).
+devconfig-tally.json

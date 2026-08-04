@@ -5,12 +5,13 @@
 .DESCRIPTION
   Meant to be run straight from the web:
 
-      irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/bootstrap.ps1 | iex
-
-  src/windows-dev-config/bootstrap.ps1 is the same script, so either address works.
+      irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1 | iex
 
   The setup cannot run from a piped-in string: it loads two dozen files from its own folder,
   relaunches itself elevated, and resumes after a reboot. This puts it somewhere real first.
+
+  The files it installs come from the signed release copy when the ref has one, and from
+  src/ otherwise, whichever address this script itself was fetched from.
 
   To pick a branch or pin a tag, run it as a script block instead:
 
