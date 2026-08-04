@@ -89,7 +89,7 @@ resources:
       id: Microsoft.VisualStudio.Community
       source: winget
       acceptAgreements: true
-      version: 18.4.3
+      version: 18.8.2
     metadata:
       description: Install Visual Studio 2026 Community
       winget:
@@ -109,11 +109,11 @@ resources:
   - type: Microsoft.WinGet/Package
     name: WindowsAppRuntime
     properties:
-      id: Microsoft.WindowsAppRuntime.1.6
+      id: Microsoft.WindowsAppRuntime.1.8
       source: winget
       acceptAgreements: true
     metadata:
-      description: Install the Windows App Runtime 1.6
+      description: Install the Windows App Runtime 1.8
       winget:
         securityContext: elevated
 

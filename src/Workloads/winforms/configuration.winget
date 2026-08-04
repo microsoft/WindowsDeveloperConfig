@@ -89,7 +89,7 @@ resources:
       id: Microsoft.VisualStudio.Community
       source: winget
       acceptAgreements: true
-      version: 18.4.3
+      version: 18.8.2
     metadata:
       description: Install Visual Studio Community Edition for WinForms development
       winget:
