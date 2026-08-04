@@ -283,6 +283,7 @@ function Remove-ScriptAnalyzerSettings {
     if (Test-Path -LiteralPath $settingsPath) {
         Invoke-Step 'remove powershell.scriptAnalysis.* keys from VS Code settings.json' {
             $raw = Get-Content -LiteralPath $settingsPath -Raw
+            if ([string]::IsNullOrWhiteSpace($raw)) { return }
             $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
             $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
             if ([string]::IsNullOrWhiteSpace($clean)) { return }
