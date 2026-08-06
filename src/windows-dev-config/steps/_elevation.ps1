@@ -52,6 +52,19 @@ function Get-DevConfigShellExe {
     if (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue) { 'pwsh.exe' } else { 'powershell.exe' }
 }
 
+function Get-DevConfigTaskShellExe {
+    # Scheduled tasks cannot launch the WindowsApps execution alias that a Store-installed
+    # PowerShell 7 leaves on PATH, so resolve to a real file under a machine-wide path.
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramW6432)) {
+        if (-not $root) { continue }
+        $candidate = Join-Path $root 'PowerShell\7\pwsh.exe'
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+
+    # Windows PowerShell always exists at this fixed path, and these steps run on 5.1.
+    return (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+}
+
 # Quote the script path because Start-Process joins arguments with spaces without adding quotes.
 function Get-DevConfigRelaunchArguments {
     param(

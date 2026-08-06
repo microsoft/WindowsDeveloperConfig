@@ -278,8 +278,6 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 ## Security
 
-**Read it before you run it.** Piping a remote script into your shell is a real trust decision, and this one asks for Administrator. Everything it does is in this folder — [`bootstrap.ps1`](./bootstrap.ps1) is under 200 lines, [`dev-config.ps1`](./dev-config.ps1) is the orchestrator, and every change lives in a named file under [`steps/`](./steps). To read the exact copy you'd be running, use `-NoLaunch` above, or pass `-Ref` with a commit SHA to pin it.
-
 **What runs elevated.** The whole setup, after the single UAC prompt. It needs Administrator for the `HKLM` settings, the WSL Windows features, and machine-wide package installs.
 
 **What it downloads, and from where.** GitHub (this repository, and the pinned Cascadia Code release, which is checked against a SHA-256), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error.
@@ -436,7 +434,7 @@ A phase is just a file plus an entry in the `$phases` list. Files prefixed with 
 
 | Area | Detail |
 | ---- | ------ |
-| **One restart, always visible** | The WSL platform genuinely requires it. The setup warns you for 10 seconds and then restarts with `Restart-Computer -Force`. Save your work before you begin. |
+| **One restart, always visible** | The WSL platform genuinely requires it. The setup warns you for 10 seconds and then restarts with `shutdown /r`. Save your work before you begin. |
 | **Ubuntu's first launch is still manual** | You have to open Ubuntu once to create a Linux username and password. |
 | **Package versions move** | Packages are installed at whatever winget currently publishes, so two machines set up on different days can differ. `Microsoft.DotNet.SDK.10` and `Python.Python.3.14` pin a major version and will need bumping as those age. |
 | **The font release is pinned** | Cascadia Code `2407.24`, verified by hash. Newer releases need both the version and the hash updated in `steps/fonts.ps1`. |

@@ -434,7 +434,7 @@ A phase is just a file plus an entry in the `$phases` list. Files prefixed with 
 
 | Area | Detail |
 | ---- | ------ |
-| **One restart, always visible** | The WSL platform genuinely requires it. The setup warns you for 10 seconds and then restarts with `Restart-Computer -Force`. Save your work before you begin. |
+| **One restart, always visible** | The WSL platform genuinely requires it. The setup warns you for 10 seconds and then restarts with `shutdown /r`. Save your work before you begin. |
 | **Ubuntu's first launch is still manual** | You have to open Ubuntu once to create a Linux username and password. |
 | **Package versions move** | Packages are installed at whatever winget currently publishes, so two machines set up on different days can differ. `Microsoft.DotNet.SDK.10` and `Python.Python.3.14` pin a major version and will need bumping as those age. |
 | **The font release is pinned** | Cascadia Code `2407.24`, verified by hash. Newer releases need both the version and the hash updated in `steps/fonts.ps1`. |

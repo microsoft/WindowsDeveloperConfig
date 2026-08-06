@@ -28,7 +28,7 @@ $innerOut  = Join-Path $logDir 'resume-inner-stdout.log'
 $innerErr  = Join-Path $logDir 'resume-inner-stderr.log'
 Remove-Item $masterLog, $innerOut, $innerErr -ErrorAction SilentlyContinue
 
-$shell = Get-DevConfigShellExe
+$shell = Get-DevConfigTaskShellExe
 $proc = Start-Process -FilePath $shell `
     -ArgumentList (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed) `
     -RedirectStandardOutput $innerOut -RedirectStandardError $innerErr -NoNewWindow -PassThru

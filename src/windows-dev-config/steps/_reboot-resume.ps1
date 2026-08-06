@@ -18,7 +18,7 @@ function Suspend-DevConfigForReboot {
         [Parameter(Mandatory)] [string] $ScriptPath
     )
 
-    $shell       = Get-DevConfigShellExe
+    $shell       = Get-DevConfigTaskShellExe
     $wrapperPath = Join-Path $PSScriptRoot '_resume-wrapper.ps1'
 
     # The wrapper handles output capture so the resumed run stays visible on screen.
@@ -47,18 +47,22 @@ function Suspend-DevConfigForReboot {
     Start-Sleep -Seconds 10
 
     # The resume task is already registered, so a manual restart continues from the same point.
-    try {
-        Restart-Computer -Force
-    } catch {
+    # shutdown.exe is used instead of Restart-Computer because the latter goes through WMI even
+    # for the local machine, and that call can time out and report failure mid-restart.
+    $shutdown = Join-Path $env:SystemRoot 'System32\shutdown.exe'
+    $result   = Invoke-DevConfigNativeCommand -FilePath $shutdown -Arguments @('/r', '/t', '0', '/f')
+
+    # 1115 means a restart is already under way, which is the outcome this wants either way.
+    if ($result.ExitCode -ne 0 -and $result.ExitCode -ne 1115) {
         Write-Host ''
-        Write-Host "Windows would not let setup restart this machine ($($_.Exception.Message))." -ForegroundColor Yellow
+        Write-Host "Windows would not let setup restart this machine (shutdown.exe returned $($result.ExitCode))." -ForegroundColor Yellow
         Write-Host 'Restart when convenient -- setup carries on by itself once you log back in.' -ForegroundColor Yellow
         # Keep the window open so the remaining manual restart instruction is visible.
         Wait-DevConfigKeyPress
         exit 0
     }
 
-    # Restart-Computer can return before reboot begins, so pause before any fall-through code.
+    # The restart request returns straight away, so pause before any fall-through code.
     Start-Sleep -Seconds 60
     exit 0
 }
