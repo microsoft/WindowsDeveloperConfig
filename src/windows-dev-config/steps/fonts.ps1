@@ -11,18 +11,34 @@ $Script:CascadiaFontVersion     = '2407.24'
 $Script:CascadiaWantedFonts     = @('CascadiaCodeNF.ttf', 'CascadiaMonoNF.ttf')
 $Script:CascadiaZipSha256       = 'E67A68EE3386DB63F48B9054BD196EA752BC6A4EBB4DF35ADCE6733DA50C8474'
 $Script:CascadiaDefaultFontFace = 'Cascadia Mono NF'
+$Script:CascadiaFontRegPath     = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
+$Script:CascadiaUserFontRegPath = 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
 
 function Test-DevConfigCascadiaFontsInstalled {
-    $fontsDir  = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'
-    $regPath   = 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
+    $fontsDir  = Join-Path $env:SystemRoot 'Fonts'
     $regValues = @(
-        (Get-ItemProperty $regPath -ErrorAction SilentlyContinue).PSObject.Properties |
+        (Get-ItemProperty $Script:CascadiaFontRegPath -ErrorAction SilentlyContinue).PSObject.Properties |
             Where-Object Name -notin 'PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider' |
             Select-Object -ExpandProperty Value
     )
     $filesOk = -not ($Script:CascadiaWantedFonts | Where-Object { -not (Test-Path (Join-Path $fontsDir $_)) })
-    $regOk   = -not ($Script:CascadiaWantedFonts | Where-Object { $fn = $_; -not ($regValues | Where-Object { $_ -like "*\$fn" }) })
+    $regOk   = -not ($Script:CascadiaWantedFonts | Where-Object { $fn = $_; -not ($regValues | Where-Object { $_ -eq $fn }) })
     return ($filesOk -and $regOk)
+}
+
+function Remove-DevConfigStalePerUserFont {
+    param(
+        [Parameter(Mandatory)] [string] $FileName,
+        [Parameter(Mandatory)] [string] $RegName
+    )
+    $userReg  = $Script:CascadiaUserFontRegPath
+    $userFile = Join-Path (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts') $FileName
+    try {
+        Remove-ItemProperty -Path $userReg -Name $RegName -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $userFile -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Verbose "Could not remove the per-user copy of ${FileName}: $($_.Exception.Message)"
+    }
 }
 
 function Install-DevConfigCascadiaFonts {
@@ -32,9 +48,7 @@ function Install-DevConfigCascadiaFonts {
     $zipPath = Join-Path $workDir 'CascadiaCode.zip'
     New-Item -ItemType Directory -Path $workDir -Force | Out-Null
 
-    $fontsDir = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'
-    $regPath  = 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
-    New-Item -ItemType Directory -Path $fontsDir -Force | Out-Null
+    $fontsDir = Join-Path $env:SystemRoot 'Fonts'
 
     Write-Host "Downloading $zipUrl ..."
     Write-Host '  (About 10 MB from GitHub. This usually takes a few seconds.)' -ForegroundColor DarkGray
@@ -64,7 +78,13 @@ function Install-DevConfigCascadiaFonts {
 
             $dest = Join-Path $fontsDir $name
             Write-Host "Installing $name -> $dest"
-            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+            try {
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+            } catch {
+                # A font the system has already loaded can't be overwritten, and it is the same version.
+                if (-not (Test-Path $dest)) { throw }
+                Write-Host '  (keeping the copy already in place)' -ForegroundColor DarkGray
+            }
 
             $pfc = New-Object System.Drawing.Text.PrivateFontCollection
             try {
@@ -75,7 +95,9 @@ function Install-DevConfigCascadiaFonts {
             }
 
             $regName = "$family (TrueType)"
-            New-ItemProperty -Path $regPath -Name $regName -Value $dest -PropertyType String -Force | Out-Null
+            # Machine-wide entries hold the file name; the system resolves it under the Fonts folder.
+            New-ItemProperty -Path $Script:CascadiaFontRegPath -Name $regName -Value $name -PropertyType String -Force | Out-Null
+            Remove-DevConfigStalePerUserFont -FileName $name -RegName $regName
             Write-Host "  registered as '$regName'"
         }
     } finally {
@@ -83,7 +105,7 @@ function Install-DevConfigCascadiaFonts {
     }
 
     Remove-Item $zipPath -Force
-    Write-Host "`nDone. Restart any running apps (terminal, editors) to pick up the new fonts."
+    Write-Host "`nDone."
 }
 
 function Test-DevConfigCascadiaDefaultFont {
