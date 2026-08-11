@@ -30,6 +30,16 @@ Set-StrictMode -Version Latest
 
 $repo = 'microsoft/WindowsDeveloperConfig'
 
+# The ref goes straight into the download URL, and '..' in it would redirect to another repository.
+if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
+    throw "'$Ref' is not a valid branch, tag or commit name. Use letters, digits, and . _ - / only."
+}
+
+# A UNC install root would put the files the elevated setup loads on a remote share.
+if ($InstallRoot -and ($InstallRoot.StartsWith('\\') -or $InstallRoot.StartsWith('//'))) {
+    throw '-InstallRoot must be a local path, not a network share.'
+}
+
 if (-not $InstallRoot) {
     # Per-user and outside the roaming profile: it has to still be there after the reboot.
     $base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
