@@ -84,22 +84,28 @@ $phases = @(
 
 $failure = $null
 try {
-    $phaseIndex = 0
+    # Every phase file is loaded before any of them runs, so the elevated process is not still reading new code off disk minutes in.
+    $loadedPhases = @()
     foreach ($phase in $phases) {
-        $phaseIndex++
         $path = Join-Path $stepsDir $phase.File
         if (-not (Test-Path -LiteralPath $path)) {
             Write-Host "-- $($phase.File) not written yet, skipping" -ForegroundColor DarkGray
             continue
         }
+        . $path
+        $loadedPhases += $phase
+    }
+
+    $phaseIndex = 0
+    foreach ($phase in $loadedPhases) {
+        $phaseIndex++
 
         # Script-scoped phase metadata avoids passing header state through every phase file.
         $Script:DevConfigPhaseIndex       = $phaseIndex
-        $Script:DevConfigPhaseTotal       = $phases.Count
+        $Script:DevConfigPhaseTotal       = $loadedPhases.Count
         $Script:DevConfigPhaseTitle       = $phase.Title
         $Script:DevConfigPhaseHeaderShown = $false
 
-        . $path
         if ($phase.File -eq 'wsl.ps1') {
             # The WSL phase registers resume using this orchestrator path.
             Invoke-WslPhase -OrchestratorPath $PSCommandPath
