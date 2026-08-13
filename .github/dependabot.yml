@@ -1,0 +1,62 @@
+# Dependabot keeps this repository's third-party dependencies inventoried and
+# patched. Updates arrive as pull requests and go through the same review and
+# CI gates as any other change.
+#
+# Only directories that actually declare third-party dependencies are listed.
+# Adding a project with its own manifest means adding an entry here.
+#
+# Updates are grouped per ecosystem so a refresh lands as one reviewable pull
+# request instead of one per package.
+version: 2
+
+updates:
+  # Actions used by the workflows in .github/workflows. Keeps the pinned
+  # commit SHAs current and surfaces the workflows still on floating tags.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Command Palette extension. NuGet versions are managed centrally in
+  # Directory.Packages.props.
+  - package-ecosystem: "nuget"
+    directory: "/src/future/cmdpal/QuickWingetSetup"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      quickwingetsetup-nuget:
+        patterns:
+          - "*"
+
+  # WinUI hello-world probe, which pins its package version inline.
+  - package-ecosystem: "nuget"
+    directory: "/src/tests/winui"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      winui-probe-nuget:
+        patterns:
+          - "*"
+
+  # Rust hello-world probe. Dependency-free today; listed so that crates added
+  # by a future Rust flow are covered from their first commit.
+  - package-ecosystem: "cargo"
+    directory: "/src/tests/rust"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      rust-probe-cargo:
+        patterns:
+          - "*"
