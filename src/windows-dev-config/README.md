@@ -42,9 +42,12 @@ That's the whole thing. You'll get one UAC prompt, and the machine will restart 
 `irm` (`Invoke-RestMethod`) downloads [`bootstrap.ps1`](./bootstrap.ps1) as text and `iex` (`Invoke-Expression`) runs it. The bootstrap then:
 
 1. Downloads the repository as a ZIP from `github.com/microsoft/WindowsDeveloperConfig`.
-2. Copies the setup — [`dev-config.ps1`](./dev-config.ps1) plus the [`steps/`](./steps) folder — into `%LOCALAPPDATA%\CalmOS`, deletes its temporary download folder, and starts the setup from there.
+2. Selects the signed setup from the repository-root `windows-dev-config/` folder.
+3. Copies [`dev-config.ps1`](./dev-config.ps1) plus the [`steps/`](./steps) folder into `%LOCALAPPDATA%\CalmOS`, deletes its temporary download folder, and starts the setup from there.
 
 The setup is installed to disk rather than run from the pipe because it loads two dozen files from its own folder, relaunches itself elevated, and has to survive a reboot — none of which a piped-in string can do.
+
+The bootstrap never falls back to unsigned source automatically. Contributors testing a ref before its signed copy exists must explicitly pass `-AllowUnsigned`.
 
 </details>
 
@@ -265,6 +268,13 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 & ([scriptblock]::Create((irm $url))) -Ref 'v1.2.3'
 ```
 
+**Test an unsigned branch.** `-AllowUnsigned` selects `src/windows-dev-config/` instead of the signed repository-root copy:
+
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Ref 'my-branch' -AllowUnsigned
+```
+
 **Download it but don't run it**, so you can read it first:
 
 ```powershell
@@ -282,7 +292,7 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 **What it downloads, and from where.** GitHub (this repository, and the pinned Cascadia Code release, which is checked against a SHA-256), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error.
 
-**Code signing.** The release pipeline Authenticode-signs every `.ps1` in this repository with a Microsoft certificate and publishes the signed copies at the repository root. Whichever address you fetch the bootstrap from, it installs the signed copy of the setup when the ref you asked for has one, and tells you in its output when it falls back to the source copy instead.
+**Code signing.** The release pipeline Authenticode-signs every `.ps1` in this repository with a Microsoft certificate and publishes the signed copies at the repository root. The bootstrap requires that signed copy by default and does not silently fall back to source. Running the unsigned `src/windows-dev-config/` payload requires the explicit `-AllowUnsigned` switch.
 
 **What it does not do.** It doesn't collect or send telemetry, doesn't sign you in to anything, doesn't change credentials or Windows Defender settings, and doesn't touch files in your user profile beyond the PowerShell profile and Windows Terminal settings described above.
 
@@ -451,7 +461,7 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 
 | File | What it is |
 | ---- | ---------- |
-| `bootstrap.ps1` | The remote entry point. Downloads, resolves signed-versus-source, installs, launches. |
+| `bootstrap.ps1` | The remote entry point. Downloads, requires signed files by default, optionally selects source with `-AllowUnsigned`, installs, launches. |
 | `dev-config.ps1` | The orchestrator. Elevation, PowerShell 7, run lock, logging, the phase list, the summary. |
 | `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
 | `steps/_*.ps1` | Shared helpers: elevation, reboot and resume, winget, registry, Terminal settings, retry, process execution, console. |

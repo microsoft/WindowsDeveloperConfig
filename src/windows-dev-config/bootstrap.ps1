@@ -10,8 +10,8 @@
   The setup cannot run from a piped-in string: it loads two dozen files from its own folder,
   relaunches itself elevated, and resumes after a reboot. This puts it somewhere real first.
 
-  The files it installs come from the signed release copy when the ref has one, and from
-  src/ otherwise, whichever address this script itself was fetched from.
+  By default, the files it installs must come from the signed release copy at the repository
+  root. Pass -AllowUnsigned to explicitly use the source copy under src/ instead.
 
   To pick a branch or pin a tag, run it as a script block instead:
 
@@ -22,6 +22,7 @@
 param(
     [string] $Ref = 'main',
     [string] $InstallRoot,
+    [switch] $AllowUnsigned,
     [switch] $NoLaunch
 )
 
@@ -109,7 +110,6 @@ try {
     $expanded = Join-Path $work 'expanded'
     Expand-Archive -LiteralPath $zip -DestinationPath $expanded -Force
 
-    # The signed copy the release pipeline publishes, then the source it was built from.
     $top = Get-ChildItem -LiteralPath $expanded -Directory | Select-Object -First 1
     if (-not $top) {
         throw "The download from '$Ref' was empty. Check that the branch or tag name is right."
@@ -118,25 +118,18 @@ try {
     $signed = Join-Path $top.FullName 'windows-dev-config'
     $source = Join-Path (Join-Path $top.FullName 'src') 'windows-dev-config'
 
-    $setupDir = $null
-    foreach ($candidate in @($signed, $source)) {
-        if ((Test-Path (Join-Path $candidate 'dev-config.ps1')) -and (Test-Path (Join-Path $candidate 'steps'))) {
-            $setupDir = $candidate
-            break
+    $setupDir = if ($AllowUnsigned) { $source } else { $signed }
+    if (-not ((Test-Path (Join-Path $setupDir 'dev-config.ps1')) -and (Test-Path (Join-Path $setupDir 'steps')))) {
+        if ($AllowUnsigned) {
+            throw "The download from '$Ref' doesn't contain the unsigned setup under src/windows-dev-config. Check that the branch or tag name is right."
         }
+        throw "'$Ref' doesn't contain a signed Calm OS setup under windows-dev-config. Pass -AllowUnsigned only if you intend to run the unsigned source copy."
     }
 
-    if (-not $setupDir) {
-        # A folder having moved is not on its own a reason to give up.
-        $found = Get-ChildItem -LiteralPath $expanded -Recurse -Filter 'dev-config.ps1' -File |
-            Where-Object { Test-Path (Join-Path $_.DirectoryName 'steps') } |
-            Select-Object -First 1
-        if (-not $found) {
-            throw "The download from '$Ref' doesn't contain the setup files. Check that the branch or tag name is right."
-        }
-        $setupDir = $found.DirectoryName
-    } elseif ($setupDir -eq $source) {
-        Write-Host "  '$Ref' has no signed copy yet, so its source files are being used." -ForegroundColor DarkGray
+    if ($AllowUnsigned) {
+        Write-Host '  Using the unsigned source copy because -AllowUnsigned was passed.' -ForegroundColor Yellow
+    } else {
+        Write-Host '  Using the signed release copy.' -ForegroundColor DarkGray
     }
 
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
