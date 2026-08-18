@@ -43,7 +43,8 @@ That's the whole thing. You'll get one UAC prompt, and the machine will restart 
 
 1. Downloads the repository as a ZIP from `github.com/microsoft/WindowsDeveloperConfig`.
 2. Selects the signed setup from the repository-root `windows-dev-config/` folder.
-3. Copies [`dev-config.ps1`](./dev-config.ps1) plus the [`steps/`](./steps) folder into `%LOCALAPPDATA%\CalmOS`, deletes its temporary download folder, and starts the setup from there.
+3. Verifies that every PowerShell file has a valid Microsoft Corporation Authenticode signature.
+4. Copies [`dev-config.ps1`](./dev-config.ps1) plus the [`steps/`](./steps) folder into `%LOCALAPPDATA%\CalmOS`, deletes its temporary download folder, and starts the setup from there.
 
 The setup is installed to disk rather than run from the pipe because it loads two dozen files from its own folder, relaunches itself elevated, and has to survive a reboot — none of which a piped-in string can do.
 
@@ -292,7 +293,7 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 **What it downloads, and from where.** GitHub (this repository, and the pinned Cascadia Code release, which is checked against a SHA-256), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error.
 
-**Code signing.** The release pipeline Authenticode-signs every `.ps1` in this repository with a Microsoft certificate and publishes the signed copies at the repository root. The bootstrap requires that signed copy by default and does not silently fall back to source. Running the unsigned `src/windows-dev-config/` payload requires the explicit `-AllowUnsigned` switch.
+**Code signing.** The release pipeline Authenticode-signs every `.ps1` in this repository with a Microsoft certificate and publishes the signed copies at the repository root. The bootstrap requires that signed copy by default and does not silently fall back to source. Before it copies or runs the payload, it requires every `.ps1` to have a `Valid` Authenticode signature whose signer is Microsoft Corporation; one missing, invalid, or unexpected signature stops the run. Running the unsigned `src/windows-dev-config/` payload skips these checks and requires the explicit `-AllowUnsigned` switch.
 
 **What it does not do.** It doesn't collect or send telemetry, doesn't sign you in to anything, doesn't change credentials or Windows Defender settings, and doesn't touch files in your user profile beyond the PowerShell profile and Windows Terminal settings described above.
 

@@ -11,7 +11,8 @@
   relaunches itself elevated, and resumes after a reboot. This puts it somewhere real first.
 
   By default, the files it installs must come from the signed release copy at the repository
-  root. Pass -AllowUnsigned to explicitly use the source copy under src/ instead.
+  root, and every PowerShell file must have a valid Microsoft signature. Pass -AllowUnsigned
+  to explicitly use the source copy under src/ without signature validation instead.
 
   To pick a branch or pin a tag, run it as a script block instead:
 
@@ -30,6 +31,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repo = 'microsoft/WindowsDeveloperConfig'
+$microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
 
 # The ref goes straight into the download URL, and '..' in it would redirect to another repository.
 if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
@@ -96,6 +98,44 @@ function Save-CalmOsArchive {
     throw "Could not download '$Ref' from $repo ($($lastError.Exception.Message)). Check your internet connection or proxy settings, then run this again."
 }
 
+function Assert-CalmOsMicrosoftSigned {
+    param(
+        [Parameter(Mandatory)] [string] $Directory
+    )
+
+    $scripts = @(Get-ChildItem -LiteralPath $Directory -Recurse -File -Filter '*.ps1')
+    if ($scripts.Count -eq 0) {
+        throw "The signed Calm OS copy under windows-dev-config contains no PowerShell files."
+    }
+
+    $failures = @()
+    foreach ($script in $scripts) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $script.FullName
+        $relativePath = $script.FullName.Substring($Directory.Length).TrimStart([char]'\')
+
+        if ($signature.Status -ne 'Valid') {
+            $failures += "$relativePath [$($signature.Status)]"
+            continue
+        }
+
+        $subject = if ($signature.SignerCertificate) {
+            $signature.SignerCertificate.Subject
+        } else {
+            '<missing signer certificate>'
+        }
+        if ($subject -ne $microsoftSignerSubject) {
+            $failures += "$relativePath [unexpected signer: $subject]"
+        }
+    }
+
+    if ($failures.Count -gt 0) {
+        $details = ($failures | ForEach-Object { "    $_" }) -join [Environment]::NewLine
+        throw "The signed Calm OS payload failed Microsoft signature verification:$([Environment]::NewLine)$details$([Environment]::NewLine)Nothing was installed. Use -AllowUnsigned only when you intentionally want to run the source copy."
+    }
+
+    Write-Host "  Verified $($scripts.Count) Microsoft-signed PowerShell files." -ForegroundColor DarkGray
+}
+
 Write-Host ''
 Write-Host 'Calm OS setup' -ForegroundColor Cyan
 Write-Host "  Fetching '$Ref' from $repo..." -ForegroundColor DarkGray
@@ -130,6 +170,7 @@ try {
         Write-Host '  Using the unsigned source copy because -AllowUnsigned was passed.' -ForegroundColor Yellow
     } else {
         Write-Host '  Using the signed release copy.' -ForegroundColor DarkGray
+        Assert-CalmOsMicrosoftSigned -Directory $setupDir
     }
 
     New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
