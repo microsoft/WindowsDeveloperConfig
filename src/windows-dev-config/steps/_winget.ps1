@@ -174,8 +174,8 @@ function Test-DevConfigWingetPackageInstalled {
         if ($listed.ExitCode -ne 0) {
             throw "winget list $Id failed with exit code $($listed.ExitCode)"
         }
-        # winget list --upgrade-available exits 0 for any installed package, with or without an upgrade.
-        return $true
+        # useLatest requires the package to be current, not only installed, so match the module path.
+        return -not (Test-DevConfigWingetUpgradeAvailable -Id $Id)
     }
 
     # EqualsCaseInsensitive avoids ambiguous substring matches.
@@ -186,6 +186,21 @@ function Test-DevConfigWingetPackageInstalled {
 
     # useLatest requires the package to be current, not only installed.
     return -not $pkg.IsUpdateAvailable
+}
+
+# winget list exits 0 whether or not an upgrade exists, and every message it prints is localized.
+# The package id is the one token in that output that is never translated, so it is what gets matched.
+function Test-DevConfigWingetUpgradeAvailable {
+    param(
+        [Parameter(Mandatory)] [string] $Id
+    )
+    $upgrade = Invoke-DevConfigWingetCli -Arguments @('list', '--id', $Id, '--exact', '--upgrade-available', '--accept-source-agreements')
+    if ($upgrade.ExitCode -ne 0) {
+        # No listing means nothing to upgrade to; a broken query must not force an endless reinstall.
+        return $false
+    }
+    # @() keeps the count valid when nothing matches; under Set-StrictMode a bare $null has no Count.
+    return @($upgrade.Output -split '\r?\n' | Where-Object { $_ -match ('(^|\s)' + [regex]::Escape($Id) + '(\s|$)') }).Count -gt 0
 }
 
 function Install-DevConfigWingetPackage {
