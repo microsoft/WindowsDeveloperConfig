@@ -31,19 +31,22 @@ It is **idempotent** — every change is checked before it's made, so re-running
 Open **any** PowerShell window — Windows PowerShell or PowerShell 7, elevated or not — and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1 | iex
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -AllowUnsigned
 ```
 
 That's the whole thing. You'll get one UAC prompt, and the machine will restart once.
 
+> `-AllowUnsigned` runs the source copy under `src/` instead of the signed copy at the repository root.
+
 <details>
 <summary><strong>What that command actually does</strong></summary>
 
-`irm` (`Invoke-RestMethod`) downloads [`bootstrap.ps1`](./bootstrap.ps1) as text and `iex` (`Invoke-Expression`) runs it. The bootstrap then:
+`irm` (`Invoke-RestMethod`) downloads [`bootstrap.ps1`](./bootstrap.ps1) as text, and running it as a script block lets you pass switches to it. The bootstrap then:
 
 1. Downloads the repository as a ZIP from `github.com/microsoft/WindowsDeveloperConfig`.
-2. Selects the signed setup from the repository-root `windows-dev-config/` folder.
-3. Verifies that every PowerShell file has a valid Microsoft Corporation Authenticode signature.
+2. Selects the setup: the signed repository-root `windows-dev-config/` folder, or `src/windows-dev-config/` with `-AllowUnsigned`.
+3. Verifies that every PowerShell file has a valid Microsoft Corporation Authenticode signature — skipped under `-AllowUnsigned`.
 4. Copies [`dev-config.ps1`](./dev-config.ps1) plus the [`steps/`](./steps) folder into `%LOCALAPPDATA%\CalmOS`, deletes its temporary download folder, and starts the setup from there.
 
 The setup is installed to disk rather than run from the pipe because it loads two dozen files from its own folder, relaunches itself elevated, and has to survive a reboot — none of which a piped-in string can do.

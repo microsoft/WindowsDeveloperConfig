@@ -62,10 +62,13 @@ A set of PowerShell scripts that installs dev tools, applies opinionated Windows
 Open any PowerShell window — elevated or not — and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1 | iex
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -AllowUnsigned
 ```
 
 You'll get one UAC prompt. Expect about 30 minutes on a clean machine.
+
+> `-AllowUnsigned` runs the source copy under `src/` instead of the signed copy at the repository root.
 
 > ⚠️ **It will restart your machine, once.** Enabling WSL needs a Windows optional feature that requires a restart. You get a 10-second warning, and a scheduled task finishes the run automatically after you sign back in. **Save your work before you start.**
 
