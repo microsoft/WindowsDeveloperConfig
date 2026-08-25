@@ -208,7 +208,7 @@ Nothing *inside* the distro is configured by this flow. For that, see [WSL Comfo
 
 | # | Phase | Notes |
 | - | ----- | ----- |
-| 1 | Getting ready | Confirms PowerShell 7 and a winget new enough to drive non-interactively (1.6.0+), repairing winget if not |
+| 1 | Getting ready | Confirms PowerShell 7, then updates winget to the latest public stable release |
 | 2 | Packages | The 15 packages above, plus the PowerToys notification setting |
 | 3 | System settings | Sudo, Developer Mode, long paths, Remote Desktop |
 | 4 | File Explorer tweaks | |
@@ -294,7 +294,7 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 **What runs elevated.** The whole setup, after the single UAC prompt. It needs Administrator for the `HKLM` settings, the WSL Windows features, and machine-wide package installs.
 
-**What it downloads, and from where.** GitHub (this repository, and the pinned Cascadia Code release, which is checked against a SHA-256), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error.
+**What it downloads, and from where.** GitHub (this repository, the pinned Cascadia Code release, which is checked against a SHA-256, and the latest `microsoft/winget-cli` release), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error, and neither is failing to look up the latest winget version.
 
 **Code signing.** The release pipeline Authenticode-signs every `.ps1` in this repository with a Microsoft certificate and publishes the signed copies at the repository root. The bootstrap requires that signed copy by default and does not silently fall back to source. Before it copies or runs the payload, it requires every `.ps1` to have a `Valid` Authenticode signature whose signer is Microsoft Corporation; one missing, invalid, or unexpected signature stops the run. Running the unsigned `src/windows-dev-config/` payload skips these checks and requires the explicit `-AllowUnsigned` switch.
 
@@ -346,9 +346,13 @@ If virtualization is definitely on and WSL still won't activate after the restar
 </details>
 
 <details>
-<summary><strong>"WinGet is older than 1.6.0" or winget can't be updated</strong></summary>
+<summary><strong>winget can't be updated</strong></summary>
 
-The setup needs a winget that supports non-interactive installs, and tries to repair or update it. If it can't — usually because the built-in `winget` command is being used and the PowerShell module isn't reachable — update **App Installer** from the Microsoft Store, or install the latest release from [microsoft/winget-cli](https://github.com/microsoft/winget-cli/releases/latest), then run the setup again.
+The setup updates winget to the latest [microsoft/winget-cli](https://github.com/microsoft/winget-cli/releases/latest) public stable release. If it can't — usually because the built-in `winget` command is being used and the PowerShell module isn't reachable — update **App Installer** from the Microsoft Store, or install the latest release directly, then run the setup again.
+
+The step is best-effort, so a machine that can't be updated is flagged rather than stopped, and the rest of the run continues on whatever winget it has.
+
+A winget delivered by the Store or by Windows itself can be *newer* than the latest GitHub stable release — the 1.30.x previews, for instance. That counts as up to date, not as behind. If the latest release can't be looked up at all, a working winget is left alone rather than flagged.
 
 </details>
 

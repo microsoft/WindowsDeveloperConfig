@@ -32,9 +32,9 @@ function Invoke-PrerequisitesPhase {
         New-DevConfigStep -Name 'PowerShell7' -Description 'Install PowerShell 7' -BestEffort `
             -Check { $PSVersionTable.PSEdition -eq 'Core' } `
             -Apply { Confirm-DevConfigPwshInUse }
-        New-DevConfigStep -Name 'WinGet' -Description 'Update WinGet to a version this script can drive' -BestEffort `
-            -Check { Test-DevConfigWinGetReady } `
-            -Apply { Repair-DevConfigWinget }
+        New-DevConfigStep -Name 'WinGet' -Description 'Update WinGet to the latest version' -BestEffort `
+            -Check { Test-DevConfigWinGetLatest } `
+            -Apply { Update-DevConfigWinget }
     )
 
     Invoke-DevConfigSteps -Steps $steps

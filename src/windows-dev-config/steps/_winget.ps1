@@ -13,8 +13,12 @@ $Script:DevConfigWinGetMode = 'Module'
 $Script:DevConfigWingetNotFound  = -1978335212   # 0x8A150014 no installed package matched
 $Script:DevConfigWingetNoUpgrade = -1978335189   # 0x8A15002B already at the latest applicable version
 
-# --disable-interactivity requires WinGet 1.6.0 or newer.
-$Script:DevConfigWinGetMinimumVersion = [version]'1.6.0'
+# Repair-WinGetPackageManager -Latest installs this release, so it is what "latest" is measured against.
+$Script:DevConfigWinGetLatestReleaseUrl = 'https://api.github.com/repos/microsoft/winget-cli/releases/latest'
+
+# Cached per run so the check and its follow-up verification share one network call.
+$Script:DevConfigWinGetLatestVersion = $null
+$Script:DevConfigWinGetLatestChecked = $false
 
 function Install-DevConfigWinGetModule {
     Enable-DevConfigModernTls
@@ -96,6 +100,21 @@ function Test-DevConfigWingetCliUsable {
 }
 
 # WinGet reports versions as text with optional prefixes or suffixes, so parse before comparing.
+function ConvertTo-DevConfigWinGetVersion {
+    param(
+        [AllowNull()] [AllowEmptyString()] [string] $Text
+    )
+    if (-not $Text) {
+        return $null
+    }
+    $match = [regex]::Match($Text, '(\d+)\.(\d+)(?:\.(\d+))?')
+    if (-not $match.Success) {
+        return $null
+    }
+    $build = if ($match.Groups[3].Success) { $match.Groups[3].Value } else { '0' }
+    return [version]"$($match.Groups[1].Value).$($match.Groups[2].Value).$build"
+}
+
 function Get-DevConfigWinGetVersion {
     $text = $null
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
@@ -115,50 +134,96 @@ function Get-DevConfigWinGetVersion {
         }
     }
 
-    if (-not $text) {
-        return $null
-    }
-    $match = [regex]::Match([string]$text, '(\d+)\.(\d+)(?:\.(\d+))?')
-    if (-not $match.Success) {
-        return $null
-    }
-    $build = if ($match.Groups[3].Success) { $match.Groups[3].Value } else { '0' }
-    return [version]"$($match.Groups[1].Value).$($match.Groups[2].Value).$build"
+    return ConvertTo-DevConfigWinGetVersion -Text ([string]$text)
 }
 
-function Test-DevConfigWinGetReady {
-    $version = Get-DevConfigWinGetVersion
-    if (-not $version) {
-        return $false
+# A null result means the lookup failed, which callers treat as "cannot tell" rather than "up to date".
+function Get-DevConfigWinGetLatestVersion {
+    if ($Script:DevConfigWinGetLatestChecked) {
+        return $Script:DevConfigWinGetLatestVersion
     }
-    if ($version -lt $Script:DevConfigWinGetMinimumVersion) {
-        Write-Host "  WinGet $version is older than $($Script:DevConfigWinGetMinimumVersion), which this script needs." -ForegroundColor DarkGray
-        return $false
+    $Script:DevConfigWinGetLatestChecked = $true
+
+    try {
+        # The GitHub API rejects requests without a User-Agent.
+        $release = Invoke-RestMethod -Uri $Script:DevConfigWinGetLatestReleaseUrl -UseBasicParsing -TimeoutSec 30 `
+            -Headers @{ 'User-Agent' = 'WindowsDeveloperConfig' }
+        $Script:DevConfigWinGetLatestVersion = ConvertTo-DevConfigWinGetVersion -Text ([string]$release.tag_name)
+    } catch {
+        Write-Verbose "Could not look up the latest WinGet release: $($_.Exception.Message)"
     }
-    return $true
+    return $Script:DevConfigWinGetLatestVersion
 }
 
-# Repair runs only after readiness checks fail, so healthy machines skip the slower path.
-function Repair-DevConfigWinget {
+# Quiet by design: this runs on every invocation, including the follow-up verification.
+function Test-DevConfigWinGetLatest {
+    # An unreadable version means WinGet is missing or broken, which the update path repairs.
+    $current = Get-DevConfigWinGetVersion
+    if (-not $current) {
+        return $false
+    }
+
+    # An offline or rate-limited lookup leaves a working WinGet alone rather than flagging every run.
+    $latest = Get-DevConfigWinGetLatestVersion
+    if (-not $latest) {
+        return $true
+    }
+
+    # Store and Windows builds can lead the latest stable release, so newer also counts as current.
+    return ($current -ge $latest)
+}
+
+# WinGet can report its previous version briefly after updating itself in place.
+function Wait-DevConfigWinGetVersionSettled {
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        if (Test-DevConfigWinGetLatest) {
+            return $true
+        }
+        if ($attempt -eq 1) {
+            Write-Host '  (Updated -- just waiting for WinGet to report its new version...)' -ForegroundColor DarkGray
+        }
+        Start-Sleep -Seconds 3
+    }
+    return $false
+}
+
+# Update runs only after the latest check fails, so machines already current skip the slower path.
+function Update-DevConfigWinget {
+    $current = Get-DevConfigWinGetVersion
+    $latest  = Get-DevConfigWinGetLatestVersion
+    if ($current -and $latest) {
+        Write-Host "  WinGet $current -> $latest" -ForegroundColor DarkGray
+    }
+
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
         # Repair-WinGetPackageManager has no winget.exe equivalent, so there is nothing to try here.
-        Set-DevConfigStepUnverified -Reason 'The built-in winget command is too old for this script and cannot be updated from here. Update App Installer from the Microsoft Store, then run this again.'
+        Set-DevConfigStepUnverified -Reason 'The built-in winget command cannot update itself from here. Update App Installer from the Microsoft Store, then run this again.'
         return
     }
 
     Write-Host '  (This can take a few minutes.)' -ForegroundColor DarkGray
     try {
-        # Suppress repair output; exceptions and the follow-up readiness check decide the result.
+        # Suppress update output; exceptions and the follow-up check decide the result.
         $null = Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop *>&1
+        if (Wait-DevConfigWinGetVersionSettled) {
+            return
+        }
+        Set-DevConfigStepUnverified -Reason 'WinGet was updated, but it is still reporting its previous version. Re-run to confirm.'
         return
     } catch {
-        Write-Host "  WinGet repair did not complete: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "  WinGet update did not complete: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 
-    # If module repair fails, winget.exe may still be usable for package operations.
+    # If the module update fails, winget.exe may still be usable for package operations.
     if (Test-DevConfigWingetCliUsable) {
         Write-Host '  Falling back to the built-in winget command instead.' -ForegroundColor Yellow
         $Script:DevConfigWinGetMode = 'Cli'
+    }
+
+    if (Get-DevConfigWinGetVersion) {
+        Set-DevConfigStepUnverified -Reason "WinGet could not be updated to $latest. The version on this machine still works, so the run carries on -- update App Installer from the Microsoft Store when convenient."
+    } else {
+        Set-DevConfigStepUnverified -Reason 'WinGet could not be updated and is not reporting a version at all. Update App Installer from the Microsoft Store, then run this again.'
     }
 }
 
