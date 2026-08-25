@@ -223,6 +223,22 @@ flows:
       expected: src/tests/python/expected.txt
       version: "python --version; uv --version"
 
+  - id: ruby
+    name: Ruby
+    description: Ruby 3.4 + MSYS2 DevKit
+    category: languages
+    tags: [ruby, gem, scripting, rails]
+    icon: 💎
+    onboardingUrl: https://www.ruby-lang.org/en/documentation/quickstart/
+    os: [windows]
+    windows:
+      install: Workloads/ruby/install.ps1
+      configuration: Workloads/ruby/configuration.winget
+      build: ""
+      run: ruby src/tests/ruby/hello.rb
+      expected: src/tests/ruby/expected.txt
+      version: "ruby --version; gem --version"
+
   - id: sql
     name: Lightweight SQL Developer
     description: SQL Server Developer + sqlcmd + VS Code SQL database projects extension
