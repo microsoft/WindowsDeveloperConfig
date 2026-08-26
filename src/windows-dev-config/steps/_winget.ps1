@@ -115,26 +115,34 @@ function ConvertTo-DevConfigWinGetVersion {
     return [version]"$($match.Groups[1].Value).$($match.Groups[2].Value).$build"
 }
 
+# winget.exe runs in a fresh process, so it is the only source that reflects an in-place update:
+# the module resolves the engine version once and keeps reporting it for the life of this process.
 function Get-DevConfigWinGetVersion {
-    $text = $null
-    if ($Script:DevConfigWinGetMode -eq 'Cli') {
+    # Skip the call when the alias is missing so a bare machine does not log a failed launch.
+    if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
         try {
             $result = Invoke-DevConfigWingetCli -Arguments @('--version')
             if ($result.ExitCode -eq 0) {
-                $text = $result.Output
+                $fromCli = ConvertTo-DevConfigWinGetVersion -Text ([string]$result.Output)
+                if ($fromCli) {
+                    return $fromCli
+                }
             }
         } catch {
             Write-Verbose "winget.exe --version could not run: $($_.Exception.Message)"
         }
-    } else {
-        try {
-            $text = Get-WinGetVersion -ErrorAction Stop
-        } catch {
-            Write-Verbose "Get-WinGetVersion failed: $($_.Exception.Message)"
-        }
     }
 
-    return ConvertTo-DevConfigWinGetVersion -Text ([string]$text)
+    if ($Script:DevConfigWinGetMode -eq 'Cli') {
+        return $null
+    }
+
+    try {
+        return ConvertTo-DevConfigWinGetVersion -Text ([string](Get-WinGetVersion -ErrorAction Stop))
+    } catch {
+        Write-Verbose "Get-WinGetVersion failed: $($_.Exception.Message)"
+        return $null
+    }
 }
 
 # A null result means the lookup failed, which callers treat as "cannot tell" rather than "up to date".
