@@ -63,7 +63,7 @@ Roughly **30 minutes** on a clean machine with a good connection, most of it spe
 | - | ------------ | ---------------- |
 | 1 | A UAC prompt appears | **Accept it.** Most of the settings are machine-wide and need Administrator. |
 | 2 | PowerShell 7 is installed if it isn't already, and the setup restarts itself on it | None |
-| 3 | Ten phases run: packages, Windows settings, fonts, Terminal, prompt, Copilot | None. Long silent stretches during big downloads are normal — a "still working" note prints every minute |
+| 3 | Ten of the eleven phases run: packages, Windows settings, fonts, Terminal, prompt, Copilot | None. Long silent stretches during big downloads are normal — a "still working" note prints every minute |
 | 4 | WSL is installed. The machine warns you and **restarts after 10 seconds** | **Save your work before you start.** |
 | 5 | You sign back in; a window opens by itself and finishes the run | None |
 | 6 | A summary prints: how many things changed, how many were already fine | Press a key to close, or leave it — it closes itself after 15 minutes |
