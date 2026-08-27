@@ -46,9 +46,11 @@ function Invoke-PackagesPhase {
             -ArgumentList @($pkg.Id, $pkg.ContainsKey('Large'))
     }
 
+    $powerToysToastKey = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Microsoft.PowerToysWin32'
     $steps += New-DevConfigStep -Name 'PowerToysAOT' -Description 'Turn off PowerToys always-on-top notifications' `
-        -Check { Test-DevConfigRegistryValue -KeyPath 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\PowerToys' -ValueName 'Enabled' -Value 0 } `
-        -Apply { Set-DevConfigRegistryValue -KeyPath 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\PowerToys' -ValueName 'Enabled' -Value 0 }
+        -Check { param($KeyPath) Test-DevConfigRegistryValue -KeyPath $KeyPath -ValueName 'Enabled' -Value 0 } `
+        -Apply { param($KeyPath) Set-DevConfigRegistryValue -KeyPath $KeyPath -ValueName 'Enabled' -Value 0 } `
+        -ArgumentList @($powerToysToastKey)
 
     Invoke-DevConfigSteps -Steps $steps
 }
