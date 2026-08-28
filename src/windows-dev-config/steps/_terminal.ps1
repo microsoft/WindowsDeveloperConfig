@@ -12,6 +12,9 @@ $Script:DevConfigTerminalJsonDepth = 32
 # The settings schema accepts a profile name for defaultProfile when a GUID is not available.
 $Script:DevConfigPs7ProfileName = 'PowerShell'
 
+# Paths already backed up in this run, so a later phase cannot overwrite the pre-run original.
+$Script:DevConfigTerminalBackedUp = @()
+
 # Stable Terminal is preferred over Preview because it is the profile users launch by default.
 function Get-DevConfigTerminalPackagedSettingsPath {
     $packagesDir = Join-Path $env:LOCALAPPDATA 'Packages'
@@ -82,8 +85,9 @@ function Save-DevConfigTerminalSettings {
         [Parameter(Mandatory)] [string] $Path,
         [Parameter(Mandatory)] [object] $Settings
     )
-    if (Test-Path -LiteralPath $Path) {
+    if ((Test-Path -LiteralPath $Path) -and ($Script:DevConfigTerminalBackedUp -notcontains $Path)) {
         Copy-Item -LiteralPath $Path -Destination "$Path.bak" -Force
+        $Script:DevConfigTerminalBackedUp += $Path
     }
     $json = $Settings | ConvertTo-Json -Depth $Script:DevConfigTerminalJsonDepth
     Write-DevConfigTextFile -Path $Path -Content $json
