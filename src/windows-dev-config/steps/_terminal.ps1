@@ -64,17 +64,17 @@ function Read-DevConfigTerminalSettings {
         return [pscustomobject]@{}
     }
 
-    # Terminal settings are JSONC, so comments are removed before ConvertFrom-Json.
-    $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
-    $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
-    if ([string]::IsNullOrWhiteSpace($clean)) {
-        return [pscustomobject]@{}
-    }
-
     # Invalid JSON stops the run so a hand-edited settings file is not overwritten.
     try {
-        return $clean | ConvertFrom-Json
+        $settings = $raw | ConvertFrom-Json
+        if ($null -eq $settings) {
+            return [pscustomobject]@{}
+        }
+        return $settings
     } catch {
+        if ($PSVersionTable.PSEdition -ne 'Core') {
+            throw "PowerShell 7 is required to safely read Windows Terminal's settings, so $Path was left untouched."
+        }
         throw "Windows Terminal's settings file couldn't be read as JSON, so it was left untouched. Fix or rename $Path and run this again."
     }
 }
