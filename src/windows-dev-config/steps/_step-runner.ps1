@@ -128,6 +128,18 @@ function Write-DevConfigStepFlag {
     Write-Host "    $Message" -ForegroundColor Yellow
 }
 
+# Drop a flag once the step verifies, so a pre-reboot warning does not outlive the problem.
+function Clear-DevConfigStepFlag {
+    param(
+        [Parameter(Mandatory)] [string] $Name
+    )
+    if ($Script:DevConfigWarnedSteps -notcontains $Name) {
+        return
+    }
+    $Script:DevConfigWarnedSteps = @($Script:DevConfigWarnedSteps | Where-Object { $_ -ne $Name })
+    $Script:DevConfigTally.Warned = $Script:DevConfigWarnedSteps.Count
+}
+
 # Allows unverified work to be flagged without failing the run when confirmation lags the apply action.
 function Set-DevConfigStepUnverified {
     param(
@@ -160,6 +172,8 @@ function Invoke-DevConfigSteps {
         # Tally before printing so collapsed phases still count.
         if ($alreadyDone) {
             $Script:DevConfigTally.AlreadyOk++
+            # Clearing here also covers resumed phases that return before the reporting loop.
+            Clear-DevConfigStepFlag -Name $step.Name
         }
         [pscustomobject]@{ Step = $step; AlreadyDone = $alreadyDone }
     })
@@ -198,6 +212,7 @@ function Invoke-DevConfigSteps {
                 throw "ran, but the follow-up check still says it isn't done."
             } else {
                 $Script:DevConfigTally.Done++
+                Clear-DevConfigStepFlag -Name $step.Name
                 Write-Host "  $Script:DevConfigCheckMark $label done" -ForegroundColor Green
             }
         } catch {
