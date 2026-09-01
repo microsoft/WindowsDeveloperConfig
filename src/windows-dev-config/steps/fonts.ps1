@@ -41,6 +41,64 @@ function Remove-DevConfigStalePerUserFont {
     }
 }
 
+function Test-DevConfigFontFileInUseError {
+    param(
+        [Parameter(Mandatory)] [System.Exception] $Exception
+    )
+    while ($Exception) {
+        if ($Exception -is [System.IO.IOException] -and ($Exception.HResult -band 0xFFFF) -in 32, 33) {
+            return $true
+        }
+        $Exception = $Exception.InnerException
+    }
+    return $false
+}
+
+function Test-DevConfigFontFileMatchesEntry {
+    param(
+        [Parameter(Mandatory)] $Entry,
+        [Parameter(Mandatory)] [string] $Path
+    )
+    $entryStream = $null
+    $fileStream  = $null
+    try {
+        $entryStream = $Entry.Open()
+        $fileStream  = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite
+        )
+        $entryHash = (Get-FileHash -InputStream $entryStream -Algorithm SHA256).Hash
+        $fileHash  = (Get-FileHash -InputStream $fileStream -Algorithm SHA256).Hash
+        return ($entryHash -eq $fileHash)
+    } finally {
+        if ($fileStream)  { $fileStream.Dispose() }
+        if ($entryStream) { $entryStream.Dispose() }
+    }
+}
+
+function Expand-DevConfigFontEntry {
+    param(
+        [Parameter(Mandatory)] $Entry,
+        [Parameter(Mandatory)] [string] $Path
+    )
+    try {
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($Entry, $Path, $true)
+    } catch {
+        if (-not (Test-DevConfigFontFileInUseError -Exception $_.Exception)) {
+            throw
+        }
+        if (-not (Test-Path -LiteralPath $Path)) {
+            throw
+        }
+        if (-not (Test-DevConfigFontFileMatchesEntry -Entry $Entry -Path $Path)) {
+            throw "Couldn't replace $($Entry.Name) because the installed font is in use and doesn't match version $Script:CascadiaFontVersion."
+        }
+        Write-Host '  (keeping the matching copy already in place)' -ForegroundColor DarkGray
+    }
+}
+
 function Install-DevConfigCascadiaFonts {
     $version = $Script:CascadiaFontVersion
     $zipUrl  = "https://github.com/microsoft/cascadia-code/releases/download/v$version/CascadiaCode-$version.zip"
@@ -78,13 +136,7 @@ function Install-DevConfigCascadiaFonts {
 
             $dest = Join-Path $fontsDir $name
             Write-Host "Installing $name -> $dest"
-            try {
-                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
-            } catch {
-                # A font the system has already loaded can't be overwritten, and it is the same version.
-                if (-not (Test-Path $dest)) { throw }
-                Write-Host '  (keeping the copy already in place)' -ForegroundColor DarkGray
-            }
+            Expand-DevConfigFontEntry -Entry $entry -Path $dest
 
             $pfc = New-Object System.Drawing.Text.PrivateFontCollection
             try {
