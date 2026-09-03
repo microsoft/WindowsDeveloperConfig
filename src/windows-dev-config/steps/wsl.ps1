@@ -35,8 +35,17 @@ function Get-DevConfigWslExitCode {
 }
 
 # The current WSL package supports --version; the inbox WSL returns a nonzero exit code.
-function Test-DevConfigWslPlatformActive {
+function Test-DevConfigWslRuntimeCurrent {
     return ((Get-DevConfigWslExitCode -Arguments @('--version')) -eq 0)
+}
+
+function Test-DevConfigWslFeaturesActive {
+    $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='vmcompute'"
+    return ($null -ne $service)
+}
+
+function Test-DevConfigWslComponentsReady {
+    return (Test-DevConfigWslFeaturesActive) -and (Test-DevConfigWslRuntimeCurrent)
 }
 
 # The Store update is tried first; --web-download provides the same package when Store access is unavailable.
@@ -46,7 +55,7 @@ function Update-DevConfigWslRuntime {
 
     foreach ($arguments in @(@('--update'), @('--update', '--web-download'))) {
         $exitCode = Get-DevConfigWslExitCode -Arguments $arguments -TimeoutSeconds 900
-        if ($exitCode -eq 0 -and (Test-DevConfigWslPlatformActive)) {
+        if ($exitCode -eq 0 -and (Test-DevConfigWslRuntimeCurrent)) {
             return $true
         }
         Write-Verbose "wsl $($arguments -join ' ') returned $exitCode"
@@ -79,7 +88,7 @@ function Install-DevConfigWslComponents {
     }
 
     # Enabling features may leave only the inbox WSL; updating ensures the current WSL package is present.
-    if (-not (Test-DevConfigWslPlatformActive)) {
+    if (-not (Test-DevConfigWslRuntimeCurrent)) {
         Update-DevConfigWslRuntime | Out-Null
     }
 }
@@ -160,7 +169,7 @@ function Install-DevConfigUbuntuVia {
 
 function Install-DevConfigUbuntu {
     # A distro install requires active platform components, so fail early when they are not active.
-    if (-not (Test-DevConfigWslPlatformActive)) {
+    if (-not (Test-DevConfigWslComponentsReady)) {
         throw "WSL isn't active on this machine, so Ubuntu can't be installed yet (see the note above)."
     }
 
@@ -216,7 +225,7 @@ function Install-DevConfigWslPlatform {
     # Skip restart only when no servicing restart is pending and the WSL platform is active.
     if (-not $Script:DevConfigWslRestartSignalled -and
         -not (Test-DevConfigServicingRebootPending) -and
-        (Test-DevConfigWslPlatformActive)) {
+        (Test-DevConfigWslComponentsReady)) {
         return
     }
 
@@ -236,7 +245,7 @@ function Invoke-WslPhase {
     # ArgumentList binds the path at call time; BestEffort preserves prior phases if WSL cannot start.
     $steps = @(
         New-DevConfigStep -Name 'WslComponents' -Description 'Install WSL platform components' -BestEffort `
-            -Check { Test-DevConfigWslPlatformActive } `
+            -Check { Test-DevConfigWslComponentsReady } `
             -Apply { param($OrchestratorPath) Install-DevConfigWslPlatform -OrchestratorPath $OrchestratorPath } `
             -ArgumentList @($OrchestratorPath)
         New-DevConfigStep -Name 'WslUbuntu' -Description 'Install the default Ubuntu distro' -BestEffort `
