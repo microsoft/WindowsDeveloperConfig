@@ -19,7 +19,7 @@ and handles session-level glue (PATH refresh, CI sentinel).
 
 Two flows are **PowerShell-native** instead: Calm OS
 (`src/windows-dev-config/`) and Comfort Shell (`src/wsl-comfort/`). They
-need work a configuration file can't express — elevation, a reboot with an
+need work a configuration file doesn't express well — elevation, a reboot with an
 automatic resume, an interactive progress display — so they ship as
 PowerShell scripts with no configuration file at all. They keep the same
 idempotency contract: every step checks current state, acts only when
