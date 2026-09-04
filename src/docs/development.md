@@ -55,6 +55,11 @@ Command Palette extension.
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCLI` + WinUI/Universal/ManagedDesktop VS workloads |
 | Windows Dev Config | 🙋 manual     | A full distraction-free workstation, in PowerShell: 15 apps + 25 registry values + fonts + Windows Terminal + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
+| NVIDIA CUDA       | 🙋 manual     | `Nvidia.CUDA`; validates toolkit separately from NVIDIA driver/GPU readiness |
+| Foundry Local     | 🙋 manual     | `Microsoft.FoundryLocal` architecture-native WinML package; no CUDA dependency |
+| PyTorch           | 🙋 manual     | `Python.Python.3.13` + private PyTorch CPU/CUDA venv + compatible Triton Windows |
+| llama.cpp         | 🙋 manual     | `ggml.llamacpp` x64/Vulkan or SHA-256-verified upstream ARM64/CPU release |
+| Ollama            | 🙋 manual     | `Ollama.Ollama` x64 desktop or `Ollama.Ollama.Portable` ARM64 + API readiness |
 | Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative
@@ -86,6 +91,11 @@ Workloads/
   rust/            # configuration.winget (core) + install.ps1 (thin shim)
   winforms/        # configuration.winget (core) + install.ps1 (thin shim)
   winui/           # configuration.winget (core) + install.ps1 (thin shim)
+  cuda/            # x64 CUDA Toolkit + compiler/driver/GPU readiness checks
+  foundry/          # x64/ARM64 Foundry Local + model-free server readiness
+  pytorch/          # x64/ARM64 Python + contained backend-selected environment
+  llama.cpp/       # x64 WinGet or verified ARM64 release + CLI readiness
+  ollama/          # architecture-specific WinGet config + local API readiness
 windows-dev-config/    # Windows Dev Config — bootstrap.ps1 (remote entry) + dev-config.ps1 (orchestrator) + steps/*.ps1 + README.md
 wsl-comfort/           # Comfort Shell — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
 tests/
@@ -243,6 +253,47 @@ installed, also run:
 ```powershell
 Invoke-ScriptAnalyzer -Recurse -Path ./Workloads, ./tests/_harness
 ```
+
+The hardware-dependent AI workloads also provide pure decision tests that do
+not require a GPU or install software:
+
+```powershell
+foreach ($id in 'cuda','foundry','pytorch','llama.cpp','ollama') {
+    & ".\tests\$id\unit.ps1"
+}
+```
+
+These cover architecture selection, backend and dependency decisions,
+idempotent plan construction, missing tool/hardware errors, and generated pip
+arguments. Their runtime probes remain `manual_test` because hosted CI cannot
+exercise the required GPUs, local servers, or multi-gigabyte installers.
+
+### AI workload support and manual verification
+
+Run from the `src` directory:
+
+```powershell
+.\Workloads\cuda\install.ps1
+.\Workloads\foundry\install.ps1
+.\Workloads\pytorch\install.ps1
+.\Workloads\llama.cpp\install.ps1
+.\Workloads\ollama\install.ps1
+```
+
+| Flow | x64 behavior | ARM64 behavior | Readiness signal |
+| --- | --- | --- | --- |
+| CUDA | WinGet CUDA Toolkit; requires NVIDIA GPU unless `-ToolkitOnly` | Fails before installation because NVIDIA publishes no Windows ARM64 Toolkit | `CUDA_TOOLKIT_READY`; separately `CUDA_GPU_READY` |
+| Foundry | WinGet x64 WinML package | WinGet ARM64 WinML package | CLI plus `foundry server status`; CUDA is never assumed |
+| PyTorch | CPU or driver-compatible CUDA wheel | Official CPU wheel | Tensor operation reports selected backend; Triton runs a vector-add kernel only on compatible CUDA x64 |
+| llama.cpp | WinGet Vulkan package | Latest official CPU ZIP with GitHub SHA-256 digest verification | `llama-cli --version` and `--help`; no model |
+| Ollama | Current WinGet desktop package | WinGet portable ARM64 package | `ollama --version`, `/api/version`, and `/api/tags`; no model |
+
+PyTorch's environment is
+`$env:LOCALAPPDATA\DevConfig\pytorch\.venv`. Auto selection never installs the
+standalone CUDA Toolkit: PyTorch wheels carry their runtime. An explicit
+`-Backend CUDA` fails if `nvidia-smi`, the driver branch, architecture, or wheel
+compatibility is insufficient. Use `-RequireTriton` when Triton is mandatory or
+`-SkipTriton` to disable it.
 
 ### 2. Validate the DSC config without applying it (Windows)
 

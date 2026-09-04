@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+$schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+metadata:
+  winget:
+    processor: dscv3
+resources:
+  - name: OllamaPortable
+    type: Microsoft.WinGet/Package
+    properties:
+      id: Ollama.Ollama.Portable
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install the WinGet-published Ollama portable ARM64 package
+      winget:
+        securityContext: elevated

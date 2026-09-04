@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+#
+# The WinGet package is currently Windows x64/Vulkan only. install.ps1 uses a
+# verified official CPU release asset on Windows ARM64.
+$schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+metadata:
+  winget:
+    processor: dscv3
+resources:
+  - name: LlamaCpp
+    type: Microsoft.WinGet/Package
+    properties:
+      id: ggml.llamacpp
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install the llama.cpp Windows x64 Vulkan CLI
+      winget:
+        securityContext: elevated

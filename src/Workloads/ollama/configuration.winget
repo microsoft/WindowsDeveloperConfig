@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+#
+# Windows x64 desktop package. install.ps1 selects configuration.arm64.winget
+# on ARM64 because the desktop package does not publish an ARM64 installer.
+$schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+metadata:
+  winget:
+    processor: dscv3
+resources:
+  - name: Ollama
+    type: Microsoft.WinGet/Package
+    properties:
+      id: Ollama.Ollama
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install the Ollama Windows desktop application on x64
+      winget:
+        securityContext: elevated
