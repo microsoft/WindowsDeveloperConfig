@@ -17,7 +17,7 @@ resource, so everything the flow needs lives in one YAML file. A small
 `install.ps1` shim next to it applies the config with `winget configure`
 and handles session-level glue (PATH refresh, CI sentinel).
 
-Two flows are **PowerShell-native** instead: Calm OS
+Two flows are **PowerShell-native** instead: Windows Dev Config
 (`src/windows-dev-config/`) and Comfort Shell (`src/wsl-comfort/`). They
 need work a configuration file doesn't express well — elevation, a reboot with an
 automatic resume, an interactive progress display — so they ship as
@@ -54,7 +54,7 @@ Command Palette extension.
 | PowerShell        | ✅ automated   | `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCLI` + WinUI/Universal/ManagedDesktop VS workloads |
-| Calm OS           | 🙋 manual     | A full distraction-free workstation, in PowerShell: 15 apps + 25 registry values + fonts + Windows Terminal + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
+| Windows Dev Config | 🙋 manual     | A full distraction-free workstation, in PowerShell: 15 apps + 25 registry values + fonts + Windows Terminal + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
 | Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative
@@ -86,7 +86,7 @@ Workloads/
   rust/            # configuration.winget (core) + install.ps1 (thin shim)
   winforms/        # configuration.winget (core) + install.ps1 (thin shim)
   winui/           # configuration.winget (core) + install.ps1 (thin shim)
-windows-dev-config/    # Calm OS — bootstrap.ps1 (remote entry) + dev-config.ps1 (orchestrator) + steps/*.ps1 + README.md
+windows-dev-config/    # Windows Dev Config — bootstrap.ps1 (remote entry) + dev-config.ps1 (orchestrator) + steps/*.ps1 + README.md
 wsl-comfort/           # Comfort Shell — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
 tests/
   _harness/          # build-run-diff harness used by CI:
@@ -128,7 +128,7 @@ This repo carries **two parallel copies** of every flow:
 | `src/docs/development.md`     | Contributor docs (CI, validation, how to add a language).         | **Yes**  | n/a      |
 | `src/tests/`                  | Hello-world programs + expected stdout used by the CI harness.    | **Yes**  | CI only  |
 
-**End users**: the commands in the top-level [README](../../README.md) point at the **top-level signed copies** wherever those copies exist, so on a Windows box you don't need to know `src/` exists. The one exception is Calm OS: its `bootstrap.ps1` is new and hasn't been through a sign cycle yet, so the README's one-liner points at `src/windows-dev-config/bootstrap.ps1`. That's deliberate — the bootstrap requires the *signed* payload from the repository root by default, verifies every payload `.ps1` has a valid Microsoft Corporation Authenticode signature, and stops before installation if any check fails. Contributors can explicitly select `src/windows-dev-config/` and bypass signature validation with `-AllowUnsigned` while testing a ref before its signed copy exists. Repoint the README at the top-level copy once it lands.
+**End users**: the commands in the top-level [README](../../README.md) point at the **top-level signed copies** wherever those copies exist, so on a Windows box you don't need to know `src/` exists. The one exception is Windows Dev Config: its `bootstrap.ps1` is new and hasn't been through a sign cycle yet, so the README's one-liner points at `src/windows-dev-config/bootstrap.ps1`. That's deliberate — the bootstrap requires the *signed* payload from the repository root by default, verifies every payload `.ps1` has a valid Microsoft Corporation Authenticode signature, and stops before installation if any check fails. Contributors can explicitly select `src/windows-dev-config/` and bypass signature validation with `-AllowUnsigned` while testing a ref before its signed copy exists. Repoint the README at the top-level copy once it lands.
 
 **Contributors**: edit `src/`. The top-level paths are **regenerated** by [`.pipelines/OneBranch.SignAndPackage.yml`](../../.pipelines/OneBranch.SignAndPackage.yml), which Authenticode-signs every `src/**/*.ps1` and ships them (plus the `.winget` configs and the manifest) as the release artifact. The signed copies were merged into `main` from the `signed` branch in [PR #6](https://github.com/microsoft/WindowsDeveloperConfig/pull/6). A change to a `src/` script becomes a new signed top-level copy on the next sign cycle, not at PR merge, so the two can briefly disagree on a script's body until that cycle runs.
 
