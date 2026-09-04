@@ -226,6 +226,91 @@ flows:
       expected: src/tests/python/expected.txt
       version: "python --version; uv --version"
 
+  - id: cuda
+    name: NVIDIA CUDA
+    description: CUDA Toolkit with separate compiler and NVIDIA GPU/driver readiness checks
+    category: ai
+    tags: [ai, cuda, nvidia, gpu, machine-learning]
+    icon: 🟩
+    onboardingUrl: https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/
+    manual_test: true
+    os: [windows]
+    windows:
+      install: Workloads/cuda/install.ps1
+      configuration: Workloads/cuda/configuration.winget
+      build: ""
+      run: pwsh -NoProfile -File src/tests/cuda/probe.ps1
+      expected: src/tests/cuda/expected.txt
+      version: "nvcc --version; nvidia-smi"
+
+  - id: foundry
+    name: Foundry Local
+    description: Local model runtime with WinML acceleration and no CUDA dependency
+    category: ai
+    tags: [ai, foundry, winml, local-models, inference]
+    icon: 🧠
+    onboardingUrl: https://learn.microsoft.com/windows/ai/foundry-local/get-started
+    manual_test: true
+    os: [windows]
+    windows:
+      install: Workloads/foundry/install.ps1
+      configuration: Workloads/foundry/configuration.winget
+      build: ""
+      run: pwsh -NoProfile -File src/tests/foundry/probe.ps1
+      expected: src/tests/foundry/expected.txt
+      version: "foundry --version; foundry server status"
+
+  - id: pytorch
+    name: PyTorch
+    description: Contained PyTorch environment with CPU/CUDA selection and guarded Triton Windows
+    category: ai
+    tags: [ai, pytorch, python, cuda, triton, machine-learning]
+    icon: 🔥
+    onboardingUrl: https://pytorch.org/get-started/locally/
+    manual_test: true
+    os: [windows]
+    windows:
+      install: Workloads/pytorch/install.ps1
+      configuration: Workloads/pytorch/configuration.winget
+      build: ""
+      run: pwsh -NoProfile -File src/tests/pytorch/probe.ps1
+      expected: src/tests/pytorch/expected.txt
+      version: "& \"$env:LOCALAPPDATA\\DevConfig\\pytorch\\.venv\\Scripts\\python.exe\" -c \"import torch; print(torch.__version__)\""
+
+  - id: llama.cpp
+    name: llama.cpp
+    description: Native llama.cpp CLI using WinGet on x64 and a verified CPU release on ARM64
+    category: ai
+    tags: [ai, llama, gguf, inference, local-models, vulkan]
+    icon: 🦙
+    onboardingUrl: https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md
+    manual_test: true
+    os: [windows]
+    windows:
+      install: Workloads/llama.cpp/install.ps1
+      configuration: Workloads/llama.cpp/configuration.winget
+      build: ""
+      run: pwsh -NoProfile -File src/tests/llama.cpp/probe.ps1
+      expected: src/tests/llama.cpp/expected.txt
+      version: "llama-cli --version"
+
+  - id: ollama
+    name: Ollama
+    description: Ollama CLI plus local API readiness without downloading a model
+    category: ai
+    tags: [ai, ollama, local-models, inference, api]
+    icon: 🦙
+    onboardingUrl: https://docs.ollama.com/windows
+    manual_test: true
+    os: [windows]
+    windows:
+      install: Workloads/ollama/install.ps1
+      configuration: Workloads/ollama/configuration.winget
+      build: ""
+      run: pwsh -NoProfile -File src/tests/ollama/probe.ps1
+      expected: src/tests/ollama/expected.txt
+      version: "ollama --version"
+
   - id: sql
     name: Lightweight SQL Developer
     description: SQL Server Developer + sqlcmd + VS Code SQL database projects extension

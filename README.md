@@ -13,7 +13,7 @@
   <span> · </span>
   <a href="#-wsl-comfort">WSL Comfort</a>
   <span> · </span>
-  <a href="#-single-language-workloads">Workloads</a>
+  <a href="#-focused-workloads">Workloads</a>
   <span> · </span>
   <a href="#-troubleshooting">Troubleshooting</a>
 </h3>
@@ -30,7 +30,7 @@ Three developer setups live in this repo. Pick the one that matches what you wan
 | --- | --- |
 | A complete dev workstation: tools, OS settings, WSL, and terminal. One command, restarts once. | [Windows Dev Config](#%EF%B8%8F-windows-dev-config) |
 | A polished WSL shell: zsh/bash, Starship, CLI tools, and a themed terminal profile. Interactive or unattended. | [WSL Comfort](#-wsl-comfort) |
-| A single language toolchain: Node, Python, SQL, PowerShell, .NET, Rust, Go, Java, PHP, WinForms, or WinUI 3. One command each. | [Workloads](#-single-language-workloads) |
+| A focused language or Windows AI toolchain. One command each. | [Workloads](#-focused-workloads) |
 
 Most of the single-language workloads use [`winget configure`](https://learn.microsoft.com/en-us/windows/package-manager/winget/configure). If you've never used it before, enable it once:
 
@@ -115,7 +115,7 @@ Full details: [`wsl-comfort/readme.md`](./wsl-comfort/readme.md).
 
 <br/>
 
-## 🧪 Single-language workloads
+## 🧪 Focused workloads
 
 Just want one toolchain? Pick a row. Each workload ships a `configuration.winget` file plus a matching `install.ps1` shim that applies it and refreshes PATH in the current session.
 
@@ -132,6 +132,11 @@ Just want one toolchain? Pick a row. Each workload ships a `configuration.winget
 | PowerShell | PowerShell 7 + VS Code PowerShell extensions + PSScriptAnalyzer settings | `winget configure -f .\Workloads\powershell\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | WinForms   | .NET SDK 10 + Windows Forms desktop workload                            | `winget configure -f .\Workloads\winforms\configuration.winget --accept-configuration-agreements --disable-interactivity`   |
 | WinUI 3    | .NET SDK 10 + Visual Studio Community + Windows App SDK / WinUI 3 + WinAppCLI | `winget configure -f .\Workloads\winui\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| NVIDIA CUDA | CUDA Toolkit; verifies `nvcc` separately from NVIDIA driver/GPU readiness | `.\Workloads\cuda\install.ps1` |
+| Foundry Local | Architecture-native WinML package; verifies CLI and local server without a model | `.\Workloads\foundry\install.ps1` |
+| PyTorch | CPython 3.13 + contained PyTorch CPU/CUDA environment; compatible Triton Windows where supported | `.\Workloads\pytorch\install.ps1` |
+| llama.cpp | x64 Vulkan package or verified ARM64 CPU release; verifies CLI without a model | `.\Workloads\llama.cpp\install.ps1` |
+| Ollama | Architecture-appropriate WinGet package; verifies CLI and local API without a model | `.\Workloads\ollama\install.ps1` |
 
 Want the PATH refresh in your current shell? Use the matching shim instead of calling `winget configure` directly:
 
@@ -140,6 +145,50 @@ Want the PATH refresh in your current shell? Use the matching shim instead of ca
 ```
 
 > **Heads up:** WinForms and WinUI 3 pull down several gigabytes of Visual Studio components. Fine on a real workstation, painful on a small VM.
+
+### Windows AI workload support
+
+The AI flows are independent. CUDA is available as an explicit workload, but
+Foundry Local, PyTorch, llama.cpp, and Ollama do not install it unless their own
+supported path needs it. Package availability is checked by WinGet at run time;
+the catalog versions observed on 2026-09-04 were CUDA 13.3, Foundry Local
+0.10.3.0, llama.cpp b10795, Ollama desktop 0.33.3, and Ollama portable 0.32.5.
+
+| Workload | Windows x64 | Windows ARM64 | Prerequisites and selected path |
+| --- | --- | --- | --- |
+| CUDA | Supported | Not published | NVIDIA GPU + current driver by default. `-ToolkitOnly` permits compiler-only setup. |
+| Foundry Local | Supported | Supported | Windows 11 24H2/build 26100+. Uses WinML and does **not** require CUDA. |
+| PyTorch | CPU or NVIDIA CUDA | CPU | Python 3.13 in a private venv. Auto uses a verified CUDA wheel only when `nvidia-smi` and the driver are compatible. |
+| Triton Windows | CUDA only, compute capability 8.0+ | Skipped | Installed and kernel-tested only with the compatible PyTorch 2.14 CUDA/Python stack. |
+| llama.cpp | WinGet Vulkan build | Verified official CPU ZIP | No model is downloaded. The ARM64 download must carry a GitHub-published SHA-256 digest. |
+| Ollama | WinGet desktop package | WinGet portable package | Starts or reuses `ollama serve`, then verifies `/api/version` and `/api/tags`. |
+
+Run a flow from PowerShell:
+
+```powershell
+.\Workloads\cuda\install.ps1
+.\Workloads\foundry\install.ps1
+.\Workloads\pytorch\install.ps1
+.\Workloads\llama.cpp\install.ps1
+.\Workloads\ollama\install.ps1
+```
+
+PyTorch accepts explicit backend and Triton policy switches:
+
+```powershell
+.\Workloads\pytorch\install.ps1 -Backend CPU
+.\Workloads\pytorch\install.ps1 -Backend CUDA -RequireTriton
+```
+
+Readiness is intentionally model-free. CUDA runs `nvcc` and `nvidia-smi`;
+Foundry checks `foundry server status`; PyTorch performs a real tensor operation
+and, when compatible, a Triton GPU kernel; llama.cpp checks `llama-cli`; and
+Ollama checks its local HTTP API. After supplying your own GGUF model, invoke
+llama.cpp with:
+
+```powershell
+llama-cli -m C:\models\model.gguf -p "Hello from Windows"
+```
 
 <br/>
 

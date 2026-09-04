@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+$schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+metadata:
+  winget:
+    processor: dscv3
+resources:
+  - name: Python
+    type: Microsoft.WinGet/Package
+    properties:
+      id: Python.Python.3.13
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install CPython 3.13, supported by PyTorch on Windows x64 and ARM64
+      winget:
+        securityContext: elevated
