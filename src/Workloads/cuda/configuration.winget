@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+#
+# NVIDIA's current Windows CUDA Toolkit package is x64-only. install.ps1
+# rejects ARM64 before applying this configuration.
+$schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+metadata:
+  winget:
+    processor: dscv3
+resources:
+  - name: CudaToolkit
+    type: Microsoft.WinGet/Package
+    properties:
+      id: Nvidia.CUDA
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install the NVIDIA CUDA Toolkit
+      winget:
+        securityContext: elevated
