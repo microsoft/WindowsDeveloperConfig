@@ -5,35 +5,41 @@
 > CI / "how the sausage gets made" guide.
 
 Opinionated, CI-validated configurations for bootstrapping developer
-toolchains and Windows-desktop personalities using `winget` /
-`winget configure`.
+toolchains and Windows-desktop personalities.
 
-On Windows the **core artifact of each flow is a [winget DSC configuration
-file](https://learn.microsoft.com/windows/package-manager/configuration/)**
-(`configuration.winget` for language toolchains, `dev-config.winget` for the
-Calm OS flow) — a declarative, idempotent description of the machine state
-required for that flow. Where winget alone is not enough (e.g. `npm install
---global typescript`, registry tweaks, or a `RunOnce` reboot dance) the
+Most flows are built around a [winget DSC configuration
+file](https://learn.microsoft.com/windows/package-manager/configuration/)
+(`configuration.winget`) — a declarative, idempotent description of the
+machine state required for that flow. Where winget alone is not enough
+(e.g. `npm install --global typescript` or a registry tweak) the
 configuration calls a DSC `Script` / `RunCommandOnSet` / `Registry`
 resource, so everything the flow needs lives in one YAML file. A small
 `install.ps1` shim next to it applies the config with `winget configure`
 and handles session-level glue (PATH refresh, CI sentinel).
 
-Every flow is **exercised on a real GitHub-hosted runner** on every push, pull
-request, and nightly: the DSC config is applied, then a canonical "hello
+Two flows are **PowerShell-native** instead: Windows Dev Config
+(`src/windows-dev-config/`) and Comfort Shell (`src/wsl-comfort/`). They
+need work a configuration file doesn't express well — elevation, a reboot with an
+automatic resume, an interactive progress display — so they ship as
+PowerShell scripts with no configuration file at all. They keep the same
+idempotency contract: every step checks current state, acts only when
+needed, and verifies the result.
+
+Every automated flow is **exercised on a real GitHub-hosted runner** on every
+push, pull request, and nightly: the flow is applied, then a canonical "hello
 world" is built and executed, and its stdout is diffed against a checked-in
 expected output. If a flow's hello world prints the right thing, we know the
 configuration actually produced a working toolchain.
 
 ## Supported flows
 
-Each flow's `configuration.winget` (or `dev-config.winget` for Calm OS)
-is the source of truth for what gets installed; the table below
-summarizes it for quick scanning. Flows marked **manual** are excluded
-from the automated CI matrix (they need an interactive desktop session
-or pull multi-GB workloads we don't want to chew minutes on), but are
-still verified end-to-end on demand and surfaced in the Command Palette
-extension.
+Each flow's `configuration.winget` — or, for the two PowerShell-native
+flows, its entry script — is the source of truth for what gets installed;
+the table below summarizes it for quick scanning. Flows marked **manual**
+are excluded from the automated CI matrix (they need an interactive
+desktop session or pull multi-GB workloads we don't want to chew minutes
+on), but are still verified end-to-end on demand and surfaced in the
+Command Palette extension.
 
 | Flow              | CI status     | Installs                                                                                |
 | ----------------- | ------------- | --------------------------------------------------------------------------------------- |
@@ -48,7 +54,7 @@ extension.
 | PowerShell        | ✅ automated   | `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCLI` + WinUI/Universal/ManagedDesktop VS workloads |
-| Calm OS           | 🙋 manual     | A full distraction-free workstation: apps + ~24 registry tweaks + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
+| Windows Dev Config | 🙋 manual     | A full distraction-free workstation, in PowerShell: 15 apps + 25 registry values + fonts + Windows Terminal + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
 | Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative
@@ -80,7 +86,7 @@ Workloads/
   rust/            # configuration.winget (core) + install.ps1 (thin shim)
   winforms/        # configuration.winget (core) + install.ps1 (thin shim)
   winui/           # configuration.winget (core) + install.ps1 (thin shim)
-windows-dev-config/    # Calm OS — dev-config.winget (single-file DSC) + install.ps1 + README.md
+windows-dev-config/    # Windows Dev Config — bootstrap.ps1 (remote entry) + dev-config.ps1 (orchestrator) + steps/*.ps1 + README.md
 wsl-comfort/           # Comfort Shell — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
 tests/
   _harness/          # build-run-diff harness used by CI:
@@ -122,9 +128,11 @@ This repo carries **two parallel copies** of every flow:
 | `src/docs/development.md`     | Contributor docs (CI, validation, how to add a language).         | **Yes**  | n/a      |
 | `src/tests/`                  | Hello-world programs + expected stdout used by the CI harness.    | **Yes**  | CI only  |
 
-**End users**: the commands in the top-level [README](../../README.md) point at the **top-level signed copies** on purpose. If you're following the README on a Windows box you don't need to know `src/` exists. Every `winget configure -f .\windows-dev-config\dev-config.winget`-style invocation in the README is correct as written.
+**End users**: the commands in the top-level [README](../../README.md) point at the **top-level signed copies** wherever those copies exist, so on a Windows box you don't need to know `src/` exists. The one exception is Windows Dev Config: its `bootstrap.ps1` is new and hasn't been through a sign cycle yet, so the README's one-liner points at `src/windows-dev-config/bootstrap.ps1`. That's deliberate — the bootstrap requires the *signed* payload from the repository root by default, verifies every payload `.ps1` has a valid Microsoft Corporation Authenticode signature, and stops before installation if any check fails. Contributors can explicitly select `src/windows-dev-config/` and bypass signature validation with `-AllowUnsigned` while testing a ref before its signed copy exists. Repoint the README at the top-level copy once it lands.
 
 **Contributors**: edit `src/`. The top-level paths are **regenerated** by [`.pipelines/OneBranch.SignAndPackage.yml`](../../.pipelines/OneBranch.SignAndPackage.yml), which Authenticode-signs every `src/**/*.ps1` and ships them (plus the `.winget` configs and the manifest) as the release artifact. The signed copies were merged into `main` from the `signed` branch in [PR #6](https://github.com/microsoft/WindowsDeveloperConfig/pull/6). A change to a `src/` script becomes a new signed top-level copy on the next sign cycle, not at PR merge, so the two can briefly disagree on a script's body until that cycle runs.
+
+**Deleting a file is the one case where you must touch both trees.** The sign pipeline only adds and overwrites — it never deletes. A file removed from `src/` therefore stays at the top level forever, still published and still runnable, until someone removes it by hand. So when you delete or rename a flow artifact, `git rm` it from **both** `src/…` and the matching top-level path in the same PR. (The drift guard won't catch this for you: a file that exists in neither tree produces no report entry at all.)
 
 **CI**: GitHub Actions ([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)) runs the **unsigned `src/` copies** (e.g. `./src/Workloads/_common/preflight.ps1`). This is intentional: CI exercises what contributors edit; signing is a release-time concern, not a build-time one.
 
@@ -132,6 +140,7 @@ This repo carries **two parallel copies** of every flow:
 
 - Don't edit a top-level signed copy directly. The next sign cycle will overwrite it, and the cycle signs `src/`, not the top level.
 - Don't expect the two trees to be byte-identical. The signed copies carry an Authenticode signature block (`# SIG # Begin signature block` … `# SIG # End signature block`); the bodies above that marker should match what's in `src/`. They will diverge for the window between a `src/` change landing on `main` and the next sign cycle catching up.
+- Don't delete from `src/` only. See above — removals are the one change the pipeline can't propagate.
 - Don't add a third copy of anything. Both copies exist for one reason only (to ship signed PS1s without losing the unsigned source), and any new flow or shared script lives only in `src/` until the sign pipeline mirrors it.
 
 ### Signed-copy drift guard

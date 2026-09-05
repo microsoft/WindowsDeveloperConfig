@@ -1,282 +1,478 @@
-# Dev Configuration
+# Windows Dev Config
 
-A WinGet Configuration (DSC) file that sets up a clean, lightweight, distraction-free developer workstation. The goal is a PC state that devs actually love using: no clutter, no noise, just the tools you need.
+*Turns a fresh Windows 11 machine into a clean, distraction-free developer workstation in one command.*
 
-This mirrors the curated environment currently provided by Cloud PC, so developers get a consistent experience regardless of device.
+This flow installs the tools you'd install anyway, applies the Windows settings you'd change anyway, and sets up WSL + Ubuntu including the reboot in the middle. It is a set of PowerShell scripts: no configuration file to point at, no repo to clone, nothing to install first.
 
-The flow is a single DSC document (`dev-config.winget`) that handles everything end-to-end: elevation, the OS tweaks, the apps, the fonts, the shell prompt, and the WSL platform + Ubuntu install (including the reboot dance).
+It is **idempotent** — every change is checked before it's made, so re-running it only fixes what has drifted. It is also **resumable** — if it fails, or you close the window, running it again picks up where it left off.
 
-> **Author:** Hamza Usmani.
+> **Original design and curation:** Hamza Usmani.
 
-## Table of Contents
+## Table of contents
 
-- [Goals](#goals)
-- [Prerequisites](#prerequisites)
-- [Usage](#usage)
-- [What this configures](#what-this-configures)
-- [Configuration details](#configuration-details)
-  - [Phase resources (elevation + WSL)](#phase-resources-elevation--wsl)
-  - [Apps](#apps)
-  - [Theme and OS](#theme-and-os)
-  - [File Explorer](#file-explorer)
-  - [Taskbar](#taskbar)
-  - [Start, Search, Notifications](#start-search-notifications)
-  - [Services and features](#services-and-features)
-  - [Edge](#edge)
-  - [Fonts](#fonts)
-  - [Windows Terminal](#windows-terminal)
-  - [PowerShell profile](#powershell-profile)
-- [Customization](#customization)
-- [Design decisions](#design-decisions)
-- [Known caveats](#known-caveats)
+- [Quick start](#quick-start)
+- [What to expect](#what-to-expect)
+- [Requirements](#requirements)
+- [Before you run this](#before-you-run-this)
+- [What it changes](#what-it-changes)
+- [How it works](#how-it-works)
+- [Running it other ways](#running-it-other-ways)
+- [Security](#security)
+- [Troubleshooting](#troubleshooting)
+- [Undoing it](#undoing-it)
+- [Customizing it](#customizing-it)
+- [Known limitations](#known-limitations)
+- [For contributors](#for-contributors)
 
 ---
 
-## Goals
+## Quick start
 
-- **A PC devs actually want to use.** Clean Explorer, dark theme, no pop-ups, no recommendations, no widgets. Just your code and your tools.
-- **Cloud PC parity.** Same tooling, OS settings, and policies as the current Cloud PC image.
-- **One command.** `winget configure -f dev-config.winget --accept-configuration-agreements --disable-interactivity` takes a fresh Windows machine to fully ready, including WSL + Ubuntu (with an auto-resume across the required reboot).
-- **Idempotent.** Safe to re-run on existing machines to apply updates or fix drift. Every resource has a `testScript` or DSC-native idempotency.
-
-## Prerequisites
-
-- Windows 11 (latest).
-- `winget` with the DSC v3 processor available (the file uses `Microsoft.WinGet/Package`, `Microsoft.Windows/Registry`, and `Microsoft.DSC.Transitional/*`).
-- Administrator rights — the `ElevationCheck` resource will auto-relaunch winget elevated via `Start-Process -Verb RunAs` if you started in an unelevated session, but you'll need to consent at the UAC prompt.
-- The Microsoft Visual C++ Redistributable when invoking `winget` from a non-elevated environment. Without it, `winget configure` fails with an internal error. See [aka.ms/vcredist](https://aka.ms/vcredist) or install via winget (see the Usage callout below).
-- The repo on disk. `winget configure` reads a local file path, and the bootstrap is what installs Git, so on a fresh machine you'll either `git clone` (if Git is already installed) or download the repo as a ZIP from GitHub and extract it before running.
-- **Hardware virtualization must be available to the OS** before WSL can install. On bare metal, this means virtualization (VT-x / AMD-V) is enabled in BIOS/UEFI. Inside a VM, it means the host has exposed nested virtualization to the guest. See the Usage callout below.
-
-## Usage
-
-> [!IMPORTANT]
-> If `winget` is being invoked from a **non-elevated** environment, the Microsoft Visual C++ Redistributable ([aka.ms/vcredist](https://aka.ms/vcredist)) must also be installed — without it `winget configure` fails with an internal error. Install it once with the command for your machine's architecture:
->
-> ```powershell
-> # x64:
-> winget install Microsoft.VCRedist.2015+.x64
->
-> # ARM64:
-> winget install Microsoft.VCRedist.2015+.arm64
-> ```
-
-> [!IMPORTANT]
-> **WSL needs hardware virtualization.** If virtualization isn't available to the OS, the `InstallUbuntu` step fails with `wsl --install ... failed with exit code -1`.
->
-> - **On bare metal:** enable virtualization (VT-x / AMD-V) in your BIOS/UEFI. The exact label varies by vendor — check your motherboard or laptop manufacturer's documentation if you can't find it. Reboot into firmware settings, toggle it on, save, and reboot back into Windows.
-> - **Inside a VM:** the host must expose nested virtualization to the guest. For a Hyper-V host, run this from an elevated PowerShell session **on the host** (with the guest VM powered off):
->
->   ```powershell
->   Set-VMProcessor -VMName <VM_NAME> -ExposeVirtualizationExtensions $true
->   ```
->
->   Other hypervisors have their own equivalent settings — check your hypervisor's documentation.
-
-**Get the files first** (skip if you already have the repo locally):
+Open **any** PowerShell window — Windows PowerShell or PowerShell 7, elevated or not — and run:
 
 ```powershell
-# Git already installed:
-git clone https://github.com/microsoft/WindowsDeveloperConfig.git
-cd WindowsDeveloperConfig\windows-dev-config
-
-# Otherwise, download and extract the ZIP:
-Invoke-WebRequest -Uri https://github.com/microsoft/WindowsDeveloperConfig/archive/refs/heads/main.zip -OutFile WindowsDeveloperConfig.zip
-Expand-Archive .\WindowsDeveloperConfig.zip -DestinationPath .
-cd .\WindowsDeveloperConfig-main\windows-dev-config
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -AllowUnsigned
 ```
 
-**Full setup (recommended):**
+That's the whole thing. You'll get one UAC prompt before setup and another after the restart.
+
+> `-AllowUnsigned` runs the source copy under `src/` instead of the signed copy at the repository root.
+
+<details>
+<summary><strong>What that command actually does</strong></summary>
+
+`irm` (`Invoke-RestMethod`) downloads [`bootstrap.ps1`](./bootstrap.ps1) as text, and running it as a script block lets you pass switches to it. The bootstrap then:
+
+1. Downloads the repository as a ZIP from `github.com/microsoft/WindowsDeveloperConfig`.
+2. Selects the setup: the signed repository-root `windows-dev-config/` folder, or `src/windows-dev-config/` with `-AllowUnsigned`.
+3. Verifies that every PowerShell file has a valid Microsoft Corporation Authenticode signature — skipped under `-AllowUnsigned`.
+4. Copies [`dev-config.ps1`](./dev-config.ps1) plus the [`steps/`](./steps) folder into `%LOCALAPPDATA%\CalmOS`, deletes its temporary download folder, and starts the setup from there.
+
+The setup is installed to disk rather than run from the pipe because it loads two dozen files from its own folder, relaunches itself elevated, and has to survive a reboot — none of which a piped-in string can do.
+
+The bootstrap never falls back to unsigned source automatically. Contributors testing a ref before its signed copy exists must explicitly pass `-AllowUnsigned`.
+
+</details>
+
+## What to expect
+
+Roughly **30 minutes** on a clean machine with a good connection, most of it spent downloading Visual Studio Code, the .NET SDK, PowerToys, and Ubuntu.
+
+| # | What happens | Your involvement |
+| - | ------------ | ---------------- |
+| 1 | The first UAC prompt appears | **Accept it.** Most of the settings are machine-wide and need Administrator. |
+| 2 | PowerShell 7 is installed if it isn't already, and the setup restarts itself on it | None |
+| 3 | Ten of the eleven phases run: packages, Windows settings, fonts, Terminal, prompt, Copilot | None. Long silent stretches during big downloads are normal — a "still working" note prints every minute |
+| 4 | WSL is installed. The machine warns you and **restarts after 10 seconds** | **Save your work before you start.** |
+| 5 | You sign back in; a window opens and the second UAC prompt appears | **Accept it** to finish the run |
+| 6 | A summary prints: how many things changed, how many were already fine | Press a key to close, or leave it — it closes itself after 15 minutes |
+
+Afterwards, open **Ubuntu** from the Start menu once to create your Linux username and password. Some Explorer and taskbar changes appear after you sign out and back in.
+
+## Requirements
+
+- **Windows 11.** Built and tested against current Windows 11 releases. A few of the settings only exist on newer builds; on older ones those steps are skipped rather than failing the run. Windows 10 is not supported.
+- **Administrator rights** on the machine, and the ability to accept both UAC prompts.
+- **Internet access** to `github.com`, `raw.githubusercontent.com`, the PowerShell Gallery, and the winget package sources. Behind a proxy, the run needs your proxy configured for WinHTTP and for `winget`.
+- **Hardware virtualization available to the OS** — WSL cannot install without it. On a physical machine that means VT-x / AMD-V enabled in BIOS/UEFI. In a VM it means the host has exposed nested virtualization to the guest. Everything except WSL still works without it; see [Troubleshooting](#troubleshooting).
+- **About 15 GB of free disk space** for the full package set.
+
+You do **not** need Git, a repository clone, `winget configure`, the Visual C++ Redistributable, or PowerShell 7 beforehand. The flow handles all of those.
+
+## Before you run this
+
+This flow is opinionated, and a few of its choices are worth knowing about up front rather than discovering later.
+
+| Change | Why it might matter to you |
+| ------ | -------------------------- |
+| **Remote Desktop is enabled** | `fDenyTSConnections` is set to `0`, which allows incoming RDP sessions. The Windows Firewall rule is *not* opened, so this alone doesn't expose the machine to your network — but it is a real change to the machine's posture. |
+| **Two Edge settings are applied as policy** | They're written under `HKLM\SOFTWARE\Policies\Microsoft\Edge`, so Edge will report "managed by your organization" and grey those two settings out in its UI. |
+| **All notifications are turned off** | Do Not Disturb is enabled globally, not just for a quiet-hours window. Teams, Outlook, and everything else stop raising toasts until you turn it back on. |
+| **Both Node.js LTS and nvm-windows are installed** | They are two different ways to manage Node. If you plan to use nvm, uninstall Node.js first so nvm owns the PATH entry. |
+| **Windows Terminal's `settings.json` is rewritten** | A `settings.json.bak` is written next to it first, but any comments in your settings file are lost, because the file is round-tripped through JSON. If the file can't be parsed, the Terminal change is flagged and skipped, the file is left untouched, and the remaining phases continue. |
+| **There's no uninstall** | Nothing that gets applied is reverted automatically. [Undoing it](#undoing-it) lists the manual reversals. |
+
+Every one of these is listed in full detail in [What it changes](#what-it-changes).
+
+## What it changes
+
+51 individual steps across 11 phases. Each one is checked first and skipped if the machine is already in that state.
+
+### Packages
+
+Installed with winget from the `winget` source, silently, with agreements accepted:
+
+| Package | winget id |
+| ------- | --------- |
+| Windows Terminal | `Microsoft.WindowsTerminal` |
+| PowerShell 7 | `Microsoft.PowerShell` |
+| Git | `Git.Git` |
+| GitHub CLI | `GitHub.cli` |
+| GitHub Copilot CLI | `GitHub.Copilot` |
+| Visual Studio Code | `Microsoft.VisualStudioCode` |
+| .NET SDK 10 | `Microsoft.DotNet.SDK.10` |
+| Python 3.14 | `Python.Python.3.14` |
+| uv | `astral-sh.uv` |
+| Node.js LTS | `OpenJS.NodeJS.LTS` |
+| nvm for Windows | `CoreyButler.NVMforWindows` |
+| Coreutils for Windows | `Microsoft.Coreutils` |
+| Oh My Posh | `JanDeDobbeleer.OhMyPosh` |
+| Windows App CLI | `Microsoft.WinAppCli` |
+| PowerToys | `Microsoft.PowerToys` |
+
+A package counts as done only when winget reports it installed **and** current, so a re-run also picks up available updates.
+
+<details>
+<summary><strong>Windows settings — all 25 registry values</strong></summary>
+
+**System** (`HKLM`, requires Administrator)
+
+| Setting | Key | Value |
+| ------- | --- | ----- |
+| Sudo, inline mode | `SOFTWARE\Microsoft\Windows\CurrentVersion\Sudo\Enabled` | `3` |
+| Developer Mode | `SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock\AllowDevelopmentWithoutDevLicense` | `1` |
+| Win32 long paths | `SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled` | `1` |
+| Remote Desktop allowed | `SYSTEM\CurrentControlSet\Control\Terminal Server\fDenyTSConnections` | `0` |
+
+**File Explorer** (`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer`)
+
+| Setting | Value name | Value |
+| ------- | ---------- | ----- |
+| Show file extensions | `Advanced\HideFileExt` | `0` |
+| Show hidden files | `Advanced\Hidden` | `1` |
+| Full path in the title bar | `Advanced\FullPathAddress` | `1` |
+| Open Explorer to This PC | `Advanced\LaunchTo` | `1` |
+| No frequent folders in Quick Access | `Advanced\ShowFrequent` | `0` |
+| No recent files in Quick Access | `ShowRecent` | `0` |
+| No recommended or cloud files | `ShowCloudFilesInQuickAccess` | `0` |
+| Git status columns in Explorer | `Advanced\NavPaneShowVersionControl` | `1` |
+| No sync-provider tips | `Advanced\ShowSyncProviderNotifications` | `0` |
+
+**Taskbar, Start, search and notifications**
+
+| Setting | Key | Value |
+| ------- | --- | ----- |
+| Do Not Disturb (all toasts off) | `HKCU\...\Notifications\Settings\NOC_GLOBAL_SETTING_TOASTS_ENABLED` | `0` |
+| Hide the Bluetooth tray icon | `HKCU\Control Panel\Bluetooth\Notification Area Icon` | `0` |
+| "End Task" on taskbar right-click | `HKCU\...\Explorer\Advanced\TaskbarEndTask` | `1` |
+| No web results in search | `HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer\DisableSearchBoxSuggestions` | `1` |
+| No search highlights | `HKCU\...\SearchSettings\IsDynamicSearchBoxEnabled` | `0` |
+| No Start menu recommendations | `HKCU\...\Explorer\Advanced\Start_IrisRecommendations` | `0` |
+| Widgets off | `HKLM\SOFTWARE\Policies\Microsoft\Dsh\AllowNewsAndInterests` | `0` |
+| No PowerToys always-on-top toasts | `HKCU\...\Notifications\Settings\PowerToys\Enabled` | `0` |
+
+Widgets are turned off through the OS policy value because the per-user taskbar icon value no longer takes effect on Windows 11 24H2 and later.
+
+**Microsoft Edge** (`HKLM\SOFTWARE\Policies\Microsoft\Edge`)
+
+| Setting | Value name | Value |
+| ------- | ---------- | ----- |
+| Blank new tab page | `NewTabPageLocation` | `about:blank` |
+| Skip the first-run experience | `HideFirstRunExperience` | `1` |
+
+**Theme** (`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize`)
+
+| Setting | Value name | Value |
+| ------- | ---------- | ----- |
+| Dark mode for apps | `AppsUseLightTheme` | `0` |
+| Dark mode for the system | `SystemUsesLightTheme` | `0` |
+
+</details>
+
+### Fonts, Terminal and prompt
+
+- **Cascadia Code NF** and **Cascadia Mono NF** are downloaded from the pinned [`microsoft/cascadia-code`](https://github.com/microsoft/cascadia-code/releases) release `2407.24`, verified against a known SHA-256, and installed **for all users** under `%SystemRoot%\Fonts`. An earlier per-user copy left by a previous run is removed.
+- **Windows Terminal** gets Cascadia Mono NF as its default font face and PowerShell 7 as its default profile. `settings.json` is backed up to `settings.json.bak` before either change.
+- **Oh My Posh** is initialized from your PowerShell 7 `$PROFILE`. If an `oh-my-posh init` line is already there, nothing is added.
+- A **GitHub Copilot** profile is added to Windows Terminal as a settings fragment in `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\DevConfig`, so it appears in the dropdown without editing your settings file.
+
+### Developer extras
+
+These are **best-effort**: they need the network and a PATH that has just been updated, so a failure is flagged in the summary rather than stopping the run.
+
+- The **WinUI templates** for `dotnet new` (`Microsoft.WindowsAppSDK.WinUI.CSharp.Templates`).
+- The **`microsoft/win-dev-skills`** marketplace and its **WinUI plugin**, registered with the GitHub Copilot CLI.
+
+### WSL
+
+- The WSL platform components, via `wsl --install --no-distribution`. If that isn't available, the `VirtualMachinePlatform` and `Microsoft-Windows-Subsystem-Linux` Windows features are enabled directly with `dism.exe` instead.
+- A restart, if one is needed — see [Reboot and resume](#reboot-and-resume).
+- **Ubuntu**, via `wsl --install -d Ubuntu --no-launch`, falling back to `--web-download` if the Microsoft Store route doesn't complete. The distro's first-run welcome screen is suppressed; open Ubuntu from the Start menu to create your Linux user.
+
+Nothing *inside* the distro is configured by this flow. For that, see [WSL Comfort](../wsl-comfort/readme.md).
+
+## How it works
+
+### The phases
+
+| # | Phase | Notes |
+| - | ----- | ----- |
+| 1 | Getting ready | Confirms PowerShell 7, then updates winget to the latest public stable release |
+| 2 | Packages | The 15 packages above, plus the PowerToys notification setting |
+| 3 | System settings | Sudo, Developer Mode, long paths, Remote Desktop |
+| 4 | File Explorer tweaks | |
+| 5 | Taskbar, search & start tweaks | |
+| 6 | Microsoft Edge tweaks | |
+| 7 | Fonts | |
+| 8 | Windows Terminal | |
+| 9 | PowerShell profile | |
+| 10 | GitHub Copilot | The Terminal profile, WinUI templates, and the Copilot CLI plugin — all best-effort |
+| 11 | WSL + Ubuntu | Last on purpose, so its restart happens after everything else is done |
+
+### Check, apply, verify
+
+Every step is a triple: a check, an apply, and the same check again.
+
+- If the check passes first time, the step prints `already OK` and nothing runs.
+- If the apply runs but the check still fails afterwards, that's an error — not a silent success.
+- Steps that aren't worth stopping the whole run for are marked **best-effort**. If one of those fails it's reported as **flagged**, the run continues, and the summary names it at the end so it doesn't scroll past you.
+
+That's why the totals in the summary can add up to more than 51: the tally is saved across the reboot and carried into the resumed run, which re-checks every step it already did. Steps counted before the restart are counted again when they're confirmed after it.
+
+### Elevation and PowerShell 7
+
+The setup relaunches itself twice before doing any work:
+
+1. **Elevated**, via UAC, if it wasn't already. Declining the prompt stops the run cleanly without changing anything.
+2. **On PowerShell 7**, installing it first if necessary. The WinGet PowerShell module behaves more consistently there than on Windows PowerShell 5.1. If PowerShell 7 can't be installed the run continues on Windows PowerShell and says so.
+
+A machine-wide lock (`Global\WindowsDevConfigSetup`) means a second copy won't start while one is running — it tells you to switch windows instead of letting two runs fight over the same installs.
+
+### Reboot and resume
+
+Enabling the WSL platform requires a restart. When one is needed, the setup:
+
+1. Registers a scheduled task named **`WindowsDevConfigResume`** that runs at your next logon, as you, at normal privilege after a 30-second delay.
+2. Saves its progress so far to `devconfig-tally.json`.
+3. Prints a warning and restarts after **10 seconds**.
+
+After you sign in, the task opens a window and Windows asks for fresh UAC consent before resuming elevated. Accept it to finish the run, print the combined summary for both halves, and remove the task. If Windows refuses the restart, the setup tells you and leaves the task registered — restart whenever you like and it still resumes.
+
+Only one restart is ever performed. If WSL still isn't usable after it, the run stops and explains why rather than rebooting again.
+
+### Logs
+
+A full transcript is written to **`devconfig-log.txt`** next to `dev-config.ps1` — so `%LOCALAPPDATA%\CalmOS\devconfig-log.txt` for the one-liner. The path is printed at the end of every run.
+
+The transcript is more verbose than the console on purpose: it records handled errors and raw command output that are deliberately kept off screen. Text in the log that isn't on your console is usually something the run recovered from.
+
+## Running it other ways
+
+**From a clone, with the repo already on disk:**
 
 ```powershell
-winget configure -f dev-config.winget --accept-configuration-agreements --disable-interactivity
+.\src\windows-dev-config\dev-config.ps1
 ```
 
-This is the canonical invocation documented in the header of `dev-config.winget`.
+**Pin a tag, or try a branch.** `-Ref` takes a branch, tag, or commit SHA. Passing arguments needs the script-block form rather than `| iex`:
 
-**What to expect:**
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Ref 'v1.2.3'
+```
 
-1. The first phase applies all OS tweaks, installs apps, installs Cascadia Code/Mono Nerd Fonts, and configures Windows Terminal and the PowerShell profile.
-2. WSL platform components install; the DSC reboots the machine and registers a `RunOnce` resume.
-3. After login, winget configure resumes automatically and installs the default Ubuntu distro.
-4. Open Ubuntu from the Start menu to complete its first-launch setup (create a UNIX username and password).
+**Test an unsigned branch.** `-AllowUnsigned` selects `src/windows-dev-config/` instead of the signed repository-root copy:
 
-The configuration is idempotent, so it is safe to re-run after reboot or at any later point.
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Ref 'my-branch' -AllowUnsigned
+```
 
-## What this configures
+**Download it but don't run it**, so you can read it first:
 
-- **14 apps** via winget (PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14, UV, Node.js LTS, NVM for Windows, Coreutils for Windows, Windows Application CLI, plus optional Oh My Posh and PowerToys).
-- **WSL + Ubuntu**, installed via 3 transitional script resources that bracket a reboot (Phase 2/3/4 below).
-- **~24 registry settings** for theme/OS, Explorer, Taskbar, Search, Start, Notifications, Edge, Sudo, and the Widget service.
-- **Cascadia Code & Cascadia Mono Nerd Fonts** downloaded from the `microsoft/cascadia-code` GitHub release and registered per-user.
-- **5 script resources** beyond the WSL phases:
-  - `ElevationCheck` — re-launches winget elevated if not already admin.
-  - `darkTheme` — applies the built-in `dark.theme` to switch to dark mode.
-  - `InstallCascadiaCodeNerdFonts` — downloads and installs the Nerd Font variants of Cascadia Code/Mono.
-  - `SetCascadiaNfAsDefault` — sets `Cascadia Mono NF` as the default font face in Windows Terminal's `settings.json`.
-  - `ps7default` — sets PowerShell 7 as Windows Terminal's default profile.
-  - `ohMyPoshProfileSet` — adds `oh-my-posh init pwsh | Invoke-Expression` to `$PROFILE` and dot-sources it.
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -NoLaunch
+```
 
----
+**Install somewhere else:** `-InstallRoot 'D:\tools\devconfig'`. The location has to survive the reboot, so avoid `%TEMP%`.
 
-## Configuration details
+**Already elevated and want it to stay that way:** `dev-config.ps1 -NoElevate` fails fast instead of prompting.
 
-All resources are dscv3 (`$schema: .../DSC/main/schemas/2023/08/config/document.json`, `metadata.winget.processor.identifier: dscv3`). Every resource that touches HKLM or runs elevated tools depends on `ElevationCheck`.
+## Security
 
-Package resources use `Microsoft.WinGet/Package` with `source: winget` and `useLatest: true` (except `Python.Python.3.14`, `Microsoft.dotnet.SDK.10`, and `OpenJS.NodeJS.LTS`, which are pinned by id).
+**What runs elevated.** The setup runs elevated after each UAC prompt. It needs Administrator for the `HKLM` settings, the WSL Windows features, and machine-wide package installs. The logon task itself runs at normal privilege, so it cannot silently elevate modified files.
 
-### Phase resources (elevation + WSL)
+**What it downloads, and from where.** GitHub (this repository, the pinned Cascadia Code release, which is checked against a SHA-256, and the latest `microsoft/winget-cli` release), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error, and neither is failing to look up the latest winget version.
 
-| Name | Type | What it does |
-|------|------|--------------|
-| `ElevationCheck` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` checks `IsInRole(Administrator)`. If false, `setScript` re-invokes `winget configure --file <this> --accept-configuration-agreements --disable-interactivity --wait` via `Start-Process -Verb RunAs`, then throws so the unelevated session ends cleanly. |
-| `InstallWslComponents` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` probes for the `vmcompute` service (presence ⇒ Virtual Machine Platform is active). `setScript` runs `wsl --install --no-distribution`. |
-| `RebootForVmp` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | Same `vmcompute` test. `setScript` registers `HKCU:\...\RunOnce\DSCConfigureResume` with the same `winget configure --file <this> --accept-configuration-agreements` command, then `Restart-Computer -Force` and throws so DSC stops the current run. |
-| `InstallUbuntu` | `Microsoft.DSC.Transitional/WindowsPowerShellScript` | `testScript` runs `wsl --list --quiet` and returns true if any distro is already registered. `setScript` runs `wsl --install -d Ubuntu --no-launch`. |
+**Code signing.** The release pipeline Authenticode-signs every `.ps1` in this repository with a Microsoft certificate and publishes the signed copies at the repository root. The bootstrap requires that signed copy by default and does not silently fall back to source. Before it copies or runs the payload, it requires every `.ps1` to have a `Valid` Authenticode signature whose signer is Microsoft Corporation; one missing, invalid, or unexpected signature stops the run. Running the unsigned `src/windows-dev-config/` payload skips these checks and requires the explicit `-AllowUnsigned` switch.
 
-All app resources that need WSL present depend on `InstallUbuntu` so the OS work happens before the reboot — but the WSL install is still part of the same `winget configure` invocation thanks to the RunOnce resume.
+**What it does not do.** It doesn't collect or send telemetry, doesn't sign you in to anything, doesn't change credentials or Windows Defender settings, and doesn't touch files in your user profile beyond the PowerShell profile and Windows Terminal settings described above.
 
-### Apps
+## Troubleshooting
 
-| Resource name | Package id | Notes |
-|---------------|-----------|-------|
-| `PowerShell` | `Microsoft.PowerShell` | Direct dependency on `ElevationCheck`. |
-| `Git` | `Git.Git` | Depends on `ElevationCheck` + `InstallUbuntu`. |
-| `GitHubCLI` | `GitHub.Cli` | Depends on `Git` + `InstallUbuntu`. |
-| `GitHubCopilot` | `GitHub.Copilot` | Depends on `Git` + `InstallUbuntu`. |
-| `VSCode` | `Microsoft.VisualStudioCode` | |
-| `DotnetSdk` | `Microsoft.dotnet.SDK.10` | Pinned to v10. |
-| `Python` | `Python.Python.3.14` | Pinned to 3.14. |
-| `UV` | `astral-sh.uv` | |
-| `NodeJS` | `OpenJS.NodeJS.LTS` | Pinned to the LTS line (currently Node 24 LTS). |
-| `nvmForNode` | `CoreyButler.NVMforWindows` | Node version manager for Windows. |
-| `Coreutils` | `Microsoft.Coreutils` | Microsoft-maintained Coreutils for Windows. Command integration is handled by the package itself after install. |
-| `OhMyPosh` | `JanDeDobbeleer.OhMyPosh` | Marked Optional in the comments. Triggers `ohMyPoshProfileSet`. |
-| `winappCli` | `Microsoft.winappcli` | Windows Application CLI. |
-| `PowerToys` | `Microsoft.PowerToys` | Marked Optional. Followed by `PowerToysAOT` which disables AOT notifications via registry. |
+<details>
+<summary><strong>The run stopped and said it needs Administrator</strong></summary>
 
-### Theme and OS
+The UAC prompt was declined. Nothing was changed. Run the command again and accept it, or start from a terminal that's already elevated.
 
-Dark theme is applied via a `RunCommandOnSet` resource named `darkTheme` (not via registry):
+</details>
 
-| Resource | Type | What it does |
-|----------|------|--------------|
-| `darkTheme` | `Microsoft.DSC.Transitional/RunCommandOnSet` | `Start-Process` on `C:\Windows\Resources\Themes\dark.theme`, sleeps 2 s, then stops `SystemSettings` so the Settings window doesn't linger. Depends on `PowerShell`. |
+<details>
+<summary><strong>"Calm OS setup is already running in another window"</strong></summary>
 
-The remaining theme/OS entries below are `Microsoft.Windows/Registry`.
+Exactly what it says — switch to the other window. Two copies would fight over the same installs. If you're sure nothing is running, the previous process didn't exit cleanly; sign out and back in, or restart, and try again.
 
-| Item | Hive\Key\Value | Value |
-|------|----------------|-------|
-| Sudo enabled (inline mode) | `HKLM\...\Sudo\Enabled` | DWord `3` |
-| Developer Mode | `HKLM\...\AppModelUnlock\AllowDevelopmentWithoutDevLicense` | DWord `1` |
-| Long path support | `HKLM\...\FileSystem\LongPathsEnabled` | DWord `1` |
-| Remote Desktop on | `HKLM\...\Terminal Server\fDenyTSConnections` | DWord `0` |
+</details>
 
-### File Explorer
+<details>
+<summary><strong>Some steps came back "flagged"</strong></summary>
 
-| Item | Hive\Key\Value | Value |
-|------|----------------|-------|
-| Show file extensions | `HKCU\...\Advanced\HideFileExt` | DWord `0` |
-| Show hidden files | `HKCU\...\Advanced\Hidden` | DWord `1` |
-| Full path in titlebar | `HKCU\...\Advanced\FullPathAddress` | DWord `1` |
-| Open to This PC | `HKCU\...\Advanced\LaunchTo` | DWord `1` |
-| Frequent folders off | `HKCU\...\Advanced\ShowFrequent` | DWord `0` |
-| Frequent files off | `HKCU\...\Explorer\ShowRecent` | DWord `0` |
-| Recommended/cloud files off | `HKCU\...\Explorer\ShowCloudFilesInQuickAccess` | DWord `0` |
-| Git integration in Explorer | `HKCU\...\Advanced\NavPaneShowVersionControl` | DWord `1` |
-| Tips/sync-provider notifications off | `HKCU\...\Advanced\ShowSyncProviderNotifications` | DWord `0` |
+Flagged means best-effort work that couldn't be completed or confirmed. The run finishes and names them in the summary. Everything else was applied.
 
-### Taskbar
+The most common cause is a step that needs a package that hasn't finished registering yet — the WinUI templates need the .NET SDK on `PATH`, and the Copilot plugin steps need the GitHub Copilot CLI. **Run the command again**: the steps that already succeeded are skipped in seconds and only the flagged ones are retried.
 
-| Item | Hive\Key\Value | Value |
-|------|----------------|-------|
-| Widgets button hidden | `HKCU\...\Advanced\TaskbarDa` | DWord `0` |
-| Bluetooth notification icon off | `HKCU\Control Panel\Bluetooth\Notification Area Icon` | DWord `0` |
-| End Task on right-click | `HKCU\...\Advanced\TaskbarEndTask` | DWord `1` |
+</details>
 
-### Start, Search, Notifications
+<details>
+<summary><strong>WSL fails, or Ubuntu doesn't install</strong></summary>
 
-| Item | Hive\Key\Value | Value |
-|------|----------------|-------|
-| Web search suggestions off | `HKCU\...\Policies\Explorer\DisableSearchBoxSuggestions` | DWord `1` |
-| Search highlights off | `HKCU\...\SearchSettings\IsDynamicSearchBoxEnabled` | DWord `0` |
-| Start menu recommendations off | `HKCU\...\Advanced\Start_Layout` | DWord `1` |
-| Toast notifications off (Do Not Disturb) | `HKCU\...\Notifications\Settings\NOC_GLOBAL_SETTING_TOASTS_ENABLED` | DWord `0` |
+Almost always hardware virtualization not being available to the OS.
 
-### Services and features
+- **Physical machine:** enable virtualization (VT-x / AMD-V) in BIOS/UEFI. The label varies by vendor — check your manufacturer's documentation. Reboot into firmware settings, turn it on, save, and boot back into Windows.
+- **Virtual machine:** the host has to expose nested virtualization to the guest. On a Hyper-V host, with the guest powered off:
 
-| Item | Hive\Key\Value | Value |
-|------|----------------|-------|
-| Widget service off (HKLM policy) | `HKLM\SOFTWARE\Policies\Microsoft\Dsh\AllowNewsAndInterests` | DWord `0` |
-| PowerToys AOT notifications off | `HKCU\...\Notifications\Settings\PowerToys\Enabled` | DWord `0` |
+  ```powershell
+  Set-VMProcessor -VMName <VM_NAME> -ExposeVirtualizationExtensions $true
+  ```
 
-### Edge
+  Other hypervisors have their own equivalent.
 
-HKLM policies, applied via `Microsoft.Windows/Registry`:
+Then run the setup again. Everything else stays applied; only the WSL steps are retried.
 
-| Item | Hive\Key\Value | Value |
-|------|----------------|-------|
-| New tab blank | `HKLM\SOFTWARE\Policies\Microsoft\Edge\NewTabPageLocation` | String `about:blank` |
-| First-run experience off | `HKLM\SOFTWARE\Policies\Microsoft\Edge\HideFirstRunExperience` | DWord `1` |
+If virtualization is definitely on and WSL still won't activate after the restart, the run says so and stops rather than rebooting in a loop. The other likely cause is that the machine couldn't reach the WSL download.
 
-### Fonts
+</details>
 
-| Resource | Type | What it does |
-|----------|------|--------------|
-| `InstallCascadiaCodeNerdFonts` | `Microsoft.DSC.Transitional/RunCommandOnSet` | Downloads `CascadiaCode-2407.24.zip` from `microsoft/cascadia-code` GitHub Releases, extracts `CascadiaCodeNF.ttf` and `CascadiaMonoNF.ttf` to `%LOCALAPPDATA%\Microsoft\Windows\Fonts`, and registers each under `HKCU\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts`. Per-user install — no admin required for this step. Depends on `PowerShell`. |
+<details>
+<summary><strong>winget can't be updated</strong></summary>
 
-### Windows Terminal
+The setup updates winget to the latest [microsoft/winget-cli](https://github.com/microsoft/winget-cli/releases/latest) public stable release. If it can't — usually because the built-in `winget` command is being used and the PowerShell module isn't reachable — update **App Installer** from the Microsoft Store, or install the latest release directly, then run the setup again.
 
-| Resource | Type | What it does |
-|----------|------|--------------|
-| `SetCascadiaNfAsDefault` | `Microsoft.DSC.Transitional/RunCommandOnSet` | Locates Windows Terminal's `settings.json` (Store or unpackaged install), backs it up to `settings.json.bak`, and sets `profiles.defaults.font.face = "Cascadia Mono NF"`. Depends on `InstallCascadiaCodeNerdFonts`. |
-| `ps7default` | `Microsoft.DSC.Transitional/RunCommandOnSet` | Invokes `pwsh.exe -NoProfile -NoLogo -Command ...` which reads `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json`, finds the PowerShell 7 profile, and sets it as `defaultProfile`. Depends on `PowerShell`. |
+The step is best-effort, so a machine that can't be updated is flagged rather than stopped, and the rest of the run continues on whatever winget it has.
 
-### PowerShell profile
+A winget delivered by the Store or by Windows itself can be *newer* than the latest GitHub stable release — the 1.30.x previews, for instance. That counts as up to date, not as behind. If the latest release can't be looked up at all, a working winget is left alone rather than flagged.
 
-| Resource | Type | What it does |
-|----------|------|--------------|
-| `ohMyPoshProfileSet` | `Microsoft.DSC.Transitional/RunCommandOnSet` | Creates `$PROFILE` if missing and appends `oh-my-posh init pwsh | Invoke-Expression` (idempotent — uses `Select-String` to check first), then dot-sources `$PROFILE`. Depends on `OhMyPosh`. |
+</details>
 
----
+<details>
+<summary><strong>Nothing happened after the restart</strong></summary>
 
-## Customization
+The resume task waits 30 seconds after logon before starting, then opens a window and requests UAC consent. Accept that prompt; the first checks after elevation are quiet, so give it a couple of minutes.
 
-- **Pick and choose packages.** Comment out any `Microsoft.WinGet/Package` block to skip that install — most have no `dependsOn` chain beyond `InstallUbuntu` (exceptions: `GitHubCLI` and `GitHubCopilot` depend on `Git`; `PowerToysAOT` depends on `PowerToys`; `ohMyPoshProfileSet` depends on `OhMyPosh`).
-- **Pin or unpin versions.** Switch `id: Python.Python.3.14` (pinned) to `id: Python.Python.3` if you want to drift forward, or switch `OpenJS.NodeJS.LTS` to `OpenJS.NodeJS` for current. Vice versa for the unpinned packages.
-- **Toggle registry values.** Most settings are `DWord: 0` or `DWord: 1`; flip the value to invert the behavior.
-- **Re-enable commented-out tweaks.** `HideDesktopIcons` ships commented out (it over-fires on some user setups). Uncomment to enable.
-- **Change the WSL distro.** Edit the `wsl --install -d Ubuntu --no-launch` line inside the `InstallUbuntu` resource.
-- **Change the terminal font.** Edit `$fontFace = 'Cascadia Mono NF'` inside `SetCascadiaNfAsDefault`, or change the `$WantedFonts` array in `InstallCascadiaCodeNerdFonts` to install a different Cascadia variant.
-- **Skip the dark theme step.** Comment out the `darkTheme` resource if you prefer light mode (or want to set it manually).
+If nothing appears at all, check the task exists:
 
-## Design decisions
+```powershell
+Get-ScheduledTask -TaskName WindowsDevConfigResume
+```
 
-| Decision | Rationale |
-|----------|-----------|
-| Single dscv3 document, no modules | Easier to reason about and easier to re-run. The whole flow is one `winget configure` call. |
-| `Microsoft.Windows/Registry` everywhere instead of `Microsoft.Windows.Developer/*` or `Microsoft.Windows.Settings/WindowsSettings` | Direct registry control is reliable across Windows 11 builds and avoids dependencies on legacy resource modules. |
-| `Microsoft.DSC.Transitional/WindowsPowerShellScript` (not `PSDscResources/Script`) | The dscv3 transitional resource is the supported equivalent under the new processor. |
-| Self-relaunch elevated from `ElevationCheck` | A user can double-click into an unelevated shell and the DSC will UAC-prompt itself rather than failing. |
-| Reboot + RunOnce inside the DSC | The DSC owns the reboot and the resume, so the user only invokes `winget configure` once. The throw after `Restart-Computer -Force` is required because `Restart-Computer` returns immediately after signalling shutdown; without the throw DSC would treat the resource as succeeded and continue. |
-| `useLatest: true` on most packages | Cloud PC parity tracks "current" tools. Pinned ids (`Python.Python.3.14`, `Microsoft.dotnet.SDK.10`, `OpenJS.NodeJS.LTS`) are used where a major-version line matters. |
-| Dark theme via `dark.theme` file (not registry) | Applying the shipped `.theme` file flips both `AppsUseLightTheme` and `SystemUsesLightTheme` *and* applies the matching color scheme/cursors atomically, which the broadcast-message dance you'd otherwise need from a registry-only approach often misses. |
-| Per-user font install | Avoids requiring admin for the font step and keeps the font registration under `HKCU`, which is what modern Windows + Terminal expect. |
-| `RunCommandOnSet` to mutate `settings.json` | Windows Terminal's settings are JSON-based and not registry-mapped; a small pwsh fragment is the cleanest way. |
+Either way, running the original command again is safe and picks up exactly where it left off.
 
-## Known caveats
+</details>
 
-| Area | Caveat |
-|------|--------|
-| **`acceptAgreements` not on packages** | None of the `Microsoft.WinGet/Package` resources set `acceptAgreements: true`. The header comment compensates by passing `--accept-configuration-agreements` on the command line. |
-| **WSL reboot** | `RebootForVmp` will hard-reboot the machine via `Restart-Computer -Force`. Save your work before running. The RunOnce key resumes the config on next login. |
-| **Ubuntu first-launch** | After `InstallUbuntu`, you still need to open Ubuntu from the Start menu once to create a UNIX user. Nothing inside the distro is configured by this flow. |
-| **`useLatest: true`** | Each run grabs the latest available version. Builds may differ between machines applying the config on different days. |
-| **HKLM registry keys** | Sudo, the Widget service policy, Edge policies, Remote Desktop, Long Paths, and Developer Mode all live in HKLM. The `ElevationCheck` gate guarantees the run is elevated; without it these would silently fail. |
-| **PowerToys AOT path** | `HKCU\...\Notifications\Settings\PowerToys\Enabled` targets a specific registry path that may change across PowerToys versions. |
-| **Idempotency of WSL phases** | `InstallWslComponents` and `RebootForVmp` both test for `vmcompute`. Re-running after the reboot is a no-op for those resources. `InstallUbuntu` queries `wsl --list --quiet`, so it skips once any distro is registered. |
-| **Pinned font release** | `InstallCascadiaCodeNerdFonts` hard-codes Cascadia Code release `2407.24` from `microsoft/cascadia-code`. Bump `$Version` to pick up newer releases. |
-| **Windows Terminal settings overwrite** | `SetCascadiaNfAsDefault` and `ps7default` rewrite `settings.json` via `ConvertTo-Json`. `SetCascadiaNfAsDefault` writes a `settings.json.bak` first; `ps7default` does not. JSON comments will not survive the round-trip. |
-| **`ohMyPoshProfileSet` runs `. $PROFILE`** | Dot-sourcing the profile inside `pwsh -NoProfile` can surface errors from the user's existing profile during DSC apply. |
-| **`darkTheme` opens Settings briefly** | Applying `dark.theme` pops the Settings app open; the script kills it after 2 seconds. On slow machines the window may flash visibly. |
-| **Currently commented out** | The `HideDesktopIcons` block lives in the file but is commented out. Uncomment to hide desktop icons. |
+<details>
+<summary><strong>"Windows Terminal's settings file couldn't be read as JSON"</strong></summary>
+
+Your `settings.json` has a syntax error, so the setup stopped rather than overwrite a file it couldn't understand. Fix or rename the file named in the message, then run the setup again.
+
+</details>
+
+<details>
+<summary><strong>Downloads fail or time out</strong></summary>
+
+The setup retries with backoff and raises TLS 1.2 for you, so this is usually a proxy. `winget` and WinHTTP each need to know about it:
+
+```powershell
+netsh winhttp show proxy
+```
+
+Configure your proxy for both, then run the setup again.
+
+</details>
+
+<details>
+<summary><strong>Where do I look when none of the above fits?</strong></summary>
+
+`devconfig-log.txt`, in the same folder as `dev-config.ps1` (`%LOCALAPPDATA%\CalmOS` when you used the one-liner). The path is printed at the end of every run.
+
+Then please [open an issue](https://github.com/microsoft/WindowsDeveloperConfig/issues) with your Windows build (`winver`), the command you ran, and the relevant part of that log. Setup that fails on a real machine is a bug worth fixing.
+
+</details>
+
+## Undoing it
+
+There is no automatic undo, and the setup never removes anything on its own. The reversals below are the ones most people ask about. Registry changes under `HKLM` need an elevated prompt.
+
+```powershell
+# Remote Desktop off again
+Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 1
+
+# Drop the two Edge policies (removes "managed by your organization" for them)
+Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' NewTabPageLocation, HideFirstRunExperience
+
+# Notifications back on
+Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings' NOC_GLOBAL_SETTING_TOASTS_ENABLED 1
+
+# Widgets back on
+Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' AllowNewsAndInterests
+
+# Back to light mode
+Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' AppsUseLightTheme 1
+Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' SystemUsesLightTheme 1
+```
+
+Everything else:
+
+- **Packages:** `winget uninstall --id <id>` using the ids in [Packages](#packages).
+- **Explorer, Start and search settings:** all of them are also in Settings and Explorer's Options dialog. Sign out and back in for them to take effect.
+- **Windows Terminal:** restore the `settings.json.bak` written next to `settings.json`.
+- **The Copilot Terminal profile:** delete `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\DevConfig`.
+- **The Oh My Posh prompt:** remove the `oh-my-posh init` block from your PowerShell 7 `$PROFILE`.
+- **Ubuntu:** `wsl --unregister Ubuntu`. This permanently deletes the distro's file system.
+- **The setup itself:** delete `%LOCALAPPDATA%\CalmOS`.
+
+## Customizing it
+
+Everything lives in a named file under [`steps/`](./steps), so changing what runs is a local edit rather than a fork of a large document. Take a copy of the repository, edit, and run `dev-config.ps1` directly.
+
+| To... | Edit |
+| ----- | ---- |
+| Add or remove a package | The `$packages` list in [`steps/packages.ps1`](./steps/packages.ps1) |
+| Change or drop a Windows setting | The `$tweaks` list in the matching `steps/registry-*.ps1` |
+| Skip the Edge policies entirely | Remove `edge.ps1` from the `$phases` list in [`dev-config.ps1`](./dev-config.ps1) |
+| Keep Remote Desktop off | Delete the `RemoteDesktop` entry in [`steps/registry-system.ps1`](./steps/registry-system.ps1) |
+| Change the terminal font | `$Script:CascadiaDefaultFontFace` in [`steps/fonts.ps1`](./steps/fonts.ps1) |
+| Install a different distro | The `wsl --install -d Ubuntu` arguments in [`steps/wsl.ps1`](./steps/wsl.ps1) |
+| Add something new | Copy the shape of any phase file: build steps with `New-DevConfigStep` and pass them to `Invoke-DevConfigSteps` |
+
+A phase is just a file plus an entry in the `$phases` list. Files prefixed with `_` are shared helpers, not phases.
+
+## Known limitations
+
+| Area | Detail |
+| ---- | ------ |
+| **One restart, always visible** | The WSL platform genuinely requires it. The setup warns you for 10 seconds and then restarts with `shutdown /r`. Save your work before you begin. |
+| **Ubuntu's first launch is still manual** | You have to open Ubuntu once to create a Linux username and password. |
+| **Package versions move** | Packages are installed at whatever winget currently publishes, so two machines set up on different days can differ. `Microsoft.DotNet.SDK.10` and `Python.Python.3.14` pin a major version and will need bumping as those age. |
+| **The font release is pinned** | Cascadia Code `2407.24`, verified by hash. Newer releases need both the version and the hash updated in `steps/fonts.ps1`. |
+| **Terminal settings lose their comments** | `settings.json` is round-tripped through JSON, so comments don't survive. A `.bak` is written first. |
+| **No package selection at run time** | It's the full set or a local edit. There's no `-Skip` switch and no prompt. |
+| **No dry run** | There's no `-WhatIf`. The `already OK` output tells you what a re-run *would* skip, but only after the fact. |
+| **Git and GitHub CLI are installed, not configured** | No `git config user.name`, no `gh auth login`. |
+| **`%LOCALAPPDATA%\CalmOS` stays behind** | The installed copy and its log are left in place so a resumed or repeated run works. Delete it when you're done. |
+| **Some changes need a sign-out** | Several Explorer and taskbar values are read by Explorer at logon. |
+
+## For contributors
+
+Source of truth for this flow is `src/windows-dev-config/`. The copy at the repository root is the Authenticode-signed release copy, regenerated by the sign pipeline — don't edit it directly. See [`src/docs/development.md`](https://github.com/microsoft/WindowsDeveloperConfig/blob/main/src/docs/development.md#repo-layout-signed-vs-source).
+
+| File | What it is |
+| ---- | ---------- |
+| `bootstrap.ps1` | The remote entry point. Downloads, requires signed files by default, optionally selects source with `-AllowUnsigned`, installs, launches. |
+| `dev-config.ps1` | The orchestrator. Elevation, PowerShell 7, run lock, logging, the phase list, the summary. |
+| `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
+| `steps/_*.ps1` | Shared helpers: elevation, reboot and resume, winget, registry, Terminal settings, retry, process execution, console. |
+| `steps/<phase>.ps1` | One file per phase, each exporting a single `Invoke-<Name>Phase` function. |
+
+Adding a phase means adding one file and one line in the `$phases` list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.

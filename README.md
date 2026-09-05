@@ -20,7 +20,7 @@
 
 ---
 
-Go from a fresh Windows install to a fully configured dev box in one command. These declarative, CI-tested configs set up your tools, settings, and shells the same way every time — so any machine can be your machine in minutes.
+Go from a fresh Windows install to a fully configured dev box in one command. These CI-tested setups install your tools, settings, and shells the same way every time — so any machine can be your machine in minutes.
 
 ## 🎯 Pick your setup
 
@@ -28,11 +28,11 @@ Three developer setups live in this repo. Pick the one that matches what you wan
 
 | You want... | Go to |
 | --- | --- |
-| A complete dev workstation: tools, OS settings, WSL, and terminal. One command, may reboot. | [Windows Dev Config](#%EF%B8%8F-windows-dev-config) |
+| A complete dev workstation: tools, OS settings, WSL, and terminal. One command, restarts once. | [Windows Dev Config](#%EF%B8%8F-windows-dev-config) |
 | A polished WSL shell: zsh/bash, Starship, CLI tools, and a themed terminal profile. Interactive or unattended. | [WSL Comfort](#-wsl-comfort) |
 | A single language toolchain: Node, Python, SQL, PowerShell, .NET, Rust, Go, Java, PHP, WinForms, or WinUI 3. One command each. | [Workloads](#-single-language-workloads) |
 
-Most of them use [`winget configure`](https://learn.microsoft.com/en-us/windows/package-manager/winget/configure). If you've never used it before, enable it once:
+Most of the single-language workloads use [`winget configure`](https://learn.microsoft.com/en-us/windows/package-manager/winget/configure). If you've never used it before, enable it once:
 
 ```powershell
 winget configure --enable
@@ -49,7 +49,7 @@ winget configure --enable
 > winget install Microsoft.VCRedist.2015+.arm64
 > ```
 
-If that fails or `winget configure` is still not recognized, see [Troubleshooting](#-troubleshooting).
+If that fails or `winget configure` is still not recognized, see [Troubleshooting](#-troubleshooting). Windows Dev Config doesn't use `winget configure` and needs none of this.
 
 <br/>
 
@@ -57,40 +57,32 @@ If that fails or `winget configure` is still not recognized, see [Troubleshootin
 
 *Turns a fresh Windows 11 box into a clean, distraction-free dev workstation in one shot.*
 
-A single [winget configuration](https://learn.microsoft.com/en-us/windows/package-manager/configuration/) file that installs dev tools, applies opinionated Windows settings, and bootstraps WSL + Ubuntu through the required reboot. Non-interactive. Idempotent. Safe to re-run on an existing machine.
+A set of PowerShell scripts that installs dev tools, applies opinionated Windows settings, and sets up WSL + Ubuntu through the required reboot. Nothing to clone, nothing to install first. Idempotent, so it's safe to re-run on an existing machine.
 
-First, get the files onto the box. The config is invoked from a local path, but the bootstrap itself is what installs Git — so on a clean Windows install you'll typically download the repo as a ZIP. If Git is already there, clone it:
-
-```powershell
-# Git already installed:
-git clone https://github.com/microsoft/WindowsDeveloperConfig.git
-cd WindowsDeveloperConfig
-
-# Otherwise, download and extract the ZIP:
-Invoke-WebRequest -Uri https://github.com/microsoft/WindowsDeveloperConfig/archive/refs/heads/main.zip -OutFile WindowsDeveloperConfig.zip
-Expand-Archive .\WindowsDeveloperConfig.zip -DestinationPath .
-cd .\WindowsDeveloperConfig-main
-```
-
-Then apply the configuration:
+Open any PowerShell window — elevated or not — and run:
 
 ```powershell
-winget configure -f .\windows-dev-config\dev-config.winget --accept-configuration-agreements --disable-interactivity
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -AllowUnsigned
 ```
 
-> ⚠️ **May reboot.** Enabling WSL needs a Windows optional feature that requires a restart. A `RunOnce` task picks the configuration back up after you sign in, installs Ubuntu, and finishes the run. Expect one hard reboot plus about a minute of post-login work. Save your work first.
+You'll get one UAC prompt. Expect about 30 minutes on a clean machine.
+
+> `-AllowUnsigned` runs the source copy under `src/` instead of the signed copy at the repository root.
+
+> ⚠️ **It will restart your machine, once.** Enabling WSL needs a Windows optional feature that requires a restart. You get a 10-second warning, and a scheduled task finishes the run automatically after you sign back in. **Save your work before you start.**
 
 <details>
 <summary><strong>What you get</strong></summary>
 
-- **Dev tools:** PowerShell 7, Git, GitHub CLI, VS Code, .NET SDK 10, Python 3.14 + uv, Node.js, Coreutils for Windows, Oh My Posh, and PowerToys.
-- **Terminal:** PowerShell 7 is the default profile, Oh My Posh is enabled, and Cascadia Mono NF is set as the default font.
-- **Windows settings:** Dark theme, developer mode, long paths, File Explorer defaults, Start/Search cleanup, Edge policies, and other workstation defaults.
-- **WSL:** WSL platform + Ubuntu, including the reboot and the `RunOnce` resume step.
+- **Dev tools:** Windows Terminal, PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14 + uv, Node.js LTS + nvm, Coreutils for Windows, Windows App CLI, Oh My Posh, and PowerToys.
+- **Terminal:** PowerShell 7 as the default profile, Oh My Posh in your prompt, Cascadia Mono NF as the default font, and a GitHub Copilot profile in the dropdown.
+- **Windows settings:** Dark theme, Developer Mode, Sudo, long paths, File Explorer defaults, Start/Search cleanup, Do Not Disturb, widgets off, and Edge policies.
+- **WSL:** WSL platform + Ubuntu, including the restart and the automatic resume afterwards.
 
 </details>
 
-Full details: [`windows-dev-config/README.md`](./windows-dev-config/README.md).
+Full details — every setting it changes, how to undo them, and troubleshooting: [`windows-dev-config/README.md`](./src/windows-dev-config/README.md).
 
 <br/>
 
@@ -195,7 +187,7 @@ Open a new terminal, or run the matching `install.ps1` shim to refresh PATH in t
 <details>
 <summary><strong>Windows Dev Config rebooted the machine and looks stuck</strong></summary>
 
-It registered a `RunOnce` entry, so `winget configure` resumes once you sign back in. Give it a minute after login.
+It registered a scheduled task named `WindowsDevConfigResume`, so the run picks itself back up about 30 seconds after you sign back in. A window opens on its own and finishes the WSL setup. If nothing appears after a couple of minutes, run the one-liner again — it's safe to re-run and skips everything already done. More detail in [`windows-dev-config/README.md`](./src/windows-dev-config/README.md#troubleshooting).
 
 </details>
 
