@@ -157,10 +157,8 @@ if ($logPath) {
 # Release the run lock before the final pause so a completed run does not block the next start.
 Exit-DevConfigSingleInstance
 
-if (-not $Script:DevConfigResumed) {
-    # On resume, the wrapper window owns the final pause instead.
-    Wait-DevConfigKeyPress
-}
+# The elevated window owns the final pause on both the initial and resumed runs.
+Wait-DevConfigKeyPress
 
 Stop-DevConfigLog
 if ($failure) {

@@ -18,17 +18,15 @@ function Suspend-DevConfigForReboot {
         [Parameter(Mandatory)] [string] $ScriptPath
     )
 
-    $shell       = Get-DevConfigTaskShellExe
-    $wrapperPath = Join-Path $PSScriptRoot '_resume-wrapper.ps1'
-
-    # The wrapper handles output capture so the resumed run stays visible on screen.
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$wrapperPath`" -ScriptPath `"$ScriptPath`""
-    $action    = New-ScheduledTaskAction -Execute $shell -Argument $arguments
+    $shell = Get-DevConfigTaskShellExe
+    # The limited task requires fresh UAC consent before any resumed code runs elevated.
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Resumed"
+    $action = New-ScheduledTaskAction -Execute $shell -Argument $arguments
 
     # Scheduled task logon matching requires the DOMAIN\User or MACHINE\User account name.
     $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     $trigger     = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
-    $principal   = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
+    $principal   = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
 
     # A short delay lets desktop and network initialization complete before package checks resume.
     try {
@@ -42,8 +40,8 @@ function Suspend-DevConfigForReboot {
     Save-DevConfigTally -Path (Join-Path (Split-Path -Path $ScriptPath -Parent) 'devconfig-tally.json')
 
     Write-Host ''
-    Write-Host 'WSL needs a restart to finish. Rebooting in 10s -- setup continues automatically' -ForegroundColor Yellow
-    Write-Host 'after you log back in. This is expected, not an error.' -ForegroundColor Yellow
+    Write-Host 'WSL needs a restart to finish. Rebooting in 10s -- setup continues after you' -ForegroundColor Yellow
+    Write-Host 'log back in and accept one more UAC prompt. This is expected, not an error.' -ForegroundColor Yellow
     Start-Sleep -Seconds 10
 
     # The resume task is already registered, so a manual restart continues from the same point.

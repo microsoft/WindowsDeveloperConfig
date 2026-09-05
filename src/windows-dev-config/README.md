@@ -35,7 +35,7 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 & ([scriptblock]::Create((irm $url))) -AllowUnsigned
 ```
 
-That's the whole thing. You'll get one UAC prompt, and the machine will restart once.
+That's the whole thing. You'll get one UAC prompt before setup and another after the restart.
 
 > `-AllowUnsigned` runs the source copy under `src/` instead of the signed copy at the repository root.
 
@@ -61,11 +61,11 @@ Roughly **30 minutes** on a clean machine with a good connection, most of it spe
 
 | # | What happens | Your involvement |
 | - | ------------ | ---------------- |
-| 1 | A UAC prompt appears | **Accept it.** Most of the settings are machine-wide and need Administrator. |
+| 1 | The first UAC prompt appears | **Accept it.** Most of the settings are machine-wide and need Administrator. |
 | 2 | PowerShell 7 is installed if it isn't already, and the setup restarts itself on it | None |
 | 3 | Ten of the eleven phases run: packages, Windows settings, fonts, Terminal, prompt, Copilot | None. Long silent stretches during big downloads are normal — a "still working" note prints every minute |
 | 4 | WSL is installed. The machine warns you and **restarts after 10 seconds** | **Save your work before you start.** |
-| 5 | You sign back in; a window opens by itself and finishes the run | None |
+| 5 | You sign back in; a window opens and the second UAC prompt appears | **Accept it** to finish the run |
 | 6 | A summary prints: how many things changed, how many were already fine | Press a key to close, or leave it — it closes itself after 15 minutes |
 
 Afterwards, open **Ubuntu** from the Start menu once to create your Linux username and password. Some Explorer and taskbar changes appear after you sign out and back in.
@@ -73,7 +73,7 @@ Afterwards, open **Ubuntu** from the Start menu once to create your Linux userna
 ## Requirements
 
 - **Windows 11.** Built and tested against current Windows 11 releases. A few of the settings only exist on newer builds; on older ones those steps are skipped rather than failing the run. Windows 10 is not supported.
-- **Administrator rights** on the machine, and the ability to accept a UAC prompt.
+- **Administrator rights** on the machine, and the ability to accept both UAC prompts.
 - **Internet access** to `github.com`, `raw.githubusercontent.com`, the PowerShell Gallery, and the winget package sources. Behind a proxy, the run needs your proxy configured for WinHTTP and for `winget`.
 - **Hardware virtualization available to the OS** — WSL cannot install without it. On a physical machine that means VT-x / AMD-V enabled in BIOS/UEFI. In a VM it means the host has exposed nested virtualization to the guest. Everything except WSL still works without it; see [Troubleshooting](#troubleshooting).
 - **About 15 GB of free disk space** for the full package set.
@@ -243,11 +243,11 @@ A machine-wide lock (`Global\WindowsDevConfigSetup`) means a second copy won't s
 
 Enabling the WSL platform requires a restart. When one is needed, the setup:
 
-1. Registers a scheduled task named **`WindowsDevConfigResume`** that runs at your next logon, as you, elevated, after a 30-second delay.
+1. Registers a scheduled task named **`WindowsDevConfigResume`** that runs at your next logon, as you, at normal privilege after a 30-second delay.
 2. Saves its progress so far to `devconfig-tally.json`.
 3. Prints a warning and restarts after **10 seconds**.
 
-After you sign in, the task opens a window, finishes the run, prints the combined summary for both halves, and removes itself. If Windows refuses the restart, the setup tells you and leaves the task registered — restart whenever you like and it still resumes.
+After you sign in, the task opens a window and Windows asks for fresh UAC consent before resuming elevated. Accept it to finish the run, print the combined summary for both halves, and remove the task. If Windows refuses the restart, the setup tells you and leaves the task registered — restart whenever you like and it still resumes.
 
 Only one restart is ever performed. If WSL still isn't usable after it, the run stops and explains why rather than rebooting again.
 
@@ -292,7 +292,7 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 ## Security
 
-**What runs elevated.** The whole setup, after the single UAC prompt. It needs Administrator for the `HKLM` settings, the WSL Windows features, and machine-wide package installs.
+**What runs elevated.** The setup runs elevated after each UAC prompt. It needs Administrator for the `HKLM` settings, the WSL Windows features, and machine-wide package installs. The logon task itself runs at normal privilege, so it cannot silently elevate modified files.
 
 **What it downloads, and from where.** GitHub (this repository, the pinned Cascadia Code release, which is checked against a SHA-256, and the latest `microsoft/winget-cli` release), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error, and neither is failing to look up the latest winget version.
 
@@ -359,7 +359,7 @@ A winget delivered by the Store or by Windows itself can be *newer* than the lat
 <details>
 <summary><strong>Nothing happened after the restart</strong></summary>
 
-The resume task waits 30 seconds after logon before starting, and the first thing it does is re-check what's already done, which is quiet. Give it a couple of minutes.
+The resume task waits 30 seconds after logon before starting, then opens a window and requests UAC consent. Accept that prompt; the first checks after elevation are quiet, so give it a couple of minutes.
 
 If nothing appears at all, check the task exists:
 
