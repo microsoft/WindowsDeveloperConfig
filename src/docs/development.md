@@ -55,11 +55,11 @@ Command Palette extension.
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCLI` + WinUI/Universal/ManagedDesktop VS workloads |
 | Windows Dev Config | 🙋 manual     | A full distraction-free workstation, in PowerShell: 15 apps + 24 registry values + fonts + Windows Terminal + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
-| NVIDIA CUDA       | 🙋 manual     | `Nvidia.CUDA`; validates toolkit separately from NVIDIA driver/GPU readiness |
-| Foundry Local     | 🙋 manual     | `Microsoft.FoundryLocal` architecture-native WinML package; no CUDA dependency |
+| NVIDIA CUDA       | 🙋 manual     | `Nvidia.CUDA` x64 or checksum/signature-pinned 13.4 ARM64 preview + MSVC + GPU kernel |
+| Foundry Local     | 🙋 manual     | `Microsoft.FoundryLocal` architecture-native WinML package + Qwen3 inference; no CUDA dependency |
 | PyTorch           | 🙋 manual     | `Python.Python.3.13` + private PyTorch CPU/CUDA venv + compatible Triton Windows |
-| llama.cpp         | 🙋 manual     | `ggml.llamacpp` x64/Vulkan or SHA-256-verified upstream ARM64/CPU release |
-| Ollama            | 🙋 manual     | `Ollama.Ollama` x64 desktop or `Ollama.Ollama.Portable` ARM64 + API readiness |
+| llama.cpp         | 🙋 manual     | `ggml.llamacpp` x64/Vulkan or SHA-256-verified upstream ARM64 CPU/CUDA release + pinned GGUF |
+| Ollama            | 🙋 manual     | `Ollama.Ollama` x64 desktop or `Ollama.Ollama.Portable` ARM64 + official model inference |
 | Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative
@@ -91,11 +91,11 @@ Workloads/
   rust/            # configuration.winget (core) + install.ps1 (thin shim)
   winforms/        # configuration.winget (core) + install.ps1 (thin shim)
   winui/           # configuration.winget (core) + install.ps1 (thin shim)
-  cuda/            # x64 CUDA Toolkit + compiler/driver/GPU readiness checks
-  foundry/          # x64/ARM64 Foundry Local + model-free server readiness
+  cuda/            # x64/ARM64 CUDA + MSVC + compiled GPU-kernel readiness
+  foundry/          # x64/ARM64 Foundry Local + catalog-model inference
   pytorch/          # x64/ARM64 Python + contained backend-selected environment
-  llama.cpp/       # x64 WinGet or verified ARM64 release + CLI readiness
-  ollama/          # architecture-specific WinGet config + local API readiness
+  llama.cpp/       # x64 WinGet or verified ARM64 release + pinned GGUF inference
+  ollama/          # architecture-specific WinGet config + library-model inference
 windows-dev-config/    # Windows Dev Config — bootstrap.ps1 (remote entry) + dev-config.ps1 (orchestrator) + steps/*.ps1 + README.md
 wsl-comfort/           # Comfort Shell — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
 tests/
@@ -282,11 +282,11 @@ Run from the `src` directory:
 
 | Flow | x64 behavior | ARM64 behavior | Readiness signal |
 | --- | --- | --- | --- |
-| CUDA | WinGet CUDA Toolkit; requires NVIDIA GPU unless `-ToolkitOnly` | Fails before installation because NVIDIA publishes no Windows ARM64 Toolkit | `CUDA_TOOLKIT_READY`; separately `CUDA_GPU_READY` |
-| Foundry | WinGet x64 WinML package | WinGet ARM64 WinML package | CLI plus `foundry server status`; CUDA is never assumed |
-| PyTorch | CPU or driver-compatible CUDA wheel | Official CPU wheel | Tensor operation reports selected backend; Triton runs a vector-add kernel only on compatible CUDA x64 |
-| llama.cpp | WinGet Vulkan package | Latest official CPU ZIP with GitHub SHA-256 digest verification | `llama-cli --version` and `--help`; no model |
-| Ollama | Current WinGet desktop package | WinGet portable ARM64 package | `ollama --version`, `/api/version`, and `/api/tags`; no model |
+| CUDA | WinGet CUDA 13.3 + MSVC | Checksum- and Authenticode-verified NVIDIA CUDA 13.4 Developer Preview + ARM64 MSVC | Compile and execute `smoke.cu`; `-SkipWorkloadSmoke` opts out |
+| Foundry | WinGet x64 WinML package | WinGet ARM64 WinML package | Download `qwen3-0.6b` (~593 MB) and generate a marker; CUDA is never assumed |
+| PyTorch | Stable CPU or driver-compatible CUDA wheel | Stable CPU, or pinned NVIDIA CUDA 13.4 preview wheel for CPython 3.13/RTX Spark | Tensor + NumPy operation on selected backend; compatible Triton acquires native MSVC and runs a vector-add GPU kernel |
+| llama.cpp | WinGet Vulkan package | Paginated rolling-release discovery for verified CPU or paired CUDA 13.4 + cudart archives | Pinned Qwen3-0.6B Q4_K_M GGUF (~397 MB) generates a grammar-constrained marker |
+| Ollama | Current WinGet desktop package | WinGet portable ARM64 package | Official `qwen3:0.6b` (~522 MB) blob hash verification + structured inference |
 
 PyTorch's environment is
 `$env:LOCALAPPDATA\DevConfig\pytorch\.venv`. Auto selection never installs the
@@ -294,6 +294,21 @@ standalone CUDA Toolkit: PyTorch wheels carry their runtime. An explicit
 `-Backend CUDA` fails if `nvidia-smi`, the driver branch, architecture, or wheel
 compatibility is insufficient. Use `-RequireTriton` when Triton is mandatory or
 `-SkipTriton` to disable it.
+
+The Windows ARM64 CUDA path is a pinned NVIDIA/PyTorch developer-preview stack:
+CUDA 13.4 and `torch-2.15.0.dev20260904+cu134` for CPython 3.13. The direct
+wheel URL includes NVIDIA's SHA-256 fragment, while ordinary dependencies
+(including NumPy) resolve through the user's configured default Python index.
+The flow never uses `--extra-index-url`, which would mix untrusted candidates.
+
+Foundry, llama.cpp, and Ollama accept `-SkipModelSmoke`; CUDA accepts
+`-SkipWorkloadSmoke`. These opt-outs avoid the default model/kernel acceptance
+tests, but the resulting run is installation-only and does not claim full
+workload readiness. Model licenses are Apache-2.0. Foundry reports its mutable
+cache via `foundry cache location`; llama.cpp pins an immutable Qwen revision,
+size, and SHA-256 under `%LOCALAPPDATA%\DevConfig\llama.cpp\models`; Ollama
+verifies the pinned content-addressed model blob under
+`%USERPROFILE%\.ollama\models` (or `OLLAMA_MODELS`).
 
 ### 2. Validate the DSC config without applying it (Windows)
 

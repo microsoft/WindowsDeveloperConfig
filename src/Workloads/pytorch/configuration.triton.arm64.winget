@@ -1,6 +1,4 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
-#
-# Windows x64 CUDA Toolkit plus the C++ host compiler needed to compile kernels.
 $schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
 metadata:
   winget:
@@ -13,11 +11,11 @@ resources:
       source: winget
       acceptAgreements: true
     metadata:
-      description: Install Visual Studio Build Tools
+      description: Install Visual Studio Build Tools for Triton JIT compilation
       winget:
         securityContext: elevated
 
-  - name: VSBuildToolsVCWorkload
+  - name: VSBuildToolsArm64VCWorkload
     type: Microsoft.DSC.Transitional/RunCommandOnSet
     dependsOn:
       - VisualStudioBuildTools
@@ -34,23 +32,10 @@ resources:
           if (-not (Test-Path $vswhere) -or -not (Test-Path $setup)) { throw 'Visual Studio Installer tools were not found.' };
           $installPath = & $vswhere -latest -products Microsoft.VisualStudio.Product.BuildTools -property installationPath;
           if (-not $installPath) { throw 'Visual Studio Build Tools installation path could not be determined.' };
-          $proc = Start-Process -FilePath $setup -ArgumentList @('modify','--installPath',$installPath,'--channelId','VisualStudio.17.Release','--productId','Microsoft.VisualStudio.Product.BuildTools','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended','--quiet','--norestart') -Wait -PassThru;
+          $proc = Start-Process -FilePath $setup -ArgumentList @('modify','--installPath',$installPath,'--channelId','VisualStudio.17.Release','--productId','Microsoft.VisualStudio.Product.BuildTools','--add','Microsoft.VisualStudio.Workload.VCTools','--add','Microsoft.VisualStudio.Component.VC.Tools.ARM64','--includeRecommended','--quiet','--norestart') -Wait -PassThru;
           if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw "Visual Studio workload modification exited with code $($proc.ExitCode)" }
         treatAsArray: true
     metadata:
-      description: Install the MSVC C++ compiler and Windows SDK required by nvcc
-      winget:
-        securityContext: elevated
-
-  - name: CudaToolkit
-    type: Microsoft.WinGet/Package
-    dependsOn:
-      - VSBuildToolsVCWorkload
-    properties:
-      id: Nvidia.CUDA
-      source: winget
-      acceptAgreements: true
-    metadata:
-      description: Install the NVIDIA CUDA Toolkit
+      description: Install the native ARM64 MSVC toolchain required by Triton
       winget:
         securityContext: elevated

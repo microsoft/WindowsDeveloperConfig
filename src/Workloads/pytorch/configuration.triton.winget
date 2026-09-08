@@ -1,6 +1,4 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
-#
-# Windows x64 CUDA Toolkit plus the C++ host compiler needed to compile kernels.
 $schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
 metadata:
   winget:
@@ -13,7 +11,7 @@ resources:
       source: winget
       acceptAgreements: true
     metadata:
-      description: Install Visual Studio Build Tools
+      description: Install Visual Studio Build Tools for Triton JIT compilation
       winget:
         securityContext: elevated
 
@@ -38,19 +36,6 @@ resources:
           if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw "Visual Studio workload modification exited with code $($proc.ExitCode)" }
         treatAsArray: true
     metadata:
-      description: Install the MSVC C++ compiler and Windows SDK required by nvcc
-      winget:
-        securityContext: elevated
-
-  - name: CudaToolkit
-    type: Microsoft.WinGet/Package
-    dependsOn:
-      - VSBuildToolsVCWorkload
-    properties:
-      id: Nvidia.CUDA
-      source: winget
-      acceptAgreements: true
-    metadata:
-      description: Install the NVIDIA CUDA Toolkit
+      description: Install the native x64 MSVC toolchain required by Triton
       winget:
         securityContext: elevated

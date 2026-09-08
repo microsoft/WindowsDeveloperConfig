@@ -132,11 +132,11 @@ Just want one toolchain? Pick a row. Each workload ships a `configuration.winget
 | PowerShell | PowerShell 7 + VS Code PowerShell extensions + PSScriptAnalyzer settings | `winget configure -f .\Workloads\powershell\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | WinForms   | .NET SDK 10 + Windows Forms desktop workload                            | `winget configure -f .\Workloads\winforms\configuration.winget --accept-configuration-agreements --disable-interactivity`   |
 | WinUI 3    | .NET SDK 10 + Visual Studio Community + Windows App SDK / WinUI 3 + WinAppCLI | `winget configure -f .\Workloads\winui\configuration.winget --accept-configuration-agreements --disable-interactivity` |
-| NVIDIA CUDA | CUDA Toolkit; verifies `nvcc` separately from NVIDIA driver/GPU readiness | `.\Workloads\cuda\install.ps1` |
-| Foundry Local | Architecture-native WinML package; verifies CLI and local server without a model | `.\Workloads\foundry\install.ps1` |
+| NVIDIA CUDA | CUDA Toolkit + MSVC; compiles and executes a minimal GPU kernel | `.\Workloads\cuda\install.ps1` |
+| Foundry Local | Architecture-native WinML package + Qwen3-0.6B model inference | `.\Workloads\foundry\install.ps1` |
 | PyTorch | CPython 3.13 + contained PyTorch CPU/CUDA environment; compatible Triton Windows where supported | `.\Workloads\pytorch\install.ps1` |
-| llama.cpp | x64 Vulkan package or verified ARM64 CPU release; verifies CLI without a model | `.\Workloads\llama.cpp\install.ps1` |
-| Ollama | Architecture-appropriate WinGet package; verifies CLI and local API without a model | `.\Workloads\ollama\install.ps1` |
+| llama.cpp | x64 Vulkan or verified ARM64 CPU/CUDA runtime + pinned Qwen3-0.6B GGUF inference | `.\Workloads\llama.cpp\install.ps1` |
+| Ollama | Architecture-appropriate WinGet package + official qwen3:0.6b inference | `.\Workloads\ollama\install.ps1` |
 
 Want the PATH refresh in your current shell? Use the matching shim instead of calling `winget configure` directly:
 
@@ -151,17 +151,17 @@ Want the PATH refresh in your current shell? Use the matching shim instead of ca
 The AI flows are independent. CUDA is available as an explicit workload, but
 Foundry Local, PyTorch, llama.cpp, and Ollama do not install it unless their own
 supported path needs it. Package availability is checked by WinGet at run time;
-the catalog versions observed on 2026-09-04 were CUDA 13.3, Foundry Local
-0.10.3.0, llama.cpp b10795, Ollama desktop 0.33.3, and Ollama portable 0.32.5.
+the catalog versions observed on 2026-09-08 were CUDA 13.3, Foundry Local
+0.10.3.0, llama.cpp b10867, Ollama desktop 0.33.3, and Ollama portable 0.32.5.
 
 | Workload | Windows x64 | Windows ARM64 | Prerequisites and selected path |
 | --- | --- | --- | --- |
-| CUDA | Supported | Not published | NVIDIA GPU + current driver by default. `-ToolkitOnly` permits compiler-only setup. |
-| Foundry Local | Supported | Supported | Windows 11 24H2/build 26100+. Uses WinML and does **not** require CUDA. |
-| PyTorch | CPU or NVIDIA CUDA | CPU | Python 3.13 in a private venv. Auto uses a verified CUDA wheel only when `nvidia-smi` and the driver are compatible. |
-| Triton Windows | CUDA only, compute capability 8.0+ | Skipped | Installed and kernel-tested only with the compatible PyTorch 2.14 CUDA/Python stack. |
-| llama.cpp | WinGet Vulkan build | Verified official CPU ZIP | No model is downloaded. The ARM64 download must carry a GitHub-published SHA-256 digest. |
-| Ollama | WinGet desktop package | WinGet portable package | Starts or reuses `ollama serve`, then verifies `/api/version` and `/api/tags`. |
+| CUDA | WinGet CUDA 13.3 | NVIDIA CUDA 13.4 Developer Preview | NVIDIA GPU + current driver by default. Installs MSVC, compiles with `nvcc -arch=native`, and executes a kernel. `-ToolkitOnly` permits compiler-only setup. |
+| Foundry Local | Supported | Supported | Windows 11 24H2/build 26100+. Uses WinML and does **not** require CUDA. Downloads `qwen3-0.6b` and runs a marker completion. |
+| PyTorch | Stable CPU or NVIDIA CUDA | Stable CPU, or pinned NVIDIA CUDA 13.4 Developer Preview on RTX Spark | Python 3.13 in a private venv. Auto refuses a silent CPU fallback when an unsupported ARM64 NVIDIA stack is detected. |
+| Triton Windows | CUDA, compute capability 8.0+ | CUDA 13.4 preview stack | Installs architecture-native MSVC Build Tools, then installs and kernel-tests Triton only when a compatible PyTorch CUDA/Python wheel exists. |
+| llama.cpp | WinGet Vulkan build | Verified official CPU or CUDA 13.4 rolling release | Downloads a pinned, checksum-verified Qwen3-0.6B Q4_K_M GGUF and performs constrained inference. |
+| Ollama | WinGet desktop package | WinGet portable package | Starts or reuses `ollama serve`, pulls official `qwen3:0.6b`, verifies its model blob, and performs structured inference. |
 
 Run a flow from PowerShell:
 
@@ -180,15 +180,28 @@ PyTorch accepts explicit backend and Triton policy switches:
 .\Workloads\pytorch\install.ps1 -Backend CUDA -RequireTriton
 ```
 
-Readiness is intentionally model-free. CUDA runs `nvcc` and `nvidia-smi`;
-Foundry checks `foundry server status`; PyTorch performs a real tensor operation
-and, when compatible, a Triton GPU kernel; llama.cpp checks `llama-cli`; and
-Ollama checks its local HTTP API. After supplying your own GGUF model, invoke
-llama.cpp with:
+Default acceptance proves each workload is usable, not merely installed:
+CUDA executes a compiled GPU kernel; PyTorch performs a tensor operation on the
+selected backend and, when supported, Triton runs a GPU kernel; and each local
+model runtime downloads a small Apache-2.0 Qwen model and performs deterministic
+text inference.
 
-```powershell
-llama-cli -m C:\models\model.gguf -p "Hello from Windows"
-```
+| Flow | Default model download | Cache |
+| --- | ---: | --- |
+| Foundry Local | `qwen3-0.6b`, about 593 MB | Reported by `foundry cache location` |
+| llama.cpp | `Qwen3-0.6B-Q4_K_M.gguf`, 396,704,416 bytes | `%LOCALAPPDATA%\DevConfig\llama.cpp\models` |
+| Ollama | `qwen3:0.6b`, about 522 MB | `%USERPROFILE%\.ollama\models` or `OLLAMA_MODELS` |
+
+Use `-SkipModelSmoke` with Foundry Local, llama.cpp, or Ollama to opt out
+of the model download and inference. Use CUDA's `-SkipWorkloadSmoke` to opt out
+of kernel compilation/execution. Opted-out runs verify installation only and do
+not report full workload readiness.
+
+On ARM64, CUDA downloads NVIDIA's checksum- and Authenticode-verified 13.4
+Developer Preview installer (about 3.8 GB) under the NVIDIA CUDA EULA. The
+native RTX Spark PyTorch CUDA wheel is also a pinned developer preview (about
+1.85 GB). The flows clearly label both previews and never silently claim an
+ARM64 NVIDIA system is GPU-ready after falling back to CPU.
 
 <br/>
 

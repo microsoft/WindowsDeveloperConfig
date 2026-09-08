@@ -1,6 +1,7 @@
 import argparse
 import json
 
+import numpy
 import torch
 
 
@@ -18,11 +19,15 @@ if result != [2.0, 4.0]:
     raise RuntimeError(f"Unexpected tensor result: {result}")
 if device == "cuda":
     torch.cuda.synchronize()
+array = (tensor * 2).cpu().numpy()
+if not numpy.array_equal(array, numpy.array([2.0, 4.0])):
+    raise RuntimeError(f"Unexpected NumPy bridge result: {array}")
 
 details = {
     "backend": args.backend,
     "device": torch.cuda.get_device_name(0) if device == "cuda" else "CPU",
     "torch": torch.__version__,
     "torch_cuda_runtime": torch.version.cuda,
+    "numpy": numpy.__version__,
 }
 print("PYTORCH_SMOKE=" + json.dumps(details, sort_keys=True))

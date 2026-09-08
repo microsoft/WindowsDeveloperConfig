@@ -228,7 +228,7 @@ flows:
 
   - id: cuda
     name: NVIDIA CUDA
-    description: CUDA Toolkit with separate compiler and NVIDIA GPU/driver readiness checks
+    description: CUDA Toolkit plus MSVC with a compiled GPU-kernel readiness test
     category: ai
     tags: [ai, cuda, nvidia, gpu, machine-learning]
     icon: 🟩
@@ -245,7 +245,7 @@ flows:
 
   - id: foundry
     name: Foundry Local
-    description: Local model runtime with WinML acceleration and no CUDA dependency
+    description: Local model runtime plus Qwen3-0.6B acquisition and inference
     category: ai
     tags: [ai, foundry, winml, local-models, inference]
     icon: 🧠
@@ -279,7 +279,7 @@ flows:
 
   - id: llama.cpp
     name: llama.cpp
-    description: Native llama.cpp CLI using WinGet on x64 and a verified CPU release on ARM64
+    description: Native llama.cpp CLI plus a pinned Qwen3-0.6B GGUF inference test
     category: ai
     tags: [ai, llama, gguf, inference, local-models, vulkan]
     icon: 🦙
@@ -296,7 +296,7 @@ flows:
 
   - id: ollama
     name: Ollama
-    description: Ollama CLI plus local API readiness without downloading a model
+    description: Ollama service plus official qwen3:0.6b pull and inference
     category: ai
     tags: [ai, ollama, local-models, inference, api]
     icon: 🦙

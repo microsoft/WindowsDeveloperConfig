@@ -3,8 +3,9 @@
   Install PyTorch into a contained virtual environment and run a tensor smoke test.
 
 .PARAMETER Backend
-  Auto selects a verified NVIDIA CUDA wheel on x64 when the installed driver is
-  compatible, otherwise CPU. CPU and CUDA force an explicit choice.
+  Auto selects a verified NVIDIA CUDA wheel when the architecture, Python,
+  driver, and GPU are compatible, otherwise CPU. On ARM64 with an unsupported
+  NVIDIA GPU stack, Auto fails rather than silently presenting CPU as GPU-ready.
 
 .PARAMETER SkipTriton
   Do not install Triton Windows even when the detected PyTorch CUDA stack is compatible.
@@ -31,17 +32,16 @@ if ($SkipTriton -and $RequireTriton) {
 & (Join-Path $PSScriptRoot '..\_common\apply-configuration.ps1') `
     -Id 'pytorch' `
     -ConfigFile (Join-Path $PSScriptRoot 'configuration.winget') `
-    -RequireCommands @('python') `
+    -RequireCommands @() `
     -DeferSentinel
 
-$pythonCommand = Assert-CommandAvailable -CommandName 'python' -Remediation 'Reopen the terminal and rerun the PyTorch flow.'
-$pythonPath = $pythonCommand.Source
+$architecture = Get-DevConfigArchitecture
+$pythonPath = Get-Python313Path -Architecture $architecture
 $pythonVersionText = (& $pythonPath -c 'import platform; print(platform.python_version())').Trim()
 if ($LASTEXITCODE -ne 0) {
     throw 'Python failed while reporting its version.'
 }
 $pythonVersion = [version]$pythonVersionText
-$architecture = Get-DevConfigArchitecture
 $pythonMachine = (& $pythonPath -c 'import platform; print(platform.machine())').Trim()
 if ($LASTEXITCODE -ne 0) {
     throw 'Python failed while reporting its architecture.'
@@ -61,6 +61,21 @@ $plan = Resolve-PyTorchPlan `
 
 if ($RequireTriton -and -not $plan.InstallTriton) {
     throw "Triton Windows is required but unsupported: $($plan.TritonReason)"
+}
+
+if ($plan.InstallTriton) {
+    $tritonConfiguration = if ($architecture -eq 'Arm64') {
+        'configuration.triton.arm64.winget'
+    } else {
+        'configuration.triton.winget'
+    }
+    & (Join-Path $PSScriptRoot '..\_common\apply-configuration.ps1') `
+        -Id 'pytorch-triton-toolchain' `
+        -ConfigFile (Join-Path $PSScriptRoot $tritonConfiguration) `
+        -RequireCommands @() `
+        -DeferSentinel
+    $compiler = Import-MsvcEnvironment -Architecture $architecture
+    Write-Host "Triton JIT compiler: $compiler"
 }
 
 $root = Join-Path $env:LOCALAPPDATA 'DevConfig\pytorch'
@@ -92,6 +107,11 @@ if (-not (Test-Path -LiteralPath (Join-Path $venv 'Scripts\python.exe'))) {
 $venvPython = Join-Path $venv 'Scripts\python.exe'
 Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'install', '--upgrade', 'pip') -DisplayName 'pip upgrade'
 
+Invoke-CheckedCommand `
+    -FilePath $venvPython `
+    -ArgumentList (Get-PipInstallArguments -Requirement 'numpy') `
+    -DisplayName 'NumPy installation from the configured Python index'
+
 $torchDryRun = Get-PipInstallArguments -Requirement $plan.TorchRequirement -IndexUrl $plan.IndexUrl -DryRun
 Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $torchDryRun -DisplayName 'PyTorch compatible-wheel check'
 $torchInstall = Get-PipInstallArguments -Requirement $plan.TorchRequirement -IndexUrl $plan.IndexUrl
@@ -111,6 +131,9 @@ if ($plan.InstallTriton) {
 }
 
 Set-Content -LiteralPath $statePath -Value $desiredJson -Encoding ascii
+if ($plan.Preview) {
+    Write-Warning 'PyTorch CUDA on Windows ARM64 is an NVIDIA Developer Preview nightly, not a stable or production-supported release.'
+}
 Write-Host "PYTORCH_READY: backend=$($plan.Backend), runtime=$($plan.Runtime), environment=$venv"
 Write-Host "Activate with: & '$venv\Scripts\Activate.ps1'"
 Write-Host 'INSTALL_OK: pytorch'
