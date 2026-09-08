@@ -30,12 +30,25 @@ resources:
         "3": >-
           $ErrorActionPreference = 'Stop';
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe';
-          $setup = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\setup.exe';
-          if (-not (Test-Path $vswhere) -or -not (Test-Path $setup)) { throw 'Visual Studio Installer tools were not found.' };
+          if (-not (Test-Path $vswhere)) { throw 'Visual Studio Installer vswhere.exe was not found.' };
           $installPath = & $vswhere -latest -products Microsoft.VisualStudio.Product.BuildTools -property installationPath;
           if (-not $installPath) { throw 'Visual Studio Build Tools installation path could not be determined.' };
-          $proc = Start-Process -FilePath $setup -ArgumentList @('modify','--installPath',$installPath,'--channelId','VisualStudio.17.Release','--productId','Microsoft.VisualStudio.Product.BuildTools','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended','--quiet','--norestart') -Wait -PassThru;
-          if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw "Visual Studio workload modification exited with code $($proc.ExitCode)" }
+          $stagingRoot = Join-Path $env:ProgramFiles 'WindowsDeveloperConfig\Installers';
+          New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null;
+          $bootstrapper = Join-Path $stagingRoot "vs_BuildTools-$([guid]::NewGuid().ToString('N')).exe";
+          Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile $bootstrapper -UseBasicParsing;
+          $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapper;
+          $signerName = $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false);
+          if ($signature.Status -ne 'Valid' -or $signerName -ne 'Microsoft Corporation') { throw "Visual Studio bootstrapper signature validation failed: $($signature.Status), $signerName" };
+          try {
+            & $bootstrapper modify --installPath $installPath --channelId VisualStudio.17.Release --productId Microsoft.VisualStudio.Product.BuildTools --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --quiet --wait --norestart --nocache;
+            if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) { throw "Visual Studio Build Tools bootstrapper exited with code $LASTEXITCODE. Review $env:TEMP\dd_*.log." }
+          } finally {
+            Remove-Item -LiteralPath $bootstrapper -Force -ErrorAction SilentlyContinue;
+            if (Test-Path -LiteralPath $bootstrapper) { Write-Warning "Visual Studio bootstrapper remains at '$bootstrapper' because another process still holds it." }
+          };
+          $compiler = Get-ChildItem -Path (Join-Path $installPath 'VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe') -ErrorAction SilentlyContinue | Select-Object -First 1;
+          if (-not $compiler) { throw "Visual Studio Installer returned success, but x64 cl.exe is absent under '$installPath\VC\Tools\MSVC'. Open Visual Studio Installer, modify Build Tools, select Desktop development with C++, and review $env:TEMP\dd_*.log." }
         treatAsArray: true
     metadata:
       description: Install the MSVC C++ compiler and Windows SDK required by nvcc

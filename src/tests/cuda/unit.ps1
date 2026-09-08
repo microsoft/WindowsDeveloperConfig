@@ -36,8 +36,14 @@ Assert-True ($compile -like '*-arch=native*smoke.cu*') 'CUDA smoke should compil
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\cuda\install.ps1') -Raw
 Assert-True ($installScript -match '\[switch\]\s*\$SkipWorkloadSmoke') 'CUDA should expose workload-smoke opt-out'
 $armConfiguration = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\cuda\configuration.arm64.winget') -Raw
-Assert-True ($armConfiguration -match "'modify','--installPath'") 'CUDA ARM64 should modify the installed Build Tools instance'
+Assert-True ($armConfiguration -match 'vs_BuildTools\.exe') 'CUDA ARM64 should use the Build Tools bootstrapper'
+Assert-True ($armConfiguration -match 'Get-AuthenticodeSignature') 'CUDA ARM64 should verify the bootstrapper signer'
+Assert-True ($armConfiguration -like '*$env:ProgramFiles*WindowsDeveloperConfig\Installers*') 'CUDA ARM64 should stage the elevated bootstrapper outside user-writable temp'
+Assert-True ($armConfiguration -like '*& $bootstrapper modify --installPath $installPath*') 'CUDA ARM64 should preserve the spaced install path as one PowerShell argument'
+Assert-True ($armConfiguration -like "*`$signerName -ne 'Microsoft Corporation'*") 'CUDA ARM64 should require the exact Microsoft bootstrapper signer'
+Assert-True ($armConfiguration -match '--quiet --wait --norestart') 'CUDA ARM64 should make the bootstrapper wait for the installer service'
 Assert-True ($armConfiguration -match 'Microsoft\.VisualStudio\.Component\.VC\.Tools\.ARM64') 'CUDA ARM64 should install native compiler tools'
+Assert-True ($armConfiguration -match 'ARM64 cl\.exe is absent') 'CUDA configuration should fail before success when the compiler did not materialize'
 
 $cleanupPath = Join-Path $env:TEMP "devconfig-cleanup-test-$([guid]::NewGuid().ToString('N')).tmp"
 Set-Content -LiteralPath $cleanupPath -Value 'test'

@@ -58,8 +58,14 @@ Assert-True ($installScript -match 'Get-Python313Path') 'PyTorch should select t
 Assert-True ($installScript -match 'Import-MsvcEnvironment') 'Triton path should import the architecture-native MSVC build environment'
 Assert-True ($installScript -match 'configuration\.triton\.arm64\.winget') 'ARM64 Triton should acquire its own JIT compiler dependency'
 $tritonConfiguration = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\pytorch\configuration.triton.arm64.winget') -Raw
-Assert-True ($tritonConfiguration -match "'modify','--installPath'") 'Triton should modify the installed Build Tools instance'
+Assert-True ($tritonConfiguration -match 'vs_BuildTools\.exe') 'Triton should use the Build Tools bootstrapper'
+Assert-True ($tritonConfiguration -match 'Get-AuthenticodeSignature') 'Triton should verify the bootstrapper signer'
+Assert-True ($tritonConfiguration -like '*$env:ProgramFiles*WindowsDeveloperConfig\Installers*') 'Triton should stage the elevated bootstrapper outside user-writable temp'
+Assert-True ($tritonConfiguration -like '*& $bootstrapper modify --installPath $installPath*') 'Triton should preserve the spaced install path as one PowerShell argument'
+Assert-True ($tritonConfiguration -like "*`$signerName -ne 'Microsoft Corporation'*") 'Triton should require the exact Microsoft bootstrapper signer'
+Assert-True ($tritonConfiguration -match '--quiet --wait --norestart') 'Triton should make the bootstrapper wait for the installer service'
 Assert-True ($tritonConfiguration -match 'Microsoft\.VisualStudio\.Component\.VC\.Tools\.ARM64') 'ARM64 Triton should install the native compiler component'
+Assert-True ($tritonConfiguration -match 'ARM64 cl\.exe is absent') 'Triton configuration should fail before success when the compiler did not materialize'
 
 $fakeVs = Join-Path $env:TEMP "devconfig-vs-test-$([guid]::NewGuid().ToString('N'))"
 $fakeToolset = Join-Path $fakeVs 'VC\Tools\MSVC\14.99.0\bin\Hostarm64\arm64'
