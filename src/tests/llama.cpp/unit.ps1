@@ -73,7 +73,10 @@ Assert-Equal $model.Revision 'ef4088322893040952513f532f736ddeab518403' 'GGUF sh
 Assert-Equal $model.Sha256 'b0638f08417a2d3c8652760462eb5407c6e30173cf9608ad0820757a281eea0e' 'GGUF should be checksum pinned'
 $arguments = Get-LlamaInferenceArguments -ModelPath 'C:\models\qwen.gguf' -Marker $model.Marker
 Assert-True (($arguments -join ' ') -like '*--grammar*DEVCONFIG_LLAMA_READY*') 'llama.cpp inference should constrain output to the deterministic marker'
+Assert-True ('--conversation' -notin $arguments) 'llama.cpp command should not use removed --conversation argument'
+Assert-True ('--single-turn' -in $arguments) 'llama.cpp command should exit after the predefined prompt'
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\llama.cpp\install.ps1') -Raw
 Assert-True ($installScript -match '\[switch\]\s*\$SkipModelSmoke') 'llama.cpp should expose model-smoke opt-out'
+Assert-True ($installScript -match '2>&1') 'llama.cpp failures should retain stderr diagnostics'
 
 Write-Host "UNIT_OK: llama.cpp ($script:AssertionCount assertions)"

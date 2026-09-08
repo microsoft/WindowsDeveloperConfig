@@ -470,7 +470,6 @@ function Get-LlamaInferenceArguments {
 
     return @(
         '--model', $ModelPath,
-        '--conversation',
         '--single-turn',
         '--prompt', "Reply with exactly $Marker and nothing else.",
         '--reasoning', 'off',
@@ -542,6 +541,44 @@ function Remove-UserPathEntry {
     $env:Path = $processEntries -join ';'
 }
 
+function Remove-TemporaryFileWithRetry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [int] $MaxAttempts = 12,
+        [int] $DelayMilliseconds = 5000,
+        [scriptblock] $RemoveAction = {
+            param([string] $Target)
+            Remove-Item -LiteralPath $Target -Force -ErrorAction Stop
+        }
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $true
+    }
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            & $RemoveAction $Path
+            if (-not (Test-Path -LiteralPath $Path)) {
+                return $true
+            }
+            $lastError = "the file still exists after removal attempt $attempt"
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+        if ($attempt -lt $MaxAttempts -and $DelayMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $DelayMilliseconds
+        }
+    }
+
+    Write-Warning `
+        -Message "Could not remove temporary file '$Path' after $MaxAttempts attempts. It may remain until the installer releases it or Windows cleans the temporary directory. Last error: $lastError" `
+        -WarningAction Continue
+    return $false
+}
+
 function Install-VerifiedDownload {
     [CmdletBinding()]
     param(
@@ -575,7 +612,7 @@ function Install-VerifiedDownload {
         Move-Item -LiteralPath $temporary -Destination $Destination -Force
     } finally {
         if (Test-Path -LiteralPath $temporary) {
-            Remove-Item -LiteralPath $temporary -Force
+            [void](Remove-TemporaryFileWithRetry -Path $temporary)
         }
     }
 }
@@ -603,7 +640,7 @@ function Invoke-VerifiedInstaller {
         }
     } finally {
         if (Test-Path -LiteralPath $temporary) {
-            Remove-Item -LiteralPath $temporary -Force
+            [void](Remove-TemporaryFileWithRetry -Path $temporary)
         }
     }
 }
@@ -675,22 +712,48 @@ function Get-VsDevCmdPath {
     if (-not (Test-Path -LiteralPath $vswhere)) {
         throw 'Visual Studio Installer vswhere.exe was not found after installing the C++ Build Tools workload.'
     }
-    $component = if ($Architecture -eq 'Arm64') {
-        'Microsoft.VisualStudio.Component.VC.Tools.ARM64'
+    $installationOutput = @(& $vswhere -all -products Microsoft.VisualStudio.Product.BuildTools -property installationPath 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw "vswhere.exe failed while locating Visual Studio Build Tools (exit $LASTEXITCODE)."
+    }
+    return Resolve-VsDevCmdPath -InstallationPaths $installationOutput -Architecture $Architecture
+}
+
+function Resolve-VsDevCmdPath {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()] [string[]] $InstallationPaths = @(),
+        [Parameter(Mandatory)] [ValidateSet('X64', 'Arm64')] [string] $Architecture
+    )
+
+    $relativeCompilers = if ($Architecture -eq 'Arm64') {
+        @('bin\Hostarm64\arm64\cl.exe', 'bin\Hostx64\arm64\cl.exe')
     } else {
-        'Microsoft.VisualStudio.Component.VC.Tools.x86.x64'
+        @('bin\Hostx64\x64\cl.exe')
     }
-    $installationPath = [string](& $vswhere -latest -products '*' -requires $component -property installationPath |
-        Select-Object -First 1)
-    $installationPath = $installationPath.Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $installationPath) {
-        throw "No Visual Studio installation with component '$component' was reported by vswhere.exe."
+
+    foreach ($rawPath in $InstallationPaths) {
+        if ([string]::IsNullOrWhiteSpace($rawPath)) {
+            continue
+        }
+        $installationPath = $rawPath.Trim()
+        $vsDevCmd = Join-Path $installationPath 'Common7\Tools\VsDevCmd.bat'
+        if (-not (Test-Path -LiteralPath $vsDevCmd)) {
+            continue
+        }
+        $toolsets = Get-ChildItem -LiteralPath (Join-Path $installationPath 'VC\Tools\MSVC') `
+            -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending
+        foreach ($toolset in $toolsets) {
+            foreach ($relativeCompiler in $relativeCompilers) {
+                if (Test-Path -LiteralPath (Join-Path $toolset.FullName $relativeCompiler)) {
+                    return $vsDevCmd
+                }
+            }
+        }
     }
-    $vsDevCmd = Join-Path $installationPath 'Common7\Tools\VsDevCmd.bat'
-    if (-not (Test-Path -LiteralPath $vsDevCmd)) {
-        throw "VsDevCmd.bat was not found under '$installationPath'."
-    }
-    return $vsDevCmd
+
+    throw "No Visual Studio Build Tools installation with an $Architecture MSVC compiler was found. Re-run the architecture-specific C++ Build Tools configuration."
 }
 
 function Import-MsvcEnvironment {

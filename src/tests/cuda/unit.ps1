@@ -39,4 +39,39 @@ $armConfiguration = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Wor
 Assert-True ($armConfiguration -match "'modify','--installPath'") 'CUDA ARM64 should modify the installed Build Tools instance'
 Assert-True ($armConfiguration -match 'Microsoft\.VisualStudio\.Component\.VC\.Tools\.ARM64') 'CUDA ARM64 should install native compiler tools'
 
+$cleanupPath = Join-Path $env:TEMP "devconfig-cleanup-test-$([guid]::NewGuid().ToString('N')).tmp"
+Set-Content -LiteralPath $cleanupPath -Value 'test'
+$script:cleanupAttempts = 0
+$removed = Remove-TemporaryFileWithRetry `
+    -Path $cleanupPath `
+    -MaxAttempts 3 `
+    -DelayMilliseconds 0 `
+    -RemoveAction {
+        param($Target)
+        $script:cleanupAttempts++
+        if ($script:cleanupAttempts -lt 3) {
+            throw 'installer still holds the file'
+        }
+        Remove-Item -LiteralPath $Target -Force
+    }
+Assert-True $removed 'Temporary cleanup should succeed after a delayed installer release'
+Assert-Equal $script:cleanupAttempts 3 'Temporary cleanup should retry until release'
+Assert-True (-not (Test-Path -LiteralPath $cleanupPath)) 'Temporary cleanup should remove the released file'
+
+$lockedPath = Join-Path $env:TEMP "devconfig-cleanup-locked-$([guid]::NewGuid().ToString('N')).tmp"
+Set-Content -LiteralPath $lockedPath -Value 'test'
+$warnings = [System.Collections.Generic.List[string]]::new()
+$removed = Remove-TemporaryFileWithRetry `
+    -Path $lockedPath `
+    -MaxAttempts 2 `
+    -DelayMilliseconds 0 `
+    -RemoveAction { param($Target) throw 'access denied while installer child exits' } `
+    -WarningVariable cleanupWarnings
+foreach ($warning in $cleanupWarnings) {
+    [void]$warnings.Add($warning.Message)
+}
+Assert-True (-not $removed) 'Persistent cleanup failure should return false instead of throwing'
+Assert-True (($warnings -join ' ') -like '*Could not remove temporary file*access denied*') 'Persistent cleanup failure should emit a useful warning'
+Remove-Item -LiteralPath $lockedPath -Force
+
 Write-Host "UNIT_OK: cuda ($script:AssertionCount assertions)"

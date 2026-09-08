@@ -61,7 +61,7 @@ if ($SkipModelSmoke) {
         -Sha256 $modelPlan.Sha256 `
         -ExpectedSize $modelPlan.Size
     $arguments = Get-LlamaInferenceArguments -ModelPath $modelPath -Marker $modelPlan.Marker
-    $output = (& $llamaCli @arguments 2>$null | Out-String).Trim()
+    $output = (& $llamaCli @arguments 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $output -notmatch [regex]::Escape($modelPlan.Marker)) {
         throw "llama.cpp model inference did not produce marker '$($modelPlan.Marker)' (exit $LASTEXITCODE). Output: $output"
     }

@@ -61,6 +61,23 @@ $tritonConfiguration = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\
 Assert-True ($tritonConfiguration -match "'modify','--installPath'") 'Triton should modify the installed Build Tools instance'
 Assert-True ($tritonConfiguration -match 'Microsoft\.VisualStudio\.Component\.VC\.Tools\.ARM64') 'ARM64 Triton should install the native compiler component'
 
+$fakeVs = Join-Path $env:TEMP "devconfig-vs-test-$([guid]::NewGuid().ToString('N'))"
+$fakeToolset = Join-Path $fakeVs 'VC\Tools\MSVC\14.99.0\bin\Hostarm64\arm64'
+$fakeVsDevCmd = Join-Path $fakeVs 'Common7\Tools\VsDevCmd.bat'
+New-Item -ItemType Directory -Path $fakeToolset -Force | Out-Null
+New-Item -ItemType Directory -Path (Split-Path -Parent $fakeVsDevCmd) -Force | Out-Null
+New-Item -ItemType File -Path (Join-Path $fakeToolset 'cl.exe') -Force | Out-Null
+New-Item -ItemType File -Path $fakeVsDevCmd -Force | Out-Null
+try {
+    $resolvedVsDevCmd = Resolve-VsDevCmdPath -InstallationPaths @('', $fakeVs) -Architecture Arm64
+    Assert-Equal $resolvedVsDevCmd $fakeVsDevCmd 'VS discovery should skip empty output and select a Build Tools instance with ARM64 cl.exe'
+    Assert-ThrowsLike {
+        Resolve-VsDevCmdPath -InstallationPaths @() -Architecture Arm64
+    } '*No Visual Studio Build Tools installation with an Arm64 MSVC compiler*' 'Empty vswhere output should produce an actionable error instead of a null dereference'
+} finally {
+    Remove-Item -LiteralPath $fakeVs -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $repeat = Resolve-PyTorchPlan -Architecture X64 -Backend Auto -PythonVersion 3.13 -HasNvidia $false
 Assert-Equal ($repeat | ConvertTo-Json -Compress) ($cpu | ConvertTo-Json -Compress) 'Plan resolution should be idempotent'
 

@@ -16,9 +16,9 @@ if (-not (Test-Path -LiteralPath $modelPath)) {
     throw "Pinned llama.cpp smoke model was not found at '$modelPath'."
 }
 $arguments = Get-LlamaInferenceArguments -ModelPath $modelPath -Marker $plan.Marker
-$output = (& llama-cli @arguments 2>$null | Out-String)
+$output = (& llama-cli @arguments 2>&1 | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $output -notmatch [regex]::Escape($plan.Marker)) {
-    throw "llama.cpp cached-model inference failed with exit code $LASTEXITCODE."
+    throw "llama.cpp cached-model inference failed with exit code $LASTEXITCODE. Output: $output"
 }
 
 Write-Output 'llama.cpp ready'
