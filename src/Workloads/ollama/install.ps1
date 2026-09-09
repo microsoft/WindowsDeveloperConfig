@@ -7,30 +7,105 @@
   the CLI and local API and does not claim workload readiness.
 #>
 [CmdletBinding()]
-param([switch] $SkipModelSmoke)
+param(
+    [switch] $SkipModelSmoke,
+    [switch] $PlanOnly,
+    [string] $ReportPath = ''
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-. (Join-Path $PSScriptRoot '..\_common\ai-support.ps1')
+. (Join-Path $PSScriptRoot '..\_common\direct-setup.ps1')
+. (Join-Path $PSScriptRoot '..\_common\ai-report.ps1')
 
 $architecture = Get-DevConfigArchitecture
 $plan = Resolve-OllamaInstallPlan -Architecture $architecture
-$configFile = Join-Path $PSScriptRoot $plan.ConfigurationName
+$catalog = (Get-AiCatalog).Components
+$component = if ($architecture -eq 'Arm64') { $catalog.OllamaArm64 } else { $catalog.OllamaX64 }
+$report = New-AiWorkloadReport -Id 'ollama' -Request @{
+    SkipModelSmoke = [bool]$SkipModelSmoke
+    PlanOnly = [bool]$PlanOnly
+}
+if (-not $ReportPath) { $ReportPath = Get-AiDefaultReportPath -Id 'ollama' }
+trap {
+    Write-AiFailureReport -Report $report -Path $ReportPath -ErrorRecord $_
+    throw $_
+}
+if (-not $PlanOnly) { Assert-AiAdministrator }
 
-& (Join-Path $PSScriptRoot '..\_common\apply-configuration.ps1') `
-    -Id 'ollama' `
-    -ConfigFile $configFile `
-    -RequireCommands @('ollama') `
-    -DeferSentinel
+if ($architecture -eq 'X64') {
+    $acquisition = Ensure-AiWingetPackage -Id 'Ollama.Ollama' -PlanOnly:$PlanOnly
+    if (-not $PlanOnly) {
+        Update-DevConfigSessionPath
+        $ollamaPath = (Get-Command ollama -ErrorAction Stop).Source
+    }
+} else {
+    if ($PlanOnly) {
+        $acquisition = [pscustomobject]@{ Action = 'resolve-latest-stable-arm64-asset'; Source = 'github' }
+    } else {
+        $destination = Join-Path $env:LOCALAPPDATA 'DevConfig\ollama\runtime'
+        $managedProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'ollama.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($destination, [StringComparison]::OrdinalIgnoreCase) })
+        foreach ($process in $managedProcesses) {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+        }
+        foreach ($process in $managedProcesses) {
+            try { Wait-Process -Id $process.ProcessId -Timeout 30 -ErrorAction Stop } catch {
+                throw "Managed Ollama process $($process.ProcessId) did not exit before runtime upgrade."
+            }
+        }
+        $resolved = Install-VerifiedGitHubLatestAsset `
+            -Repository $component.Repository `
+            -AssetPattern $component.AssetPattern `
+            -Destination $destination `
+            -VersionMarker '.devconfig-version' `
+            -RequiredFile 'ollama.exe'
+        Add-UserPathEntry -Path $destination
+        $ollamaPath = Join-Path $destination 'ollama.exe'
+        $acquisition = [pscustomobject]@{
+            Action = $resolved.Action
+            Source = 'github'
+            Tag = $resolved.Tag
+            Asset = $resolved.Asset.name
+            Sha256 = $resolved.Asset.digest
+            stoppedManagedProcesses = @($managedProcesses.ProcessId)
+        }
+    }
+}
+Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
+    component = $component.Component
+    vendor = $component.Vendor
+    architecture = $architecture
+    maturity = $component.Maturity
+    sourceType = $component.SourceType
+    packageId = Get-AiCatalogValue -Entry $component -Name 'PackageId'
+    repository = Get-AiCatalogValue -Entry $component -Name 'Repository'
+    versionPolicy = $component.VersionPolicy
+    integrity = $component.Integrity
+    cachePath = $component.CachePath
+    installPath = $component.InstallPath
+    reasonNormalChannelInsufficient = $component.NormalChannelLimitation
+    expectedStableSource = $component.ExpectedStableSource
+    migrationTrigger = $component.MigrationTrigger
+    cleanupUpgrade = $component.CleanupUpgrade
+    action = $acquisition.Action
+    packageEvidence = $(if ($architecture -eq 'X64' -and -not $PlanOnly) { $acquisition.Evidence } else { $null })
+})
+if ($PlanOnly) {
+    Add-AiReportPhase -Report $report -Name 'model-inference' -Status $(if ($SkipModelSmoke) { 'skipped' } else { 'planned' }) -Evidence @{ model = 'qwen3:0.6b' }
+    Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
+    Write-Host 'PLAN_OK: ollama'
+    return
+}
 
-Invoke-CheckedCommand -FilePath 'ollama' -ArgumentList @('--version') -DisplayName 'Ollama CLI verification'
+Invoke-CheckedCommand -FilePath $ollamaPath -ArgumentList @('--version') -DisplayName 'Ollama CLI verification'
 $versionUri = [uri]'http://localhost:11434/api/version'
 try {
     $version = Invoke-RestMethod -Uri $versionUri -TimeoutSec 3
 } catch {
     Write-Host "Ollama API is not running; starting 'ollama serve'."
-    Start-Process -FilePath (Get-Command ollama).Source -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath $ollamaPath -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
     $version = Wait-JsonEndpoint -Uri $versionUri -TimeoutSeconds 30
 }
 
@@ -39,11 +114,12 @@ if (-not $version.version) {
 }
 
 $modelPlan = Get-OllamaModelSmokePlan
+$inferenceEvidence = $null
 if ($SkipModelSmoke) {
     Write-Warning 'OLLAMA_MODEL_SMOKE_SKIPPED: CLI and API are ready, but no model inference was performed.'
 } else {
     Write-Host "Pulling official Ollama library model $($modelPlan.Model) (approximately $($modelPlan.ApproximateDownloadMb) MB, $($modelPlan.License))."
-    Invoke-CheckedCommand -FilePath 'ollama' -ArgumentList @('pull', $modelPlan.Model) -DisplayName 'Ollama model pull'
+    Invoke-CheckedCommand -FilePath $ollamaPath -ArgumentList @('pull', $modelPlan.Model) -DisplayName 'Ollama model pull'
 
     $modelRoot = if ($env:OLLAMA_MODELS) {
         $env:OLLAMA_MODELS
@@ -80,8 +156,31 @@ if ($SkipModelSmoke) {
     if ($result.marker -ne $modelPlan.Marker) {
         throw "Ollama model inference did not produce marker '$($modelPlan.Marker)'. Response: $($response.response)"
     }
-    $processor = (& ollama ps 2>&1 | Out-String).Trim()
+    $processor = (& $ollamaPath ps 2>&1 | Out-String).Trim()
+    $running = Invoke-RestMethod -Uri 'http://localhost:11434/api/ps' -TimeoutSec 30
+    $loaded = @($running.models | Where-Object { $_.name -eq $modelPlan.Model } | Select-Object -First 1)
+    $gpuFraction = if ($loaded.Count -eq 1 -and [double]$loaded[0].size -gt 0) {
+        [math]::Round(([double]$loaded[0].size_vram / [double]$loaded[0].size), 4)
+    } else { 0 }
+    $serverLogPath = Join-Path $env:LOCALAPPDATA 'Ollama\server.log'
+    $serverEvidence = if (Test-Path -LiteralPath $serverLogPath) {
+        (Get-Content -LiteralPath $serverLogPath -Tail 200 | Select-String 'inference compute|gpu memory|library=' | Out-String).Trim()
+    } else { $null }
+    $report.acceptance.inference = [ordered]@{
+        model = $modelPlan.Model
+        digest = $expectedDigest
+        marker = $modelPlan.Marker
+        sizeBytes = if ($loaded.Count) { $loaded[0].size } else { $null }
+        sizeVramBytes = if ($loaded.Count) { $loaded[0].size_vram } else { $null }
+        gpuFraction = $gpuFraction
+        processTable = $processor
+        backendLogEvidence = $serverEvidence
+    }
+    $inferenceEvidence = $report.acceptance.inference
+    $report.result.fallbackUsed = $gpuFraction -eq 0
     Write-Host $processor
     Write-Host "OLLAMA_READY: version=$($version.version), architecture=$architecture, model=$($modelPlan.Model), verified-blob=$($modelPlan.ModelBlobSha256)."
 }
+Add-AiReportPhase -Report $report -Name 'ollama-inference' -Status $(if ($SkipModelSmoke) { 'skipped' } else { 'ready' }) -Evidence $inferenceEvidence
+Complete-AiWorkloadReport -Report $report -Ready (-not $SkipModelSmoke) -Path $ReportPath
 Write-Host 'INSTALL_OK: ollama'

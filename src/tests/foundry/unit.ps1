@@ -27,5 +27,10 @@ Assert-Equal ($commands.Download -join ' ') 'model download qwen3-0.6b' 'Foundry
 Assert-True (($commands.Complete -join ' ') -like '*DEVCONFIG_FOUNDRY_READY*') 'Foundry completion should require a marker'
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\foundry\install.ps1') -Raw
 Assert-True ($installScript -match '\[switch\]\s*\$SkipModelSmoke') 'Foundry should expose model-smoke opt-out'
+Assert-True ($installScript -match '\[switch\]\s*\$PlanOnly') 'Foundry should expose portable plan mode'
+Assert-True ($installScript -match 'Ensure-AiWingetPackage') 'Foundry should use direct package acquisition'
+Assert-True ($installScript -notmatch 'apply-configuration') 'Foundry should not use winget configure'
+Assert-True ($installScript -match 'server logs -n 200') 'Foundry report should retain execution-provider diagnostics'
+Assert-True ($installScript -match '\$inferenceEvidence = \$null') 'Foundry model-smoke opt-out should use explicit skipped evidence'
 
 Write-Host "UNIT_OK: foundry ($script:AssertionCount assertions)"

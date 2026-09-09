@@ -117,7 +117,10 @@ Full details: [`wsl-comfort/readme.md`](./wsl-comfort/readme.md).
 
 ## 🧪 Focused workloads
 
-Just want one toolchain? Pick a row. Each workload ships a `configuration.winget` file plus a matching `install.ps1` shim that applies it and refreshes PATH in the current session.
+Just want one toolchain? Pick a row. Language workloads generally use
+`configuration.winget`; AI workloads use resumable PowerShell entry points that
+directly check, install or upgrade, refresh PATH, verify a real workload, and
+write a machine-readable report.
 
 | Workload   | Installs                                                                | Run                                                                                                                            |
 | ---------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -133,10 +136,12 @@ Just want one toolchain? Pick a row. Each workload ships a `configuration.winget
 | WinForms   | .NET SDK 10 + Windows Forms desktop workload                            | `winget configure -f .\Workloads\winforms\configuration.winget --accept-configuration-agreements --disable-interactivity`   |
 | WinUI 3    | .NET SDK 10 + Visual Studio Community + Windows App SDK / WinUI 3 + WinAppCLI | `winget configure -f .\Workloads\winui\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | NVIDIA CUDA | CUDA Toolkit + MSVC; compiles and executes a minimal GPU kernel | `.\Workloads\cuda\install.ps1` |
+| AMD ROCm / HIP | ROCm Core SDK 10.0 for supported AMD GPUs; compiles and executes a HIP kernel | `.\Workloads\rocm\install.ps1` |
+| Intel AI | OpenVINO device inference; optional oneAPI/SYCL GPU toolkit and kernel | `.\Workloads\intel-ai\install.ps1` |
 | Foundry Local | Architecture-native WinML package + Qwen3-0.6B model inference | `.\Workloads\foundry\install.ps1` |
-| PyTorch | CPython 3.13 + contained PyTorch CPU/CUDA environment; compatible Triton Windows where supported | `.\Workloads\pytorch\install.ps1` |
+| PyTorch | CPython 3.13 + contained CPU/CUDA/ROCm/XPU environment; vendor-appropriate Triton where supported | `.\Workloads\pytorch\install.ps1` |
 | llama.cpp | x64 Vulkan or verified ARM64 CPU/CUDA runtime + pinned Qwen3-0.6B GGUF inference | `.\Workloads\llama.cpp\install.ps1` |
-| Ollama | Architecture-appropriate WinGet package + official qwen3:0.6b inference | `.\Workloads\ollama\install.ps1` |
+| Ollama | WinGet x64 or verified current ARM64 release + official qwen3:0.6b inference | `.\Workloads\ollama\install.ps1` |
 
 Want the PATH refresh in your current shell? Use the matching shim instead of calling `winget configure` directly:
 
@@ -148,25 +153,30 @@ Want the PATH refresh in your current shell? Use the matching shim instead of ca
 
 ### Windows AI workload support
 
-The AI flows are independent. CUDA is available as an explicit workload, but
-Foundry Local, PyTorch, llama.cpp, and Ollama do not install it unless their own
-supported path needs it. Package availability is checked by WinGet at run time;
-the catalog versions observed on 2026-09-08 were CUDA 13.3, Foundry Local
-0.10.3.0, llama.cpp b10867, Ollama desktop 0.33.3, and Ollama portable 0.32.5.
+The AI flows are independent and install only the selected hardware stack.
+CPU architecture and GPU vendor are separate axes: Windows ARM64 can have an
+NVIDIA GPU (RTX Spark), while AMD and Intel native Windows toolkits currently
+publish x64 artifacts only. There is no generic "ARM GPU" toolkit. Foundry
+Local/Windows ML is the cross-vendor layer for DirectML and dynamically acquired
+NVIDIA, AMD, Intel, and Qualcomm execution providers.
 
 | Workload | Windows x64 | Windows ARM64 | Prerequisites and selected path |
 | --- | --- | --- | --- |
-| CUDA | WinGet CUDA 13.3 | NVIDIA CUDA 13.4 Developer Preview | NVIDIA GPU + current driver by default. Installs MSVC, compiles with `nvcc -arch=native`, and executes a kernel. `-ToolkitOnly` permits compiler-only setup. |
+| CUDA | WinGet CUDA stable | NVIDIA CUDA 13.4 Developer Preview | NVIDIA GPU + current driver by default. Installs MSVC, compiles with `nvcc -arch=native`, and executes a kernel. `-ToolkitOnly` permits compiler-only setup. |
+| AMD ROCm / HIP | ROCm Core SDK 10.0 on supported Radeon/Ryzen AI GPUs | Not published | Uses AMD's stable Windows x64 feed and executes a compiled HIP kernel. Native Windows Triton is unsupported. |
+| Intel AI | OpenVINO CPU/GPU/NPU; optional oneAPI/SYCL | Not published | OpenVINO performs generated-model inference on the requested device. `-Profile Full` also executes a SYCL GPU kernel. |
 | Foundry Local | Supported | Supported | Windows 11 24H2/build 26100+. Uses WinML and does **not** require CUDA. Downloads `qwen3-0.6b` and runs a marker completion. |
-| PyTorch | Stable CPU or NVIDIA CUDA | Stable CPU, or pinned NVIDIA CUDA 13.4 Developer Preview on RTX Spark | Python 3.13 in a private venv. Auto refuses a silent CPU fallback when an unsupported ARM64 NVIDIA stack is detected. |
-| Triton Windows | CUDA, compute capability 8.0+ | CUDA 13.4 preview stack | Installs architecture-native MSVC Build Tools, then installs and kernel-tests Triton only when a compatible PyTorch CUDA/Python wheel exists. |
+| PyTorch | CPU, NVIDIA CUDA, AMD ROCm, or Intel XPU | Stable CPU, or pinned NVIDIA CUDA 13.4 Developer Preview on RTX Spark | `-Backend Auto` deterministically selects NVIDIA → AMD → Intel → CPU. Explicit backend requests never silently fall back. |
+| Triton Windows | NVIDIA CUDA (`triton-windows`) or Intel XPU (`triton-xpu`) | NVIDIA CUDA 13.4 preview stack | AMD native Windows Triton is unsupported. Supported paths execute a real compiled GPU kernel. |
 | llama.cpp | WinGet Vulkan build | Verified official CPU or CUDA 13.4 rolling release | Downloads a pinned, checksum-verified Qwen3-0.6B Q4_K_M GGUF and performs constrained inference. |
-| Ollama | WinGet desktop package | WinGet portable package | Starts or reuses `ollama serve`, pulls official `qwen3:0.6b`, verifies its model blob, and performs structured inference. |
+| Ollama | WinGet desktop package | Verified current official ARM64 ZIP | Starts or reuses `ollama serve`, pulls official `qwen3:0.6b`, verifies its model blob, and performs structured inference. |
 
 Run a flow from PowerShell:
 
 ```powershell
 .\Workloads\cuda\install.ps1
+.\Workloads\rocm\install.ps1
+.\Workloads\intel-ai\install.ps1
 .\Workloads\foundry\install.ps1
 .\Workloads\pytorch\install.ps1
 .\Workloads\llama.cpp\install.ps1
@@ -178,6 +188,17 @@ PyTorch accepts explicit backend and Triton policy switches:
 ```powershell
 .\Workloads\pytorch\install.ps1 -Backend CPU
 .\Workloads\pytorch\install.ps1 -Backend CUDA -RequireTriton
+.\Workloads\pytorch\install.ps1 -Backend ROCm
+.\Workloads\pytorch\install.ps1 -Backend XPU -RequireTriton
+```
+
+Every AI entry point accepts `-PlanOnly` and `-ReportPath`. Plan mode performs
+hardware/support resolution without installing software. Applied runs write JSON
+to `%LOCALAPPDATA%\DevConfig\reports\<flow>-latest.json`; the reusable hardware
+inventory command is:
+
+```powershell
+.\src\tools\collect-ai-hardware.ps1
 ```
 
 Default acceptance proves each workload is usable, not merely installed:
@@ -209,11 +230,33 @@ recorded plan and exact installed torch, NumPy, and Triton versions, skips all
 package downloads/installation, and still reruns the CUDA tensor and Triton
 kernel acceptance tests.
 
+**Hardware validation status:** Windows ARM64 on NVIDIA RTX Spark N1X is
+validated end-to-end for CUDA, PyTorch CUDA, Triton, Foundry Local, llama.cpp,
+and Ollama. AMD ROCm/HIP and Intel OpenVINO/oneAPI are hardware-gated and ready
+for partner execution on supported Windows x64 systems; their current gap is
+physical AMD/Intel hardware coverage, not static planning or unit coverage.
+
+### Preview and rolling acquisition promotion
+
+Acquisition metadata is centralized in
+[`Workloads/_common/ai-catalog.psd1`](./src/Workloads/_common/ai-catalog.psd1).
+Changing from a preview/rolling artifact to a normal channel is a resolver-data
+change after the stated detection rule and real hardware acceptance pass.
+
+| Component | Vendor / architecture | Current channel and identity | Integrity | Why normal channel is insufficient | Expected stable channel | Promotion trigger |
+| --- | --- | --- | --- | --- | --- | --- |
+| CUDA ARM64 | NVIDIA / ARM64 | Developer Preview `cuda_13.4.0_windows_arm64.exe` | Pinned SHA-256 + NVIDIA Authenticode | `Nvidia.CUDA` has no ARM64 payload | `Nvidia.CUDA` ARM64, unconfirmed | ARM64 WinGet manifest appears and N1X kernel passes |
+| PyTorch CUDA ARM64 | NVIDIA / ARM64 | Nightly `torch-2.15.0.dev20260904+cu134-cp313-win_arm64.whl` | Pinned SHA-256 | Stable PyTorch indexes have no Windows ARM64 CUDA wheel | Official PyTorch CUDA Windows ARM64 feed, unconfirmed | Stable wheel appears and tensor/Triton tests pass |
+| Triton Windows | NVIDIA x64/ARM64 | Community `triton-windows==3.8.0.post28` | Package-index TLS + wheel RECORD | Upstream Triton has no general stable Windows package | Official PyTorch/Triton Windows feed, unconfirmed | Official package appears and kernel passes |
+| llama.cpp ARM64 | NVIDIA/Qualcomm/CPU / ARM64 | Latest complete rolling `bNNNNN` asset set | GitHub asset SHA-256 | WinGet lacks ARM64 backend variants | `ggml.llamacpp` with required backend, otherwise unconfirmed | Matching WinGet variant appears and benchmark/inference pass |
+| Foundry Local | Cross-vendor / x64, ARM64 | Preview `Microsoft.FoundryLocal` | WinGet MSIX hash/signature | Product is still preview | Same package ID at GA | Microsoft marks GA and inference/provider report passes |
+| Ollama ARM64 | CPU/NVIDIA / ARM64 | Latest stable official `ollama-windows-arm64.zip` | GitHub asset SHA-256 | Desktop WinGet ID is x64; portable package can lag | Current ARM64 WinGet payload, package ID unconfirmed | WinGet catches current release and API/GPU evidence passes |
+
 <br/>
 
 ## 🎨 Command Palette extension (coming soon)
 
-A [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview) extension lives under [`src/future/cmdpal/`](./src/future/cmdpal/). It reads the same flow list as the rest of the repo and surfaces every flow as a launchable entry, so you don't have to remember which `configuration.winget` to point `winget` at.
+A [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview) extension lives under [`src/future/cmdpal/`](./src/future/cmdpal/). It reads the same flow list as the rest of the repo and launches DSC-backed or PowerShell-native flows from one list.
 
 See [`src/future/cmdpal/README.md`](./src/future/cmdpal/README.md) for build and install instructions.
 

@@ -8,8 +8,9 @@
 #     build + run a canonical "hello world" to prove the install worked
 #     (consumed by CI and the build-run-diff harness).
 #
-# Adding a new flow = one entry here + one configuration.winget per OS
-# + one install.ps1 shim per OS + one hello-world file under tests/<id>/.
+# Adding a new flow = one entry here + an install.ps1 entry point per OS
+# + configuration.winget when declarative DSC is appropriate + a smoke probe
+# under tests/<id>/.
 # No workflow edits required.
 #
 # Schema (per flow):
@@ -23,6 +24,8 @@
 #                                            (typescript, python, go, rust, ...)
 #                     - "desktop"          : a desktop framework on top of a
 #                                            language (winforms, winui, ...)
+#                     - "ai"               : local AI runtimes and
+#                                            hardware-specific accelerators
 #                     - "user-experience"  : OS-feel / shell flows that
 #                                            shape the desktop rather than
 #                                            install dev toolchains
@@ -60,11 +63,9 @@
 #                     CI runs this from the `src/` directory, while CmdPal
 #                     assumes the extension's root is the repo root.
 #     configuration:  (optional) path to winget DSC configuration.winget the
-#                     extension applies via `winget configure`. Defaults to
-#                     "<dir of install>/configuration.winget" when omitted.
-#                     PowerShell-native flows (calm-os, comfort-shell) have no
-#                     DSC document and omit this key; the extension needs a
-#                     script-launch path before it can offer them.
+#                     extension applies via `winget configure`. When omitted,
+#                     the Command Palette extension launches `install` directly.
+#                     PowerShell-native flows (including AI workloads) omit it.
 #     build:          shell command to build the hello world (run from repo
 #                     root). "" to skip.
 #     run:            shell command whose stdout is compared to "expected"
@@ -237,7 +238,6 @@ flows:
     os: [windows]
     windows:
       install: Workloads/cuda/install.ps1
-      configuration: Workloads/cuda/configuration.winget
       build: ""
       run: pwsh -NoProfile -File src/tests/cuda/probe.ps1
       expected: src/tests/cuda/expected.txt
@@ -254,7 +254,6 @@ flows:
     os: [windows]
     windows:
       install: Workloads/foundry/install.ps1
-      configuration: Workloads/foundry/configuration.winget
       build: ""
       run: pwsh -NoProfile -File src/tests/foundry/probe.ps1
       expected: src/tests/foundry/expected.txt
@@ -271,7 +270,6 @@ flows:
     os: [windows]
     windows:
       install: Workloads/pytorch/install.ps1
-      configuration: Workloads/pytorch/configuration.winget
       build: ""
       run: pwsh -NoProfile -File src/tests/pytorch/probe.ps1
       expected: src/tests/pytorch/expected.txt
@@ -288,7 +286,6 @@ flows:
     os: [windows]
     windows:
       install: Workloads/llama.cpp/install.ps1
-      configuration: Workloads/llama.cpp/configuration.winget
       build: ""
       run: pwsh -NoProfile -File src/tests/llama.cpp/probe.ps1
       expected: src/tests/llama.cpp/expected.txt
@@ -305,11 +302,42 @@ flows:
     os: [windows]
     windows:
       install: Workloads/ollama/install.ps1
-      configuration: Workloads/ollama/configuration.winget
       build: ""
       run: pwsh -NoProfile -File src/tests/ollama/probe.ps1
       expected: src/tests/ollama/expected.txt
       version: "ollama --version"
+
+  - id: rocm
+    name: AMD ROCm / HIP
+    description: AMD ROCm Core SDK with a compiled HIP GPU-kernel acceptance test
+    category: ai
+    tags: [ai, amd, rocm, hip, gpu, machine-learning]
+    icon: 🔴
+    onboardingUrl: https://rocm.docs.amd.com/projects/install-on-windows/en/latest/
+    manual_test: true
+    os: [windows]
+    windows:
+      install: Workloads/rocm/install.ps1
+      build: ""
+      run: pwsh -NoProfile -File src/tests/rocm/probe.ps1
+      expected: src/tests/rocm/expected.txt
+      version: "& \"$env:LOCALAPPDATA\\DevConfig\\rocm\\.venv\\Scripts\\hipcc.exe\" --version"
+
+  - id: intel-ai
+    name: Intel AI
+    description: OpenVINO device inference with optional oneAPI/SYCL GPU development
+    category: ai
+    tags: [ai, intel, openvino, oneapi, sycl, gpu, npu]
+    icon: 🔵
+    onboardingUrl: https://docs.openvino.ai/
+    manual_test: true
+    os: [windows]
+    windows:
+      install: Workloads/intel-ai/install.ps1
+      build: ""
+      run: pwsh -NoProfile -File src/tests/intel-ai/probe.ps1
+      expected: src/tests/intel-ai/expected.txt
+      version: "& \"$env:LOCALAPPDATA\\DevConfig\\intel-ai\\openvino\\.venv\\Scripts\\python.exe\" -c \"import openvino; print(openvino.__version__)\""
 
   - id: sql
     name: Lightweight SQL Developer

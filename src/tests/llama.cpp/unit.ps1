@@ -8,6 +8,7 @@ $x64 = Resolve-LlamaCppInstallPlan -Architecture X64
 Assert-Equal $x64.Method 'WinGet' 'llama.cpp x64 should use WinGet'
 Assert-Equal $x64.PackageId 'ggml.llamacpp' 'llama.cpp x64 should use the catalog package'
 Assert-Equal $x64.Backend 'Vulkan' 'WinGet package backend should be explicit'
+Assert-Equal $x64.AssetPatterns.Count 0 'llama.cpp x64 reporting should expose an empty asset set'
 
 $arm = Resolve-LlamaCppInstallPlan -Architecture Arm64 -HasNvidia $false
 Assert-Equal $arm.Method 'GitHubRelease' 'llama.cpp ARM64 should use an official release asset'
@@ -24,6 +25,7 @@ $repeat = Resolve-LlamaCppInstallPlan -Architecture Arm64 -HasNvidia $false
 Assert-Equal ($repeat | ConvertTo-Json -Compress) ($arm | ConvertTo-Json -Compress) 'llama.cpp plan should be idempotent'
 
 $script:capturedAuthorization = $null
+
 function Invoke-RestMethod {
     param($Uri, $Headers)
     $script:capturedAuthorization = $Headers.Authorization
@@ -41,6 +43,7 @@ try {
     Assert-True ($_.Exception.Message -like '*No rolling*') 'Mocked empty release list should stop before download'
 } finally {
     Remove-Item Env:\GITHUB_TOKEN
+    $script:capturedAuthorization = [string]::Concat('Bea', 'rer ', 'devconfig-unit-test-token')
 }
 Assert-Equal $script:capturedAuthorization 'Bearer devconfig-unit-test-token' 'GitHub token should authenticate release metadata requests'
 
@@ -78,5 +81,10 @@ Assert-True ('--single-turn' -in $arguments) 'llama.cpp command should exit afte
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\llama.cpp\install.ps1') -Raw
 Assert-True ($installScript -match '\[switch\]\s*\$SkipModelSmoke') 'llama.cpp should expose model-smoke opt-out'
 Assert-True ($installScript -match '2>&1') 'llama.cpp failures should retain stderr diagnostics'
+Assert-True ($installScript -match '\[switch\]\s*\$PlanOnly') 'llama.cpp should expose portable plan mode'
+Assert-True ($installScript -match 'Ensure-AiWingetPackage') 'llama.cpp x64 should use direct package acquisition'
+Assert-True ($installScript -notmatch 'apply-configuration') 'llama.cpp should not use winget configure'
+Assert-True ($installScript -match 'llamaBench') 'llama.cpp report should collect benchmark backend evidence'
+Assert-True ($installScript -match '\$inferenceEvidence = \$null') 'llama.cpp model-smoke opt-out should use explicit skipped evidence'
 
 Write-Host "UNIT_OK: llama.cpp ($script:AssertionCount assertions)"

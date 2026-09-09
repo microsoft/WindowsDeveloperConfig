@@ -14,50 +14,98 @@
 [CmdletBinding()]
 param(
     [switch] $ToolkitOnly,
-    [switch] $SkipWorkloadSmoke
+    [switch] $SkipWorkloadSmoke,
+    [switch] $PlanOnly,
+    [string] $ReportPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-. (Join-Path $PSScriptRoot '..\_common\ai-support.ps1')
+. (Join-Path $PSScriptRoot '..\_common\direct-setup.ps1')
+. (Join-Path $PSScriptRoot '..\_common\ai-report.ps1')
 
 $architecture = Get-DevConfigArchitecture
-$plan = Resolve-CudaInstallPlan -Architecture $architecture -WindowsBuild (Get-WindowsBuildNumber)
+$catalog = (Get-AiCatalog).Components
+$component = if ($architecture -eq 'Arm64') { $catalog.CudaArm64 } else { $catalog.CudaX64 }
+$report = New-AiWorkloadReport -Id 'cuda' -Request @{
+    ToolkitOnly = [bool]$ToolkitOnly
+    SkipWorkloadSmoke = [bool]$SkipWorkloadSmoke
+    PlanOnly = [bool]$PlanOnly
+}
+if (-not $ReportPath) { $ReportPath = Get-AiDefaultReportPath -Id 'cuda' }
+trap {
+    Write-AiFailureReport -Report $report -Path $ReportPath -ErrorRecord $_
+    throw $_
+}
+try {
+    $plan = Resolve-CudaInstallPlan -Architecture $architecture -WindowsBuild (Get-WindowsBuildNumber)
+} catch {
+    if ($PlanOnly) {
+        [void]$report.result.blockers.Add($_.Exception.Message)
+        Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
+        Write-Host 'PLAN_UNSUPPORTED: cuda'
+        return
+    }
+    throw
+}
+if (-not $PlanOnly) { Assert-AiAdministrator }
 
 $gpu = Get-NvidiaGpu
 if (-not $gpu -and -not $ToolkitOnly) {
+    if ($PlanOnly) {
+        [void]$report.result.blockers.Add('No NVIDIA GPU detected; default kernel acceptance would fail. Use -ToolkitOnly for compiler-only planning.')
+    } else {
     throw "No NVIDIA GPU was detected. CUDA Toolkit can be installed without a GPU only with -ToolkitOnly; GPU execution requires supported NVIDIA hardware and a current driver."
+    }
 }
 
-& (Join-Path $PSScriptRoot '..\_common\apply-configuration.ps1') `
-    -Id 'cuda' `
-    -ConfigFile (Join-Path $PSScriptRoot $plan.ConfigurationName) `
-    -RequireCommands @() `
-    -DeferSentinel
+Write-AiPhase -Name 'Plan' -Detail "$architecture / NVIDIA CUDA $($plan.ToolkitVersion)"
+Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
+    component = $component.Component
+    vendor = $component.Vendor
+    architecture = $architecture
+    maturity = $component.Maturity
+    sourceType = $component.SourceType
+    packageId = Get-AiCatalogValue -Entry $component -Name 'PackageId'
+    version = Get-AiCatalogValue -Entry $component -Name 'Version'
+    uri = Get-AiCatalogValue -Entry $component -Name 'Uri'
+    sha256 = Get-AiCatalogValue -Entry $component -Name 'Sha256'
+    versionPolicy = $component.VersionPolicy
+    integrity = $component.Integrity
+    cachePath = $component.CachePath
+    installPath = $component.InstallPath
+    reasonNormalChannelInsufficient = $component.NormalChannelLimitation
+    expectedStableSource = $component.ExpectedStableSource
+    migrationTrigger = $component.MigrationTrigger
+    cleanupUpgrade = $component.CleanupUpgrade
+    action = if ($PlanOnly) { 'planned' } else { 'pending' }
+})
 
-if ($plan.Method -eq 'NvidiaInstaller') {
-    $installed = $false
-    try {
-        $existingNvcc = Get-CudaNvccPath -ToolkitVersion $plan.ToolkitVersion
-        $installedVersion = (& $existingNvcc --version 2>&1 | Out-String)
-        $installed = $LASTEXITCODE -eq 0 -and $installedVersion -match 'release 13\.4'
-    } catch {
-        $installed = $false
+$toolchain = Ensure-AiVisualCppTools -Architecture $architecture -PlanOnly:$PlanOnly
+Add-AiReportPhase -Report $report -Name 'host-compiler' -Status $(if ($PlanOnly) { 'planned' } else { 'ready' }) -Evidence $toolchain
+
+$cudaAcquisition = Ensure-AiCudaToolkit -Architecture $architecture -PlanOnly:$PlanOnly
+$report.acquisitions[0].action = $cudaAcquisition.Action
+if (-not $PlanOnly -and $architecture -eq 'X64') {
+    $report.acquisitions[0].packageEvidence = $cudaAcquisition.PackageEvidence
+}
+if ($PlanOnly) {
+    Add-AiReportPhase -Report $report -Name 'cuda-kernel' -Status 'planned' -Evidence @{
+        source = (Join-Path $PSScriptRoot 'smoke.cu')
+        target = 'detected NVIDIA GPU'
     }
-    if (-not $installed) {
-        Write-Host 'Installing NVIDIA CUDA Toolkit 13.4 Developer Preview for Windows ARM64 (approximately 3.8 GB).'
-        Invoke-VerifiedInstaller `
-            -Uri $plan.InstallerUrl `
-            -Sha256 $plan.InstallerSha256 `
-            -SignerPattern 'NVIDIA' `
-            -ArgumentList @('-s') `
-            -SuccessExitCodes @(0, 3010)
-    }
+    Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
+    Write-Host $(if ($report.result.blockers.Count) { 'PLAN_UNSUPPORTED: cuda' } else { 'PLAN_OK: cuda' })
+    return
 }
 
 $nvcc = Get-CudaNvccPath -ToolkitVersion $plan.ToolkitVersion
 Invoke-CheckedCommand -FilePath $nvcc -ArgumentList @('--version') -DisplayName 'CUDA compiler verification'
+$nvccVersionEvidence = (& $nvcc --version 2>&1 | Out-String).Trim()
+if ($nvccVersionEvidence -match 'release\s+([0-9]+\.[0-9]+)') {
+    $report.acquisitions[0].version = $Matches[1]
+}
 $driver = Get-NvidiaDriverInfo
 $readiness = Get-CudaReadiness `
     -ToolkitAvailable $true `
@@ -73,6 +121,7 @@ if ($readiness.GpuReady) {
     throw "CUDA Toolkit is installed, but no usable NVIDIA driver/GPU was reported by nvidia-smi. Update the NVIDIA driver, reboot if requested, and rerun this flow."
 }
 
+$kernelReady = $false
 if ($SkipWorkloadSmoke -or -not $readiness.GpuReady) {
     Write-Warning 'CUDA_WORKLOAD_SMOKE_SKIPPED: the toolkit is installed, but a compiled GPU kernel was not executed.'
 } else {
@@ -96,6 +145,14 @@ if ($SkipWorkloadSmoke -or -not $readiness.GpuReady) {
             throw "CUDA smoke kernel failed on the GPU (exit $LASTEXITCODE, output '$output')."
         }
         Write-Host 'CUDA_WORKLOAD_READY: compiled and executed a CUDA kernel on the detected GPU.'
+        $kernelReady = $true
+        $report.acceptance.kernel = [ordered]@{
+            compiled = $true
+            executed = $true
+            marker = 'CUDA_KERNEL_READY'
+            device = $driver.Name
+            computeCapability = $driver.ComputeCapability.ToString()
+        }
     } finally {
         if (Test-Path -LiteralPath $temporary) {
             Remove-Item -LiteralPath $temporary -Recurse -Force
@@ -106,4 +163,10 @@ if ($SkipWorkloadSmoke -or -not $readiness.GpuReady) {
 if ($plan.Preview) {
     Write-Warning 'CUDA 13.4 for Windows ARM64 is an NVIDIA Developer Preview and is not intended for production certification or benchmarking.'
 }
+Add-AiReportPhase -Report $report -Name 'cuda-toolkit' -Status 'ready' -Evidence @{
+    nvcc = $nvcc
+    nvccVersion = $nvccVersionEvidence
+    driver = $driver
+}
+Complete-AiWorkloadReport -Report $report -Ready $kernelReady -Path $ReportPath
 Write-Host 'INSTALL_OK: cuda'

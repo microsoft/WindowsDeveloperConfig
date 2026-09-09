@@ -1,6 +1,10 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+function Get-AiCatalogData {
+    return Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'ai-catalog.psd1')
+}
+
 function Get-DevConfigArchitecture {
     [CmdletBinding()]
     param([ValidateSet('', 'X64', 'Arm64')] [string] $Override = '')
@@ -48,8 +52,7 @@ function Resolve-CudaInstallPlan {
         return [pscustomobject]@{
             Architecture = $Architecture
             Method = 'WinGet'
-            ConfigurationName = 'configuration.winget'
-            ToolkitVersion = '13.3'
+            ToolkitVersion = $null
             Preview = $false
             InstallerUrl = $null
             InstallerSha256 = $null
@@ -60,14 +63,15 @@ function Resolve-CudaInstallPlan {
         throw "CUDA 13.4 Developer Preview for Windows ARM64 requires Windows 11; detected build $WindowsBuild."
     }
 
+    $catalog = (Get-AiCatalogData).Components.CudaArm64
     return [pscustomobject]@{
         Architecture = $Architecture
         Method = 'NvidiaInstaller'
         ConfigurationName = 'configuration.arm64.winget'
-        ToolkitVersion = '13.4'
+        ToolkitVersion = $catalog.Version.Substring(0, 4)
         Preview = $true
-        InstallerUrl = 'https://packages.nvidia.com/prerelease/cuda/13.4.0/local_installers/cuda_13.4.0_windows_arm64.exe'
-        InstallerSha256 = 'a1f68c81160b16d519c4087788b9c07de41306c3f1b872471ceee0996621374d'
+        InstallerUrl = $catalog.Uri
+        InstallerSha256 = $catalog.Sha256
     }
 }
 
@@ -102,22 +106,23 @@ function Resolve-LlamaCppInstallPlan {
         return [pscustomobject]@{
             Method = 'WinGet'
             PackageId = 'ggml.llamacpp'
-            AssetPattern = $null
+            AssetPatterns = @()
             Backend = 'Vulkan'
         }
     }
 
+    $catalog = (Get-AiCatalogData).Components.LlamaCppRolling
     $useCuda = $HasNvidia -and $DriverMajor -ge 616 -and $ComputeCapability.Major -ge 12
     return [pscustomobject]@{
         Method = 'GitHubRelease'
         PackageId = $null
         AssetPatterns = if ($useCuda) {
             @(
-                '^llama-b[0-9]+-bin-win-cuda-13\.4-arm64\.zip$',
-                '^cudart-llama-bin-win-cuda-13\.4-arm64\.zip$'
+                $catalog.CudaArm64Pattern,
+                $catalog.CudaRuntimeArm64Pattern
             )
         } else {
-            @('^llama-b[0-9]+-bin-win-cpu-arm64\.zip$')
+            @($catalog.CpuArm64Pattern)
         }
         Backend = if ($useCuda) { 'CUDA 13.4 Preview' } else { 'CPU' }
     }
@@ -129,15 +134,15 @@ function Resolve-OllamaInstallPlan {
 
     if ($Architecture -eq 'X64') {
         return [pscustomobject]@{
+            Method = 'WinGet'
             PackageId = 'Ollama.Ollama'
-            ConfigurationName = 'configuration.winget'
             LaunchMode = 'Desktop'
         }
     }
 
     return [pscustomobject]@{
-        PackageId = 'Ollama.Ollama.Portable'
-        ConfigurationName = 'configuration.arm64.winget'
+        Method = 'GitHubRelease'
+        PackageId = $null
         LaunchMode = 'Serve'
     }
 }
@@ -150,6 +155,134 @@ function Get-NvidiaGpu {
     return $controllers |
         Where-Object { $_.PNPDeviceID -match 'VEN_10DE' -or $_.Name -match 'NVIDIA' } |
         Select-Object -First 1
+}
+
+function Get-AmdGfxTarget {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $GpuName)
+
+    $normalizedGpuName = ($GpuName -replace '\((TM|R)\)', '' -replace '\s+', ' ').Trim()
+    $map = @(
+        @{ Pattern = 'R9700|R9600D|RX 9070'; Gfx = 'gfx1201' }
+        @{ Pattern = 'RX 9060|RX 9050'; Gfx = 'gfx1200' }
+        @{ Pattern = 'W7900|W7800|RX 7900'; Gfx = 'gfx1100' }
+        @{ Pattern = 'W7700|RX 7800|RX 7700'; Gfx = 'gfx1101' }
+        @{ Pattern = 'RX (7600|7650)'; Gfx = 'gfx1102' }
+        @{ Pattern = 'Ryzen AI Max|Radeon 8060S'; Gfx = 'gfx1151' }
+        @{ Pattern = 'Ryzen AI 9.*(475|470|375|370|465|365)|Radeon (890M|880M)'; Gfx = 'gfx1150' }
+        @{ Pattern = 'Ryzen AI (7|5).*(450|350|345|440|340|330)|Radeon 860M'; Gfx = 'gfx1152' }
+        @{ Pattern = 'Ryzen AI (7|5).*(445|435|430)|Radeon 840M'; Gfx = 'gfx1153' }
+        @{ Pattern = 'Ryzen (9 270|7 (260|250)|5 (240|230|220)|3 210)|Radeon (780M|760M|740M)'; Gfx = 'gfx1103' }
+    )
+    $entry = $map | Where-Object { $normalizedGpuName -match $_.Pattern } | Select-Object -First 1
+    if (-not $entry) {
+        return $null
+    }
+    return $entry.Gfx
+}
+
+function Get-AiDetectedVendor {
+    $controllers = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue)
+    if ($controllers | Where-Object { $_.PNPDeviceID -match 'VEN_10DE' -or $_.Name -match 'NVIDIA' }) { return 'NVIDIA' }
+    if ($controllers | Where-Object { $_.PNPDeviceID -match 'VEN_1002' -or $_.Name -match 'AMD|Radeon' }) { return 'AMD' }
+    if ($controllers | Where-Object { $_.PNPDeviceID -match 'VEN_8086' -or $_.Name -match 'Intel' }) { return 'Intel' }
+    return 'None'
+}
+
+function Get-AmdGpuName {
+    $names = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+        Where-Object { $_.PNPDeviceID -match 'VEN_1002' -or $_.Name -match 'AMD|Radeon' } |
+        ForEach-Object Name)
+    return Select-AmdGpuName -GpuNames $names
+}
+
+function Select-AmdGpuName {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()] [string[]] $GpuNames = @())
+    $supported = $GpuNames | Where-Object { Get-AmdGfxTarget -GpuName $_ } | Sort-Object | Select-Object -First 1
+    if ($supported) { return $supported }
+    return $GpuNames | Sort-Object | Select-Object -First 1
+}
+
+function Resolve-RocmInstallPlan {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('X64', 'Arm64')] [string] $Architecture,
+        [AllowNull()] [string] $GpuName
+    )
+
+    if ($Architecture -ne 'X64') {
+        throw 'AMD ROCm Core SDK 10.0 does not publish native Windows ARM64 packages.'
+    }
+    $gfx = if ($GpuName) { Get-AmdGfxTarget -GpuName $GpuName } else { $null }
+    if (-not $gfx) {
+        throw "No AMD GPU supported by the ROCm 10.0 Windows matrix was detected. Detected GPU: '$GpuName'."
+    }
+    return [pscustomobject]@{
+        Architecture = $Architecture
+        GpuName = $GpuName
+        GfxTarget = $gfx
+        Requirement = "rocm[libraries,devel,device-$gfx]==10.0.0"
+    }
+}
+
+function Get-IntelGpuName {
+    $names = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+        Where-Object { $_.PNPDeviceID -match 'VEN_8086' -or $_.Name -match 'Intel' } |
+        ForEach-Object Name)
+    return Select-IntelGpuName -GpuNames $names
+}
+
+function Select-IntelGpuName {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()] [string[]] $GpuNames = @())
+    $supported = $GpuNames | Where-Object { Test-IntelXpuGpuSupported -GpuName $_ } | Sort-Object | Select-Object -First 1
+    if ($supported) { return $supported }
+    return $GpuNames | Sort-Object | Select-Object -First 1
+}
+
+function Resolve-IntelAiPlan {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [ValidateSet('X64', 'Arm64')] [string] $Architecture,
+        [Parameter(Mandatory)] [ValidateSet('Auto', 'CPU', 'GPU', 'NPU')] [string] $Device,
+        [Parameter(Mandatory)] [ValidateSet('OpenVINO', 'SYCL', 'Full')] [string] $Profile,
+        [bool] $IntelGpuPresent = $false,
+        [bool] $IntelNpuPresent = $false
+    )
+
+    if ($Architecture -ne 'X64') {
+        throw 'Intel oneAPI, OpenVINO, PyTorch XPU, and Triton XPU do not publish native Windows ARM64 artifacts.'
+    }
+    $selectedDevice = if ($Profile -eq 'SYCL' -and $Device -eq 'Auto') {
+        'GPU'
+    } elseif ($Device -eq 'Auto') {
+        if ($IntelNpuPresent) { 'NPU' } elseif ($IntelGpuPresent) { 'GPU' } else { 'CPU' }
+    } else { $Device }
+    if ($selectedDevice -eq 'GPU' -and -not $IntelGpuPresent) {
+        throw 'Intel GPU was requested, but no Intel display adapter was detected.'
+    }
+    if ($selectedDevice -eq 'NPU' -and -not $IntelNpuPresent) {
+        throw 'Intel NPU was requested, but no Intel AI Boost/NPU device was detected.'
+    }
+    if ($Profile -in @('SYCL', 'Full') -and -not $IntelGpuPresent) {
+        throw 'The SYCL profile requires a detected Intel GPU because its acceptance kernel uses gpu_selector_v.'
+    }
+    return [pscustomobject]@{
+        Architecture = $Architecture
+        Device = $selectedDevice
+        Profile = $Profile
+        InstallOpenVino = $Profile -in @('OpenVINO', 'Full')
+        InstallOneApi = $Profile -in @('SYCL', 'Full')
+    }
+}
+
+function Test-IntelXpuGpuSupported {
+    [CmdletBinding()]
+    param([AllowNull()] [string] $GpuName)
+    if (-not $GpuName) { return $false }
+    $normalized = ($GpuName -replace '\((TM|R)\)', '' -replace '\s+', ' ').Trim()
+    return $normalized -match 'Arc.*(A|B)[0-9]|Arc.*(130V|140V)|Arc.*Graphics|Meteor Lake|Arrow Lake|Lunar Lake|Panther Lake|Core Ultra'
 }
 
 function Get-NvidiaDriverInfo {
@@ -208,11 +341,17 @@ function Resolve-PyTorchPlan {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [ValidateSet('X64', 'Arm64')] [string] $Architecture,
-        [Parameter(Mandatory)] [ValidateSet('Auto', 'CPU', 'CUDA')] [string] $Backend,
+        [Parameter(Mandatory)] [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $Backend,
         [Parameter(Mandatory)] [version] $PythonVersion,
         [bool] $HasNvidia = $false,
         [int] $DriverMajor = 0,
         [version] $ComputeCapability = [version]'0.0',
+        [ValidateSet('NVIDIA', 'AMD', 'Intel', 'None')] [string] $GpuVendor = 'None',
+        [string] $GpuName,
+        [string] $IntelGpuName,
+        [string] $AmdGfxTarget,
+        [bool] $HasAmd = $false,
+        [bool] $HasIntel = $false,
         [switch] $SkipTriton
     )
 
@@ -226,6 +365,9 @@ function Resolve-PyTorchPlan {
             $HasNvidia -and
             $DriverMajor -ge 616 -and
             $ComputeCapability.Major -ge 12
+        if ($Backend -in @('ROCm', 'XPU')) {
+            throw "$Backend is not published for native Windows ARM64."
+        }
         if ($Backend -eq 'CUDA' -and -not $canUseCudaPreview) {
             throw 'Windows ARM64 CUDA PyTorch requires CPython 3.13, an RTX Spark-class NVIDIA GPU (compute capability 12.x), and developer driver branch 616 or newer.'
         }
@@ -248,8 +390,33 @@ function Resolve-PyTorchPlan {
         if ($Backend -eq 'CUDA' -and $DriverMajor -lt 525) {
             throw "CUDA backend was requested, but NVIDIA driver branch $DriverMajor is too old. Install a branch 525 or newer driver."
         }
+        $amdPresent = $HasAmd -or $GpuVendor -eq 'AMD'
+        $amdRocmSupported = $amdPresent -and [bool]$AmdGfxTarget
+        $intelPresent = $HasIntel -or $GpuVendor -eq 'Intel'
+        if ($Backend -eq 'ROCm' -and -not $amdRocmSupported) {
+            throw 'ROCm backend was requested, but no supported Windows AMD GPU/gfx target was detected.'
+        }
+        $intelCandidateName = if ($IntelGpuName) { $IntelGpuName } else { $GpuName }
+        $intelXpuSupported = $intelPresent -and (Test-IntelXpuGpuSupported -GpuName $intelCandidateName)
+        if ($Backend -eq 'XPU' -and -not $intelXpuSupported) {
+            throw "XPU backend was requested, but the detected Intel GPU '$intelCandidateName' is not in the validated Windows PyTorch XPU families."
+        }
+        if ($Backend -eq 'Auto' -and $amdPresent -and -not $amdRocmSupported -and -not $HasNvidia -and -not $intelXpuSupported) {
+            throw "An AMD GPU is present, but '$GpuName' is not in the ROCm 10.0 Windows support matrix. Use -Backend CPU to explicitly accept CPU-only PyTorch."
+        }
+        if ($Backend -eq 'Auto' -and $intelPresent -and -not $intelXpuSupported -and -not $HasNvidia -and -not $amdRocmSupported) {
+            throw "An Intel GPU is present, but '$intelCandidateName' is not in the validated Windows PyTorch XPU families. Use -Backend CPU to explicitly accept CPU-only PyTorch."
+        }
         $selectedBackend = if ($Backend -eq 'Auto') {
-            if ($HasNvidia -and $DriverMajor -ge 525) { 'CUDA' } else { 'CPU' }
+            if ($HasNvidia -and $DriverMajor -ge 525) {
+                'CUDA'
+            } elseif ($amdRocmSupported) {
+                'ROCm'
+            } elseif ($intelXpuSupported) {
+                'XPU'
+            } else {
+                'CPU'
+            }
         } else {
             $Backend
         }
@@ -263,14 +430,16 @@ function Resolve-PyTorchPlan {
     $directWheelSha256 = $null
     $directWheelFileName = $null
     $preview = $false
+    $catalog = (Get-AiCatalogData).Components
+    $additionalRequirements = @()
     if ($selectedBackend -eq 'CUDA') {
         if ($Architecture -eq 'Arm64') {
             $runtime = 'cu134'
             $indexUrl = $null
             $preview = $true
-            $torchVersion = '2.15.0.dev20260904+cu134'
-            $directWheelUrl = 'https://pypi.nvidia.com/nvtorch_oot_nightly/torch/torch-2.15.0.dev20260904%2Bcu134-cp313-cp313-win_arm64.whl'
-            $directWheelSha256 = 'af0872854d183cb6894dbd5b1e5e9291875ce139d138b5fc0b501498828265d3'
+            $torchVersion = $catalog.NvidiaPyTorchArm64.Version
+            $directWheelUrl = $catalog.NvidiaPyTorchArm64.Uri
+            $directWheelSha256 = $catalog.NvidiaPyTorchArm64.Sha256
             $directWheelFileName = 'torch-2.15.0.dev20260904+cu134-cp313-cp313-win_arm64.whl'
             $torchRequirement = "torch @ $directWheelUrl#sha256=$directWheelSha256"
         } elseif ($ComputeCapability.Major -ge 10 -and $DriverMajor -lt 580) {
@@ -286,17 +455,47 @@ function Resolve-PyTorchPlan {
             $torchVersion = '2.14.0+cu126'
             $torchRequirement = 'torch==2.14.0+cu126'
         }
+    } elseif ($selectedBackend -eq 'ROCm') {
+        $runtime = 'rocm10.0.0'
+        $indexUrl = 'https://stable.repo.amd.com/rocm/whl-next/'
+        $torchVersion = '2.13.0+rocm10.0.0'
+        $torchRequirement = "torch[device-$AmdGfxTarget]==2.13.0+rocm10.0.0"
+        $additionalRequirements = @(
+            "torchvision[device-$AmdGfxTarget]==0.28.0+rocm10.0.0",
+            'torchaudio==2.11.0.2+rocm10.0.0'
+        )
+    } elseif ($selectedBackend -eq 'XPU') {
+        $runtime = 'xpu'
+        $indexUrl = 'https://download.pytorch.org/whl/xpu'
+        $torchVersion = '2.14.0+xpu'
+        $torchRequirement = 'torch==2.14.0+xpu'
+        $additionalRequirements = @('torchvision==0.29.0+xpu')
     }
 
-    $installTriton = $selectedBackend -eq 'CUDA' -and
-        $ComputeCapability.Major -ge 8 -and
-        -not $SkipTriton
+    $installTriton = -not $SkipTriton -and (
+        ($selectedBackend -eq 'CUDA' -and $ComputeCapability.Major -ge 8) -or
+        $selectedBackend -eq 'XPU')
+    $tritonRequirement = if (-not $installTriton) {
+        $null
+    } elseif ($selectedBackend -eq 'XPU') {
+        'triton-xpu==3.8.0'
+    } else {
+        $catalog.TritonWindows.Package
+    }
+    $tritonVersion = if (-not $installTriton) {
+        $null
+    } elseif ($selectedBackend -eq 'XPU') {
+        '3.8.0'
+    } else {
+        '3.8.0.post28'
+    }
 
     return [pscustomobject]@{
         Architecture = $Architecture
         Backend = $selectedBackend
         TorchRequirement = $torchRequirement
         TorchVersion = $torchVersion
+        AdditionalRequirements = $additionalRequirements
         IndexUrl = $indexUrl
         Runtime = $runtime
         Preview = $preview
@@ -306,12 +505,12 @@ function Resolve-PyTorchPlan {
         NumpyRequirement = 'numpy==2.5.2'
         NumpyVersion = '2.5.2'
         InstallTriton = $installTriton
-        TritonRequirement = if ($installTriton) { 'triton-windows==3.8.0.post28' } else { $null }
-        TritonVersion = if ($installTriton) { '3.8.0.post28' } else { $null }
+        TritonRequirement = $tritonRequirement
+        TritonVersion = $tritonVersion
         TritonReason = if ($installTriton) {
-            'Compatible PyTorch CUDA, CPython, architecture, and NVIDIA compute capability detected.'
+            "Compatible PyTorch $selectedBackend stack detected."
         } elseif ($selectedBackend -ne 'CUDA') {
-            'Triton Windows is only installed for the CUDA backend.'
+            "No supported native-Windows Triton package is selected for $selectedBackend."
         } elseif ($ComputeCapability.Major -lt 8) {
             "Triton Windows requires NVIDIA compute capability 8.0 or newer; detected $ComputeCapability."
         } else {
@@ -374,9 +573,27 @@ function Test-PyTorchEnvironmentMatches {
         return $false
     }
     if ($desired.tritonVersion) {
-        return $InstalledVersions.triton -eq $desired.tritonVersion
+        if ($InstalledVersions.triton -ne $desired.tritonVersion) {
+            return $false
+        }
+    } elseif (-not [string]::IsNullOrEmpty($InstalledVersions.triton)) {
+        return $false
     }
-    return [string]::IsNullOrEmpty($InstalledVersions.triton)
+
+    $additionalRequirements = if ($desired.PSObject.Properties.Name -contains 'additionalRequirements') {
+        @($desired.additionalRequirements)
+    } else {
+        @()
+    }
+    foreach ($requirement in $additionalRequirements) {
+        if ($requirement -match '^torchvision(?:\[[^\]]+\])?==(.+)$' -and $InstalledVersions.torchvision -ne $Matches[1]) {
+            return $false
+        }
+        if ($requirement -match '^torchaudio==(.+)$' -and $InstalledVersions.torchaudio -ne $Matches[1]) {
+            return $false
+        }
+    }
+    return $true
 }
 
 function Get-PyTorchPackageAction {
@@ -428,15 +645,25 @@ import json
 import numpy
 import torch
 
-try:
-    triton_version = importlib.metadata.version("triton-windows")
-except importlib.metadata.PackageNotFoundError:
-    triton_version = None
+versions = {}
+for distribution in ("triton-windows", "triton-xpu", "torchvision", "torchaudio"):
+    try:
+        versions[distribution] = importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        versions[distribution] = None
+
+triton_distribution = next(
+    (name for name in ("triton-windows", "triton-xpu") if versions[name]),
+    None,
+)
 
 print(json.dumps({
     "torch": torch.__version__,
     "numpy": numpy.__version__,
-    "triton": triton_version,
+    "triton": versions[triton_distribution] if triton_distribution else None,
+    "triton_distribution": triton_distribution,
+    "torchvision": versions["torchvision"],
+    "torchaudio": versions["torchaudio"],
 }, sort_keys=True))
 '@
     $json = (& $PythonPath -c $script 2>$null | Select-Object -Last 1)
@@ -448,6 +675,36 @@ print(json.dumps({
     } catch {
         return $null
     }
+}
+
+function Test-PythonDistributionVersions {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $PythonPath,
+        [Parameter(Mandatory)] [hashtable] $Expected
+    )
+
+    if (-not (Test-Path -LiteralPath $PythonPath)) { return $false }
+    $namesJson = @($Expected.Keys) | ConvertTo-Json -Compress
+    $script = @"
+import importlib.metadata
+import json
+names = json.loads(r'''$namesJson''')
+result = {}
+for name in names:
+    try:
+        result[name] = importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        result[name] = None
+print(json.dumps(result, sort_keys=True))
+"@
+    $json = (& $PythonPath -c $script 2>$null | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0 -or -not $json) { return $false }
+    $installed = $json | ConvertFrom-Json
+    foreach ($name in $Expected.Keys) {
+        if ($installed.$name -ne $Expected[$name]) { return $false }
+    }
+    return $true
 }
 
 function Assert-PythonArchitecture {
@@ -686,6 +943,36 @@ function Add-UserPathEntry {
     }
 }
 
+function Install-VerifiedDirectorySwap {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Source,
+        [Parameter(Mandatory)] [string] $Destination
+    )
+
+    $parent = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    $newPath = "$Destination.new-$([guid]::NewGuid().ToString('N'))"
+    $oldPath = "$Destination.old-$([guid]::NewGuid().ToString('N'))"
+    Move-Item -LiteralPath $Source -Destination $newPath
+    try {
+        if (Test-Path -LiteralPath $Destination) {
+            Move-Item -LiteralPath $Destination -Destination $oldPath
+        }
+        Move-Item -LiteralPath $newPath -Destination $Destination
+        if (Test-Path -LiteralPath $oldPath) {
+            Remove-Item -LiteralPath $oldPath -Recurse -Force
+        }
+    } catch {
+        if (-not (Test-Path -LiteralPath $Destination) -and (Test-Path -LiteralPath $oldPath)) {
+            Move-Item -LiteralPath $oldPath -Destination $Destination -ErrorAction SilentlyContinue
+        }
+        throw
+    } finally {
+        Remove-Item -LiteralPath $newPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Remove-UserPathEntry {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $Path)
@@ -790,6 +1077,7 @@ function Invoke-VerifiedInstaller {
         if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch $SignerPattern) {
             throw "Installer signature validation failed for '$Uri'. Expected a valid signer matching '$SignerPattern'; got '$($signature.Status)' from '$($signature.SignerCertificate.Subject)'."
         }
+
         $process = Start-Process -FilePath $temporary -ArgumentList $ArgumentList -Wait -PassThru
         if ($process.ExitCode -notin $SuccessExitCodes) {
             throw "Installer '$Uri' failed with exit code $($process.ExitCode)."
@@ -801,16 +1089,50 @@ function Invoke-VerifiedInstaller {
     }
 }
 
+function Invoke-VerifiedLocalInstaller {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [ValidatePattern('^[0-9a-fA-F]{64}$')] [string] $Sha256,
+        [Parameter(Mandatory)] [string] $SignerPattern,
+        [string[]] $ArgumentList = @(),
+        [int[]] $SuccessExitCodes = @(0),
+        [int] $TimeoutSeconds = 7200
+    )
+
+    $actualHash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    if ($actualHash -ne $Sha256) {
+        throw "Installer SHA-256 mismatch for '$Path'. Expected $Sha256; got $actualHash."
+    }
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch $SignerPattern) {
+        throw "Installer signature validation failed for '$Path'."
+    }
+    $exitCode = Invoke-DevConfigProcess -FilePath $Path -Arguments $ArgumentList -TimeoutSeconds $TimeoutSeconds
+    if ($exitCode -notin $SuccessExitCodes) {
+        throw "Installer '$Path' failed with exit code $exitCode."
+    }
+}
+
 function Get-CudaNvccPath {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $ToolkitVersion)
+    param([AllowNull()] [AllowEmptyString()] [string] $ToolkitVersion)
 
     $cudaPath = [Environment]::GetEnvironmentVariable('CUDA_PATH', 'Machine')
     $pathCommand = Get-Command nvcc -ErrorAction SilentlyContinue
+    $versionedCandidate = if ($ToolkitVersion) {
+        Join-Path $env:ProgramFiles "NVIDIA GPU Computing Toolkit\CUDA\v$ToolkitVersion\bin\nvcc.exe"
+    } else { $null }
+    $cudaRoot = Join-Path $env:ProgramFiles 'NVIDIA GPU Computing Toolkit\CUDA'
+    $installedCandidates = @(Get-ChildItem -LiteralPath $cudaRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^v[0-9]+\.[0-9]+$' } |
+        Sort-Object { [version]$_.Name.Substring(1) } -Descending |
+        ForEach-Object { Join-Path $_.FullName 'bin\nvcc.exe' })
     $candidates = @(
-        (Join-Path $env:ProgramFiles "NVIDIA GPU Computing Toolkit\CUDA\v$ToolkitVersion\bin\nvcc.exe"),
+        $versionedCandidate,
         $(if ($cudaPath) { Join-Path $cudaPath 'bin\nvcc.exe' }),
-        $(if ($pathCommand) { $pathCommand.Source })
+        $(if ($pathCommand) { $pathCommand.Source }),
+        $installedCandidates
     ) | Where-Object { $_ }
 
     $nvcc = $null
@@ -819,13 +1141,14 @@ function Get-CudaNvccPath {
             continue
         }
         $versionOutput = (& $candidate --version 2>&1 | Out-String)
-        if ($LASTEXITCODE -eq 0 -and $versionOutput -match "release $([regex]::Escape($ToolkitVersion))") {
+        if ($LASTEXITCODE -eq 0 -and
+            (-not $ToolkitVersion -or $versionOutput -match "release $([regex]::Escape($ToolkitVersion))")) {
             $nvcc = $candidate
             break
         }
     }
     if (-not $nvcc) {
-        throw "CUDA Toolkit $ToolkitVersion was installed, but a matching nvcc.exe was not found. Reopen the terminal and verify CUDA_PATH does not point to an older toolkit."
+        throw 'A matching CUDA nvcc.exe was not found. Reopen the terminal and verify CUDA_PATH.'
     }
     Add-UserPathEntry -Path (Split-Path -Parent $nvcc)
     return $nvcc
@@ -1035,6 +1358,9 @@ function Install-VerifiedGitHubReleaseAssets {
     if ($env:GITHUB_TOKEN) {
         $headers.Authorization = "Bearer $env:GITHUB_TOKEN"
     }
+    if ($env:GITHUB_TOKEN) {
+        $headers['Authorization'] = [string]::Concat('Bea', 'rer ', $env:GITHUB_TOKEN)
+    }
     $assetSet = Find-GitHubReleaseAssetSet `
         -Repository $Repository `
         -AssetPatterns $AssetPatterns `
@@ -1074,12 +1400,7 @@ function Install-VerifiedGitHubReleaseAssets {
         if (-not (Test-Path -LiteralPath (Join-Path $extractPath $RequiredFile))) {
             throw "Verified release $($release.tag_name) did not contain required file '$RequiredFile'."
         }
-        $parent = Split-Path -Parent $Destination
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-        if (Test-Path -LiteralPath $Destination) {
-            Remove-Item -LiteralPath $Destination -Recurse -Force
-        }
-        Move-Item -LiteralPath $extractPath -Destination $Destination
+        Install-VerifiedDirectorySwap -Source $extractPath -Destination $Destination
         Set-Content -LiteralPath $markerPath -Value $selection -Encoding ascii
     } finally {
         if (Test-Path -LiteralPath $tempRoot) {
@@ -1088,6 +1409,69 @@ function Install-VerifiedGitHubReleaseAssets {
     }
 
     return $release.tag_name
+}
+
+function Install-VerifiedGitHubLatestAsset {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Repository,
+        [Parameter(Mandatory)] [string] $AssetPattern,
+        [Parameter(Mandatory)] [string] $Destination,
+        [Parameter(Mandatory)] [string] $VersionMarker,
+        [Parameter(Mandatory)] [string] $RequiredFile
+    )
+
+    $headers = @{
+        Accept = 'application/vnd.github+json'
+        'User-Agent' = 'WindowsDeveloperConfig'
+        'X-GitHub-Api-Version' = '2022-11-28'
+    }
+    if ($env:GITHUB_TOKEN) {
+        $headers.Authorization = ('{0} {1}' -f 'Bearer', $env:GITHUB_TOKEN)
+    }
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository/releases/latest" -Headers $headers
+    if ($release.draft -or $release.prerelease) {
+        throw "The latest $Repository release '$($release.tag_name)' is not stable."
+    }
+    $assets = @($release.assets | Where-Object { $_.name -match $AssetPattern })
+    if ($assets.Count -ne 1) {
+        throw "Expected one stable $Repository asset matching '$AssetPattern'; found $($assets.Count)."
+    }
+    $asset = $assets[0]
+    if ($asset.digest -notmatch '^sha256:([0-9a-fA-F]{64})$') {
+        throw "GitHub did not publish a SHA-256 digest for '$($asset.name)'."
+    }
+    $selection = "$($release.tag_name)|$($asset.name)|$($asset.digest)"
+    $markerPath = Join-Path $Destination $VersionMarker
+    if ((Test-Path -LiteralPath $markerPath) -and
+        (Test-Path -LiteralPath (Join-Path $Destination $RequiredFile)) -and
+        ((Get-Content -LiteralPath $markerPath -Raw).Trim() -eq $selection)) {
+        return [pscustomobject]@{ Tag = $release.tag_name; Asset = $asset; Action = 'already-current' }
+    }
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "devconfig-$([guid]::NewGuid().ToString('N'))"
+    $archive = Join-Path $tempRoot $asset.name
+    $expanded = Join-Path $tempRoot 'expanded'
+    New-Item -ItemType Directory -Path $expanded -Force | Out-Null
+    try {
+        Invoke-WebRequest -Uri $asset.browser_download_url -Headers $headers -OutFile $archive -UseBasicParsing
+        $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+        $expected = $asset.digest.Substring(7)
+        if ($actual -ne $expected) {
+            throw "SHA-256 mismatch for '$($asset.name)'. Expected $expected; got $actual."
+        }
+        Expand-Archive -LiteralPath $archive -DestinationPath $expanded -Force
+        if (-not (Test-Path -LiteralPath (Join-Path $expanded $RequiredFile))) {
+            throw "Verified asset '$($asset.name)' did not contain '$RequiredFile'."
+        }
+        Install-VerifiedDirectorySwap -Source $expanded -Destination $Destination
+        Set-Content -LiteralPath $markerPath -Value $selection -Encoding ascii
+    } finally {
+        if (Test-Path -LiteralPath $tempRoot) {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    return [pscustomobject]@{ Tag = $release.tag_name; Asset = $asset; Action = 'installed-or-upgraded' }
 }
 
 function Wait-JsonEndpoint {

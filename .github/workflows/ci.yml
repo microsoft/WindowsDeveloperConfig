@@ -26,6 +26,53 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  ai-static:
+    name: AI plans and unit tests
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Parse PowerShell and run hardware-independent tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem ./src/Workloads, ./src/tests, ./src/tools -Recurse -Filter *.ps1 |
+            ForEach-Object {
+              $tokens = $null
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                $_.FullName, [ref]$tokens, [ref]$errors)
+              if ($errors) { throw "$($_.FullName): $($errors -join '; ')" }
+            }
+          foreach ($id in 'ai-common','cuda','rocm','intel-ai','foundry','pytorch','llama.cpp','ollama') {
+            & "./src/tests/$id/unit.ps1"
+          }
+
+      - name: Validate report schema and manifest
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --quiet pyyaml jsonschema
+          python -c "import json,yaml; json.load(open('src/docs/ai-workload-report.schema.json', encoding='utf-8')); yaml.safe_load(open('src/manifest.yml', encoding='utf-8-sig')); print('AI data files valid')"
+
+      - name: Exercise non-mutating AI plans and validate reports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path ai-reports -Force | Out-Null
+          foreach ($id in 'cuda','rocm','intel-ai','foundry','pytorch','llama.cpp','ollama') {
+            & "./src/Workloads/$id/install.ps1" -PlanOnly -ReportPath "./ai-reports/$id.json"
+          }
+          @'
+          import glob, json, jsonschema
+          schema = json.load(open("src/docs/ai-workload-report.schema.json", encoding="utf-8"))
+          for path in glob.glob("ai-reports/*.json"):
+              with open(path, encoding="utf-8-sig") as handle:
+                  jsonschema.validate(json.load(handle), schema)
+              print("OK:", path)
+          '@ | python -
+
   # ---------------------------------------------------------------------------
   # Job A: parse manifest.yml → matrices for per-OS flow jobs.
   # ---------------------------------------------------------------------------

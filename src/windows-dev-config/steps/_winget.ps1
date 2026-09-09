@@ -276,13 +276,23 @@ function Test-DevConfigWingetUpgradeAvailable {
     return @($upgrade.Output -split '\r?\n' | Where-Object { $_ -match ('(^|\s)' + [regex]::Escape($Id) + '(\s|$)') }).Count -gt 0
 }
 
+function Get-DevConfigWingetInstallArguments {
+    param(
+        [Parameter(Mandatory)] [string] $Id
+    )
+    return @(
+        'install', '--id', $Id, '--exact', '--source', 'winget', '--silent',
+        '--accept-package-agreements', '--accept-source-agreements'
+    )
+}
+
 function Install-DevConfigWingetPackage {
     param(
         [Parameter(Mandatory)] [string] $Id
     )
     Invoke-DevConfigRetry -Name "winget install $Id" -ScriptBlock {
         if ($Script:DevConfigWinGetMode -eq 'Cli') {
-            $r = Invoke-DevConfigWingetCli -Arguments @('install', '--id', $Id, '--exact', '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements')
+            $r = Invoke-DevConfigWingetCli -Arguments (Get-DevConfigWingetInstallArguments -Id $Id)
             if ($r.ExitCode -ne 0 -and $r.ExitCode -ne $Script:DevConfigWingetNoUpgrade) {
                 throw "winget install $Id failed with exit code $($r.ExitCode)"
             }

@@ -16,7 +16,7 @@ Assert-Equal ($toolkitOnlyRepeat | ConvertTo-Json -Compress) ($toolkitOnly | Con
 
 $x64Plan = Resolve-CudaInstallPlan -Architecture X64
 Assert-Equal $x64Plan.Method 'WinGet' 'CUDA x64 should use WinGet'
-Assert-Equal $x64Plan.ToolkitVersion '13.3' 'CUDA x64 should use the current catalog toolkit'
+Assert-Equal $x64Plan.ToolkitVersion $null 'CUDA x64 should discover the WinGet-installed stable toolkit version'
 
 $armPlan = Resolve-CudaInstallPlan -Architecture Arm64 -WindowsBuild 28120
 Assert-Equal $armPlan.Method 'NvidiaInstaller' 'CUDA ARM64 should use NVIDIA developer-preview installer'
@@ -36,15 +36,12 @@ Assert-True ($compile -like '*Microsoft Visual Studio\Installer;%PATH%*') 'CUDA 
 
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\cuda\install.ps1') -Raw
 Assert-True ($installScript -match '\[switch\]\s*\$SkipWorkloadSmoke') 'CUDA should expose workload-smoke opt-out'
-$armConfiguration = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\cuda\configuration.arm64.winget') -Raw
-Assert-True ($armConfiguration -match 'vs_BuildTools\.exe') 'CUDA ARM64 should use the Build Tools bootstrapper'
-Assert-True ($armConfiguration -match 'Get-AuthenticodeSignature') 'CUDA ARM64 should verify the bootstrapper signer'
-Assert-True ($armConfiguration -like '*$env:ProgramFiles*WindowsDeveloperConfig\Installers*') 'CUDA ARM64 should stage the elevated bootstrapper outside user-writable temp'
-Assert-True ($armConfiguration -like '*& $bootstrapper modify --installPath $installPath*') 'CUDA ARM64 should preserve the spaced install path as one PowerShell argument'
-Assert-True ($armConfiguration -like "*`$signerName -ne 'Microsoft Corporation'*") 'CUDA ARM64 should require the exact Microsoft bootstrapper signer'
-Assert-True ($armConfiguration -match '--quiet --wait --norestart') 'CUDA ARM64 should make the bootstrapper wait for the installer service'
-Assert-True ($armConfiguration -match 'Microsoft\.VisualStudio\.Component\.VC\.Tools\.ARM64') 'CUDA ARM64 should install native compiler tools'
-Assert-True ($armConfiguration -match 'ARM64 cl\.exe is absent') 'CUDA configuration should fail before success when the compiler did not materialize'
+$directSetup = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\_common\direct-setup.ps1') -Raw
+Assert-True ($directSetup -match 'Microsoft\.VisualStudio\.Component\.VC\.Tools\.ARM64') 'Direct setup should install native compiler tools'
+Assert-True ($directSetup -match 'Invoke-DevConfigProcess') 'Direct setup should use PR #93 bounded process execution'
+Assert-True ($directSetup -match 'Ensure-AiCudaToolkit') 'CUDA acquisition should be shared with PyTorch'
+Assert-True ($installScript -notmatch 'apply-configuration') 'CUDA should not use winget configure'
+Assert-True ($installScript -match 'Ready \$kernelReady') 'CUDA report should require a successfully executed kernel for readiness'
 
 $cleanupPath = Join-Path $env:TEMP "devconfig-cleanup-test-$([guid]::NewGuid().ToString('N')).tmp"
 Set-Content -LiteralPath $cleanupPath -Value 'test'
