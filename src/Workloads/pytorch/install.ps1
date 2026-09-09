@@ -63,21 +63,6 @@ if ($RequireTriton -and -not $plan.InstallTriton) {
     throw "Triton Windows is required but unsupported: $($plan.TritonReason)"
 }
 
-if ($plan.InstallTriton) {
-    $tritonConfiguration = if ($architecture -eq 'Arm64') {
-        'configuration.triton.arm64.winget'
-    } else {
-        'configuration.triton.winget'
-    }
-    & (Join-Path $PSScriptRoot '..\_common\apply-configuration.ps1') `
-        -Id 'pytorch-triton-toolchain' `
-        -ConfigFile (Join-Path $PSScriptRoot $tritonConfiguration) `
-        -RequireCommands @() `
-        -DeferSentinel
-    $compiler = Import-MsvcEnvironment -Architecture $architecture
-    Write-Host "Triton JIT compiler: $compiler"
-}
-
 $root = Join-Path $env:LOCALAPPDATA 'DevConfig\pytorch'
 $venv = Join-Path $root '.venv'
 $statePath = Join-Path $root 'install-state.json'
@@ -85,18 +70,31 @@ $desiredState = [ordered]@{
     architecture = $plan.Architecture
     backend = $plan.Backend
     torch = $plan.TorchRequirement
+    torchVersion = $plan.TorchVersion
     index = $plan.IndexUrl
     triton = $plan.TritonRequirement
+    tritonVersion = $plan.TritonVersion
+    numpy = $plan.NumpyRequirement
+    numpyVersion = $plan.NumpyVersion
     python = "$($pythonVersion.Major).$($pythonVersion.Minor)"
 }
 $desiredJson = $desiredState | ConvertTo-Json -Compress
 
-if ((Test-Path -LiteralPath $statePath) -and (Test-Path -LiteralPath $venv)) {
+$currentJson = $null
+if (Test-Path -LiteralPath $statePath) {
     $currentJson = (Get-Content -LiteralPath $statePath -Raw).Trim()
-    if ($currentJson -ne $desiredJson) {
-        Write-Host 'The requested PyTorch plan changed; recreating the contained environment.'
-        Remove-Item -LiteralPath $venv -Recurse -Force
-    }
+}
+$existingVenvPython = Join-Path $venv 'Scripts\python.exe'
+$existingVersions = Get-PythonEnvironmentVersions -PythonPath $existingVenvPython
+if ((Test-Path -LiteralPath $venv) -and
+    (Test-PyTorchEnvironmentRequiresRecreation `
+        -DesiredStateJson $desiredJson `
+        -CurrentStateJson $currentJson `
+        -InstalledVersions $existingVersions)) {
+    Write-Host 'The requested PyTorch plan changed; recreating the contained environment.'
+    Remove-Item -LiteralPath $venv -Recurse -Force
+    $currentJson = $null
+    $existingVersions = $null
 }
 
 New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -105,25 +103,73 @@ if (-not (Test-Path -LiteralPath (Join-Path $venv 'Scripts\python.exe'))) {
 }
 
 $venvPython = Join-Path $venv 'Scripts\python.exe'
-Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'install', '--upgrade', 'pip') -DisplayName 'pip upgrade'
-
-Invoke-CheckedCommand `
-    -FilePath $venvPython `
-    -ArgumentList (Get-PipInstallArguments -Requirement 'numpy') `
-    -DisplayName 'NumPy installation from the configured Python index'
-
-$torchDryRun = Get-PipInstallArguments -Requirement $plan.TorchRequirement -IndexUrl $plan.IndexUrl -DryRun
-Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $torchDryRun -DisplayName 'PyTorch compatible-wheel check'
-$torchInstall = Get-PipInstallArguments -Requirement $plan.TorchRequirement -IndexUrl $plan.IndexUrl
-Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $torchInstall -DisplayName 'PyTorch installation'
-Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'check') -DisplayName 'PyTorch dependency check'
-Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @((Join-Path $PSScriptRoot 'smoke.py'), '--backend', $plan.Backend) -DisplayName 'PyTorch tensor smoke test'
+$installedVersions = if ($existingVersions) {
+    $existingVersions
+} else {
+    Get-PythonEnvironmentVersions -PythonPath $venvPython
+}
+$packageAction = Get-PyTorchPackageAction `
+    -DesiredStateJson $desiredJson `
+    -CurrentStateJson $currentJson `
+    -InstalledVersions $installedVersions
 
 if ($plan.InstallTriton) {
-    $tritonDryRun = Get-PipInstallArguments -Requirement $plan.TritonRequirement -DryRun
-    Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $tritonDryRun -DisplayName 'Triton Windows compatible-wheel check'
-    $tritonInstall = Get-PipInstallArguments -Requirement $plan.TritonRequirement
-    Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $tritonInstall -DisplayName 'Triton Windows installation'
+    try {
+        $compiler = Import-MsvcEnvironment -Architecture $architecture
+    } catch {
+        $tritonConfiguration = if ($architecture -eq 'Arm64') {
+            'configuration.triton.arm64.winget'
+        } else {
+            'configuration.triton.winget'
+        }
+        & (Join-Path $PSScriptRoot '..\_common\apply-configuration.ps1') `
+            -Id 'pytorch-triton-toolchain' `
+            -ConfigFile (Join-Path $PSScriptRoot $tritonConfiguration) `
+            -RequireCommands @() `
+            -DeferSentinel
+        $compiler = Import-MsvcEnvironment -Architecture $architecture
+    }
+    Write-Host "Triton JIT compiler: $compiler"
+}
+
+if ($packageAction -eq 'VerifyOnly') {
+    Write-Host "PYTORCH_PACKAGES_CURRENT: torch=$($installedVersions.torch), numpy=$($installedVersions.numpy), triton=$($installedVersions.triton). Skipping package resolution and installation."
+} else {
+    Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'install', '--upgrade', 'pip') -DisplayName 'pip upgrade'
+    Invoke-CheckedCommand `
+        -FilePath $venvPython `
+        -ArgumentList (Get-PipInstallArguments -Requirement $plan.NumpyRequirement) `
+        -DisplayName 'NumPy installation from the configured Python index'
+
+    if ($plan.DirectWheelUrl) {
+        $wheelDirectory = Join-Path $root 'wheel-cache'
+        $wheelPath = Join-Path $wheelDirectory $plan.DirectWheelFileName
+        Install-VerifiedDownload `
+            -Uri $plan.DirectWheelUrl `
+            -Destination $wheelPath `
+            -Sha256 $plan.DirectWheelSha256
+        Invoke-CheckedCommand `
+            -FilePath $venvPython `
+            -ArgumentList (Get-PipLocalWheelInstallArguments -WheelPath $wheelPath) `
+            -DisplayName 'PyTorch installation from verified wheel cache'
+    } else {
+        $torchDryRun = Get-PipInstallArguments -Requirement $plan.TorchRequirement -IndexUrl $plan.IndexUrl -DryRun
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $torchDryRun -DisplayName 'PyTorch compatible-wheel check'
+        $torchInstall = Get-PipInstallArguments -Requirement $plan.TorchRequirement -IndexUrl $plan.IndexUrl
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $torchInstall -DisplayName 'PyTorch installation'
+    }
+
+    if ($plan.InstallTriton) {
+        $tritonDryRun = Get-PipInstallArguments -Requirement $plan.TritonRequirement -DryRun
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $tritonDryRun -DisplayName 'Triton Windows compatible-wheel check'
+        $tritonInstall = Get-PipInstallArguments -Requirement $plan.TritonRequirement
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $tritonInstall -DisplayName 'Triton Windows installation'
+    }
+    Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'check') -DisplayName 'PyTorch dependency check'
+}
+
+Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @((Join-Path $PSScriptRoot 'smoke.py'), '--backend', $plan.Backend) -DisplayName 'PyTorch tensor smoke test'
+if ($plan.InstallTriton) {
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @((Join-Path $PSScriptRoot 'triton-smoke.py')) -DisplayName 'Triton Windows GPU kernel smoke test'
     Write-Host "TRITON_READY: $($plan.TritonRequirement)"
 } else {

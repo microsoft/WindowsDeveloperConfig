@@ -17,7 +17,7 @@ Assert-True $cuda12.InstallTriton 'Compatible CUDA x64 should install Triton'
 $cuda13 = Resolve-PyTorchPlan -Architecture X64 -Backend CUDA -PythonVersion 3.14 `
     -HasNvidia $true -DriverMajor 580 -ComputeCapability 10.0
 Assert-Equal $cuda13.Runtime 'cu130' 'Driver branch 580 should select cu130'
-Assert-Equal $cuda13.TritonRequirement 'triton-windows>=3.8,<3.9' 'PyTorch 2.14 should select Triton 3.8'
+Assert-Equal $cuda13.TritonRequirement 'triton-windows==3.8.0.post28' 'PyTorch should pin the verified Triton build'
 
 $arm = Resolve-PyTorchPlan -Architecture Arm64 -Backend Auto -PythonVersion 3.13 -HasNvidia $false
 Assert-Equal $arm.Backend 'CPU' 'ARM64 should select the official CPU wheel'
@@ -45,15 +45,72 @@ Assert-ThrowsLike {
     Assert-PythonArchitecture -Architecture Arm64 -PythonMachine AMD64
 } '*does not match Windows architecture*' 'Emulated or conflicting Python should fail before wheel installation'
 
-$arguments = Get-PipInstallArguments -Requirement 'torch==2.14.0' `
+$arguments = Get-PipInstallArguments -Requirement 'torch==2.14.0+cpu' `
     -IndexUrl 'https://download.pytorch.org/whl/cpu' -DryRun
-Assert-Equal ($arguments -join ' ') '-m pip install --dry-run --only-binary=:all: torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu' 'pip command should be wheel-only and use the selected official index'
+Assert-Equal ($arguments -join ' ') '-m pip install --dry-run --only-binary=:all: torch==2.14.0+cpu --index-url https://download.pytorch.org/whl/cpu' 'pip command should pin the exact CPU build on the official index'
+Assert-Equal $cuda12.TorchRequirement 'torch==2.14.0+cu126' 'CUDA 12 repair should require the exact backend build'
+Assert-Equal $cuda13.TorchRequirement 'torch==2.14.0+cu130' 'CUDA 13 repair should require the exact backend build'
 
 $n1xArguments = Get-PipInstallArguments -Requirement $n1x.TorchRequirement -DryRun
 Assert-True (($n1xArguments -join ' ') -notlike '*--index-url*') 'Direct N1X torch wheel should leave dependency resolution on the configured default index'
 Assert-True (($n1xArguments -join ' ') -like '*af0872854d183cb6894dbd5b1e5e9291875ce139d138b5fc0b501498828265d3*') 'N1X torch command should preserve the wheel hash'
+$localWheelArguments = Get-PipLocalWheelInstallArguments -WheelPath 'C:\cache\torch.whl'
+Assert-Equal ($localWheelArguments -join ' ') '-m pip install --only-binary=:all: C:\cache\torch.whl' 'Verified direct wheel should install from one local cached artifact'
+
+$matchingState = [ordered]@{
+    architecture = 'Arm64'
+    backend = 'CUDA'
+    torch = $n1x.TorchRequirement
+    torchVersion = $n1x.TorchVersion
+    index = $n1x.IndexUrl
+    triton = $n1x.TritonRequirement
+    tritonVersion = $n1x.TritonVersion
+    numpy = $n1x.NumpyRequirement
+    numpyVersion = $n1x.NumpyVersion
+    python = '3.13'
+} | ConvertTo-Json -Compress
+$matchingVersions = [pscustomobject]@{
+    torch = '2.15.0.dev20260904+cu134'
+    numpy = '2.5.2'
+    triton = '3.8.0.post28'
+}
+Assert-Equal (Get-PyTorchPackageAction -DesiredStateJson $matchingState -CurrentStateJson $matchingState -InstalledVersions $matchingVersions) 'VerifyOnly' 'Matching rerun should skip package resolution and installation'
+$legacyState = [ordered]@{
+    architecture = 'Arm64'
+    backend = 'CUDA'
+    torch = $n1x.TorchRequirement
+    index = $n1x.IndexUrl
+    triton = 'triton-windows>=3.8,<3.9'
+    python = '3.13'
+} | ConvertTo-Json -Compress
+Assert-Equal (Get-PyTorchPackageAction -DesiredStateJson $matchingState -CurrentStateJson $legacyState -InstalledVersions $matchingVersions) 'VerifyOnly' 'Compatible legacy state with exact installed versions should migrate without downloading packages'
+$legacyCpuDesired = [ordered]@{
+    architecture = 'X64'; backend = 'CPU'; torch = 'torch==2.14.0+cpu'; torchVersion = '2.14.0+cpu'
+    index = 'https://download.pytorch.org/whl/cpu'; triton = $null; tritonVersion = $null
+    numpy = 'numpy==2.5.2'; numpyVersion = '2.5.2'; python = '3.13'
+} | ConvertTo-Json -Compress
+$legacyCpuState = [ordered]@{
+    architecture = 'X64'; backend = 'CPU'; torch = 'torch==2.14.0'
+    index = 'https://download.pytorch.org/whl/cpu'; triton = $null; python = '3.13'
+} | ConvertTo-Json -Compress
+$legacyCpuVersions = [pscustomobject]@{ torch = '2.14.0+cpu'; numpy = '2.5.2'; triton = $null }
+Assert-Equal (Get-PyTorchPackageAction -DesiredStateJson $legacyCpuDesired -CurrentStateJson $legacyCpuState -InstalledVersions $legacyCpuVersions) 'VerifyOnly' 'Legacy stable CPU state should migrate without downloading'
+$wrongTorch = [pscustomobject]@{ torch = '2.14.0+cpu'; numpy = '2.5.2'; triton = '3.8.0.post28' }
+Assert-Equal (Get-PyTorchPackageAction -DesiredStateJson $matchingState -CurrentStateJson $matchingState -InstalledVersions $wrongTorch) 'Install' 'Mismatched installed torch should repair the environment'
+Assert-Equal (Get-PyTorchPackageAction -DesiredStateJson $matchingState -CurrentStateJson $null -InstalledVersions $matchingVersions) 'Install' 'Missing state should not skip package installation'
+$wrongBackendState = $legacyState -replace '"backend":"CUDA"', '"backend":"CPU"'
+Assert-True (-not (Test-PyTorchStateCompatible -DesiredStateJson $matchingState -CurrentStateJson $wrongBackendState)) 'Backend plan changes should recreate the environment'
+$noTritonState = $matchingState -replace '"triton":"triton-windows==3.8.0.post28","tritonVersion":"3.8.0.post28"', '"triton":null,"tritonVersion":null'
+Assert-True (-not (Test-PyTorchStateCompatible -DesiredStateJson $noTritonState -CurrentStateJson $matchingState)) 'Disabling Triton should recreate an environment that still records Triton'
+Assert-True (Test-PyTorchEnvironmentRequiresRecreation -DesiredStateJson $noTritonState -CurrentStateJson $noTritonState -InstalledVersions $matchingVersions) 'Unexpected installed Triton should recreate the environment instead of repeating pip work'
+
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\pytorch\install.ps1') -Raw
-Assert-True ($installScript -match "Get-PipInstallArguments -Requirement 'numpy'") 'PyTorch environment should include NumPy'
+Assert-True ($installScript -match 'Get-PipInstallArguments -Requirement \$plan\.NumpyRequirement') 'PyTorch environment should include pinned NumPy'
+Assert-True ($installScript -like "*if (`$packageAction -eq 'VerifyOnly')*") 'PyTorch should branch around package work on a matching rerun'
+Assert-True ($installScript -match 'Install-VerifiedDownload') 'Fresh direct-wheel install should use the verified download cache'
+Assert-True ($installScript -match 'Get-PipLocalWheelInstallArguments') 'Fresh direct-wheel install should install the one cached wheel'
+Assert-True ($installScript -match 'PyTorch tensor smoke test') 'Matching rerun should still execute the tensor readiness probe'
+Assert-True ($installScript -match 'Triton Windows GPU kernel smoke test') 'Matching rerun should still execute the Triton readiness probe'
 Assert-True ($installScript -match 'Get-Python313Path') 'PyTorch should select the installed Python 3.13 explicitly'
 Assert-True ($installScript -match 'Import-MsvcEnvironment') 'Triton path should import the architecture-native MSVC build environment'
 Assert-True ((Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\_common\ai-support.ps1') -Raw) -like '*PATH=$vsInstaller;%PATH%*') 'Triton compiler environment should put vswhere.exe on PATH before VsDevCmd runs'

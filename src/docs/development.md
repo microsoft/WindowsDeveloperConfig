@@ -300,6 +300,11 @@ CUDA 13.4 and `torch-2.15.0.dev20260904+cu134` for CPython 3.13. The direct
 wheel URL includes NVIDIA's SHA-256 fragment, while ordinary dependencies
 (including NumPy) resolve through the user's configured default Python index.
 The flow never uses `--extra-index-url`, which would mix untrusted candidates.
+The 1.85 GB wheel is downloaded once into
+`%LOCALAPPDATA%\DevConfig\pytorch\wheel-cache`, hash-verified, and installed
+from that local cache. Reruns compare the desired state with exact installed
+torch, NumPy, and Triton versions; matching environments skip package work but
+still execute the tensor and Triton kernel probes.
 
 Foundry, llama.cpp, and Ollama accept `-SkipModelSmoke`; CUDA accepts
 `-SkipWorkloadSmoke`. These opt-outs avoid the default model/kernel acceptance

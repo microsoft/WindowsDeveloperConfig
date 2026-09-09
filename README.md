@@ -203,6 +203,12 @@ native RTX Spark PyTorch CUDA wheel is also a pinned developer preview (about
 1.85 GB). The flows clearly label both previews and never silently claim an
 ARM64 NVIDIA system is GPU-ready after falling back to CPU.
 
+PyTorch caches that verified ARM64 wheel under
+`%LOCALAPPDATA%\DevConfig\pytorch\wheel-cache`. A matching rerun validates the
+recorded plan and exact installed torch, NumPy, and Triton versions, skips all
+package downloads/installation, and still reruns the CUDA tensor and Triton
+kernel acceptance tests.
+
 <br/>
 
 ## 🎨 Command Palette extension (coming soon)

@@ -257,22 +257,34 @@ function Resolve-PyTorchPlan {
 
     $indexUrl = 'https://download.pytorch.org/whl/cpu'
     $runtime = 'cpu'
-    $torchRequirement = 'torch==2.14.0'
+    $torchRequirement = 'torch==2.14.0+cpu'
+    $torchVersion = '2.14.0+cpu'
+    $directWheelUrl = $null
+    $directWheelSha256 = $null
+    $directWheelFileName = $null
     $preview = $false
     if ($selectedBackend -eq 'CUDA') {
         if ($Architecture -eq 'Arm64') {
             $runtime = 'cu134'
             $indexUrl = $null
             $preview = $true
-            $torchRequirement = 'torch @ https://pypi.nvidia.com/nvtorch_oot_nightly/torch/torch-2.15.0.dev20260904%2Bcu134-cp313-cp313-win_arm64.whl#sha256=af0872854d183cb6894dbd5b1e5e9291875ce139d138b5fc0b501498828265d3'
+            $torchVersion = '2.15.0.dev20260904+cu134'
+            $directWheelUrl = 'https://pypi.nvidia.com/nvtorch_oot_nightly/torch/torch-2.15.0.dev20260904%2Bcu134-cp313-cp313-win_arm64.whl'
+            $directWheelSha256 = 'af0872854d183cb6894dbd5b1e5e9291875ce139d138b5fc0b501498828265d3'
+            $directWheelFileName = 'torch-2.15.0.dev20260904+cu134-cp313-cp313-win_arm64.whl'
+            $torchRequirement = "torch @ $directWheelUrl#sha256=$directWheelSha256"
         } elseif ($ComputeCapability.Major -ge 10 -and $DriverMajor -lt 580) {
             throw "This NVIDIA GPU reports compute capability $ComputeCapability and needs a CUDA 13 wheel, but driver branch $DriverMajor is below 580. Update the NVIDIA driver."
         } elseif ($DriverMajor -ge 580) {
             $runtime = 'cu130'
             $indexUrl = 'https://download.pytorch.org/whl/cu130'
+            $torchVersion = '2.14.0+cu130'
+            $torchRequirement = 'torch==2.14.0+cu130'
         } else {
             $runtime = 'cu126'
             $indexUrl = 'https://download.pytorch.org/whl/cu126'
+            $torchVersion = '2.14.0+cu126'
+            $torchRequirement = 'torch==2.14.0+cu126'
         }
     }
 
@@ -284,11 +296,18 @@ function Resolve-PyTorchPlan {
         Architecture = $Architecture
         Backend = $selectedBackend
         TorchRequirement = $torchRequirement
+        TorchVersion = $torchVersion
         IndexUrl = $indexUrl
         Runtime = $runtime
         Preview = $preview
+        DirectWheelUrl = $directWheelUrl
+        DirectWheelSha256 = $directWheelSha256
+        DirectWheelFileName = $directWheelFileName
+        NumpyRequirement = 'numpy==2.5.2'
+        NumpyVersion = '2.5.2'
         InstallTriton = $installTriton
-        TritonRequirement = if ($installTriton) { 'triton-windows>=3.8,<3.9' } else { $null }
+        TritonRequirement = if ($installTriton) { 'triton-windows==3.8.0.post28' } else { $null }
+        TritonVersion = if ($installTriton) { '3.8.0.post28' } else { $null }
         TritonReason = if ($installTriton) {
             'Compatible PyTorch CUDA, CPython, architecture, and NVIDIA compute capability detected.'
         } elseif ($selectedBackend -ne 'CUDA') {
@@ -298,6 +317,136 @@ function Resolve-PyTorchPlan {
         } else {
             'Triton installation was disabled by the caller.'
         }
+    }
+}
+
+function Test-PyTorchStateCompatible {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $DesiredStateJson,
+        [AllowNull()] [string] $CurrentStateJson
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CurrentStateJson)) {
+        return $false
+    }
+
+    $desired = $DesiredStateJson | ConvertFrom-Json
+    try {
+        $current = $CurrentStateJson | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+    foreach ($property in @('architecture', 'backend', 'index', 'python')) {
+        if ($current.$property -ne $desired.$property) {
+            return $false
+        }
+    }
+    $legacyStableTorch = $current.torch -eq 'torch==2.14.0' -and
+        $desired.torch -match '^torch==2\.14\.0\+(cpu|cu126|cu130)$'
+    if ($current.torch -ne $desired.torch -and -not $legacyStableTorch) {
+        return $false
+    }
+    if (-not $desired.tritonVersion -and $current.triton) {
+        return $false
+    }
+    return $true
+}
+
+function Test-PyTorchEnvironmentMatches {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $DesiredStateJson,
+        [AllowNull()] [string] $CurrentStateJson,
+        [AllowNull()] $InstalledVersions
+    )
+
+    if (-not (Test-PyTorchStateCompatible `
+            -DesiredStateJson $DesiredStateJson `
+            -CurrentStateJson $CurrentStateJson) -or
+        $null -eq $InstalledVersions) {
+        return $false
+    }
+
+    $desired = $DesiredStateJson | ConvertFrom-Json
+    if ($InstalledVersions.torch -ne $desired.torchVersion -or
+        $InstalledVersions.numpy -ne $desired.numpyVersion) {
+        return $false
+    }
+    if ($desired.tritonVersion) {
+        return $InstalledVersions.triton -eq $desired.tritonVersion
+    }
+    return [string]::IsNullOrEmpty($InstalledVersions.triton)
+}
+
+function Get-PyTorchPackageAction {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $DesiredStateJson,
+        [AllowNull()] [string] $CurrentStateJson,
+        [AllowNull()] $InstalledVersions
+    )
+
+    if (Test-PyTorchEnvironmentMatches `
+            -DesiredStateJson $DesiredStateJson `
+            -CurrentStateJson $CurrentStateJson `
+            -InstalledVersions $InstalledVersions) {
+        return 'VerifyOnly'
+    }
+    return 'Install'
+}
+
+function Test-PyTorchEnvironmentRequiresRecreation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $DesiredStateJson,
+        [AllowNull()] [string] $CurrentStateJson,
+        [AllowNull()] $InstalledVersions
+    )
+
+    if (-not (Test-PyTorchStateCompatible `
+            -DesiredStateJson $DesiredStateJson `
+            -CurrentStateJson $CurrentStateJson)) {
+        return $true
+    }
+    $desired = $DesiredStateJson | ConvertFrom-Json
+    return $null -ne $InstalledVersions -and
+        -not $desired.tritonVersion -and
+        -not [string]::IsNullOrEmpty($InstalledVersions.triton)
+}
+
+function Get-PythonEnvironmentVersions {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $PythonPath)
+
+    if (-not (Test-Path -LiteralPath $PythonPath)) {
+        return $null
+    }
+    $script = @'
+import importlib.metadata
+import json
+import numpy
+import torch
+
+try:
+    triton_version = importlib.metadata.version("triton-windows")
+except importlib.metadata.PackageNotFoundError:
+    triton_version = None
+
+print(json.dumps({
+    "torch": torch.__version__,
+    "numpy": numpy.__version__,
+    "triton": triton_version,
+}, sort_keys=True))
+'@
+    $json = (& $PythonPath -c $script 2>$null | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
+        return $null
+    }
+    try {
+        return $json | ConvertFrom-Json
+    } catch {
+        return $null
     }
 }
 
@@ -371,6 +520,13 @@ function Get-PipInstallArguments {
         [void]$arguments.Add($IndexUrl)
     }
     return $arguments.ToArray()
+}
+
+function Get-PipLocalWheelInstallArguments {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $WheelPath)
+
+    return @('-m', 'pip', 'install', '--only-binary=:all:', $WheelPath)
 }
 
 function Get-FoundryModelSmokePlan {
