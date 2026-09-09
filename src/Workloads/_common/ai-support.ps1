@@ -762,7 +762,8 @@ function Import-MsvcEnvironment {
 
     $vsDevCmd = Get-VsDevCmdPath -Architecture $Architecture
     $target = if ($Architecture -eq 'Arm64') { 'arm64' } else { 'x64' }
-    $command = "call `"$vsDevCmd`" -arch=$target -host_arch=$target >nul && set"
+    $vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
+    $command = "set `"PATH=$vsInstaller;%PATH%`" && call `"$vsDevCmd`" -arch=$target -host_arch=$target >nul && set"
     $environmentLines = @(& $env:ComSpec /d /s /c $command)
     if ($LASTEXITCODE -ne 0) {
         throw "VsDevCmd failed to initialize the $Architecture compiler environment."
@@ -789,8 +790,9 @@ function Get-CudaKernelCompileCommand {
     )
 
     $target = if ($Architecture -eq 'Arm64') { 'arm64' } else { 'x64' }
-    return 'call "{0}" -arch={1} -host_arch={1} >nul && "{2}" -arch=native -o "{3}" "{4}"' -f `
-        $VsDevCmd, $target, $Nvcc, $Output, $Source
+    $vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
+    return 'set "PATH={0};%PATH%" && call "{1}" -arch={2} -host_arch={2} >nul && "{3}" -arch=native -o "{4}" "{5}"' -f `
+        $vsInstaller, $VsDevCmd, $target, $Nvcc, $Output, $Source
 }
 
 function Find-GitHubReleaseAssetSet {

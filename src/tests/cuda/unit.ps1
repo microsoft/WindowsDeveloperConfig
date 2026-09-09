@@ -32,6 +32,7 @@ $compile = Get-CudaKernelCompileCommand `
     -Output 'C:\out\smoke.exe'
 Assert-True ($compile -like '*-arch=arm64 -host_arch=arm64*') 'CUDA ARM64 smoke should select native MSVC environment'
 Assert-True ($compile -like '*-arch=native*smoke.cu*') 'CUDA smoke should compile for the detected GPU'
+Assert-True ($compile -like '*Microsoft Visual Studio\Installer;%PATH%*') 'CUDA compiler environment should put vswhere.exe on PATH before VsDevCmd runs'
 
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\cuda\install.ps1') -Raw
 Assert-True ($installScript -match '\[switch\]\s*\$SkipWorkloadSmoke') 'CUDA should expose workload-smoke opt-out'

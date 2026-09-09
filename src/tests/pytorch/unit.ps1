@@ -56,6 +56,7 @@ $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Worklo
 Assert-True ($installScript -match "Get-PipInstallArguments -Requirement 'numpy'") 'PyTorch environment should include NumPy'
 Assert-True ($installScript -match 'Get-Python313Path') 'PyTorch should select the installed Python 3.13 explicitly'
 Assert-True ($installScript -match 'Import-MsvcEnvironment') 'Triton path should import the architecture-native MSVC build environment'
+Assert-True ((Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\_common\ai-support.ps1') -Raw) -like '*PATH=$vsInstaller;%PATH%*') 'Triton compiler environment should put vswhere.exe on PATH before VsDevCmd runs'
 Assert-True ($installScript -match 'configuration\.triton\.arm64\.winget') 'ARM64 Triton should acquire its own JIT compiler dependency'
 $tritonConfiguration = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\pytorch\configuration.triton.arm64.winget') -Raw
 Assert-True ($tritonConfiguration -match 'vs_BuildTools\.exe') 'Triton should use the Build Tools bootstrapper'
