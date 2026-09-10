@@ -39,36 +39,64 @@ function Ensure-AiWingetPackage {
     }
 
     Initialize-DevConfigWinGet
-    if (Test-DevConfigWingetPackageInstalled -Id $Id) {
-        $evidence = Get-AiWingetPackageEvidence -Id $Id
-        return [pscustomobject]@{ Id = $Id; Action = 'already-current'; Source = 'winget'; Evidence = $evidence }
-    }
-    Install-DevConfigWingetPackage -Id $Id
-    Wait-DevConfigWingetPackageSettled -Id $Id
+    $action = Ensure-DevConfigWingetPackage -Id $Id
     Update-DevConfigSessionPath
-    if (-not (Test-DevConfigWingetPackageInstalled -Id $Id)) {
-        throw "WinGet did not verify '$Id' as installed and current."
-    }
     $evidence = Get-AiWingetPackageEvidence -Id $Id
-    return [pscustomobject]@{ Id = $Id; Action = 'installed-or-upgraded'; Source = 'winget'; Evidence = $evidence }
+    return [pscustomobject]@{ Id = $Id; Action = $action; Source = 'winget'; Evidence = $evidence }
+}
+
+function Get-AiWingetPackageAction {
+    param([Parameter(Mandatory)] [ValidateSet('Absent', 'UpgradeAvailable', 'Current')] [string] $State)
+    switch ($State) {
+        'Absent' { return 'install' }
+        'UpgradeAvailable' { return 'upgrade' }
+        'Current' { return 'skip' }
+    }
 }
 
 function Get-AiWingetPackageEvidence {
     param([Parameter(Mandatory)] [string] $Id)
 
-    if ($Script:DevConfigWinGetMode -eq 'Cli') {
-        return (Invoke-DevConfigWingetCli -Arguments @(
-            'list', '--id', $Id, '--exact', '--source', 'winget', '--accept-source-agreements'
-        )).Output
+    try {
+        if ($Script:DevConfigWinGetMode -eq 'Cli') {
+            return (Invoke-DevConfigWingetCli -Arguments @(
+                'list', '--id', $Id, '--exact', '--source', 'winget', '--accept-source-agreements'
+            )).Output
+        }
+        $package = Get-WinGetPackage -Id $Id -Source winget -MatchOption EqualsCaseInsensitive
+        if (-not $package) { return $null }
+        return ConvertTo-AiWingetPackageEvidence -Package $package -RequestedId $Id
+    } catch {
+        Write-Warning "Could not collect WinGet evidence for '$Id': $($_.Exception.Message)"
+        return [ordered]@{ id = $Id; source = 'winget'; evidenceUnavailable = $true }
     }
-    $package = Get-WinGetPackage -Id $Id -Source winget -MatchOption EqualsCaseInsensitive
-    if (-not $package) { return $null }
+}
+
+function Get-AiObjectPropertyValue {
+    param(
+        [Parameter(Mandatory)] $InputObject,
+        [Parameter(Mandatory)] [string[]] $Names
+    )
+    foreach ($name in $Names) {
+        $property = $InputObject.PSObject.Properties[$name]
+        if ($property) { return $property.Value }
+    }
+    return $null
+}
+
+function ConvertTo-AiWingetPackageEvidence {
+    param(
+        [Parameter(Mandatory)] $Package,
+        [Parameter(Mandatory)] [string] $RequestedId
+    )
+    $resolvedId = Get-AiObjectPropertyValue -InputObject $Package -Names @('Id', 'PackageIdentifier', 'PackageId')
+    if (-not $resolvedId) { $resolvedId = $RequestedId }
     return [ordered]@{
-        id = $package.Id
-        name = $package.Name
-        installedVersion = [string]$package.InstalledVersion
-        availableVersion = [string]$package.AvailableVersion
-        updateAvailable = [bool]$package.IsUpdateAvailable
+        id = [string]$resolvedId
+        name = [string](Get-AiObjectPropertyValue -InputObject $Package -Names @('Name', 'PackageName'))
+        installedVersion = [string](Get-AiObjectPropertyValue -InputObject $Package -Names @('InstalledVersion', 'Version'))
+        availableVersion = [string](Get-AiObjectPropertyValue -InputObject $Package -Names @('AvailableVersion', 'LatestVersion'))
+        updateAvailable = [bool](Get-AiObjectPropertyValue -InputObject $Package -Names @('IsUpdateAvailable', 'UpdateAvailable'))
         source = 'winget'
     }
 }

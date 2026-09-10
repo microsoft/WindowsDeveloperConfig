@@ -22,6 +22,11 @@ resumable check → apply → verify contracts and reuse its WinGet, retry, proc
 and PATH helpers through `Workloads/_common/direct-setup.ps1`. They need runtime
 hardware selection, contained Python environments, verified release assets, and
 real device/model acceptance that is awkward and misleading inside static DSC.
+The shared package state machine distinguishes absent, upgrade-available, and
+current packages: it installs only absent IDs, uses exact `winget upgrade` for
+outdated packages, and skips current packages. If the WinGet module operation
+fails but `winget.exe` is usable, it retries the same exact operation through
+the CLI and verifies the settled state.
 
 Windows Dev Config and Comfort Shell are also PowerShell-native because they
 need elevation, reboot/resume, or interactive orchestration. All

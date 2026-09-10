@@ -40,8 +40,7 @@ function Invoke-PackagesPhase {
                 param($Id, $Large)
                 # Large packages can have several quiet download minutes because WinGet reports no progress here.
                 if ($Large) { Write-Host '  (Large download -- several quiet minutes here are normal.)' -ForegroundColor DarkGray }
-                Install-DevConfigWingetPackage -Id $Id
-                Wait-DevConfigWingetPackageSettled -Id $Id
+                [void](Ensure-DevConfigWingetPackage -Id $Id)
             } `
             -ArgumentList @($pkg.Id, $pkg.ContainsKey('Large'))
     }

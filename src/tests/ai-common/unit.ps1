@@ -18,7 +18,108 @@ foreach ($entry in $catalog.Components.GetEnumerator()) {
 }
 
 $wingetArgs = Get-DevConfigWingetInstallArguments -Id 'Microsoft.FoundryLocal'
-Assert-Equal ($wingetArgs -join ' ') 'install --id Microsoft.FoundryLocal --exact --source winget --silent --accept-package-agreements --accept-source-agreements' 'Shared WinGet command should be exact and noninteractive'
+Assert-Equal ($wingetArgs -join ' ') 'install --id Microsoft.FoundryLocal --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity' 'Shared WinGet install command should be exact and noninteractive'
+$upgradeArgs = Get-DevConfigWingetUpgradeArguments -Id 'Microsoft.VisualStudio.2022.BuildTools'
+Assert-Equal ($upgradeArgs -join ' ') 'upgrade --id Microsoft.VisualStudio.2022.BuildTools --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity' 'Shared WinGet upgrade command should be exact and noninteractive'
+Assert-Equal (Get-AiWingetPackageAction -State Current) 'skip' 'Current packages should skip acquisition'
+Assert-Equal (Get-AiWingetPackageAction -State UpgradeAvailable) 'upgrade' 'Outdated packages should upgrade'
+Assert-Equal (Get-AiWingetPackageAction -State Absent) 'install' 'Absent packages should install'
+Assert-True ([bool](Get-Command Ensure-DevConfigWingetPackage -ErrorAction SilentlyContinue)) 'Shared production package ensure function should be exported at script scope'
+
+$currentShape = [pscustomobject]@{
+    Id = 'Current.Package'
+    Name = 'Current package'
+    InstalledVersion = '1.0.0'
+    IsUpdateAvailable = $false
+}
+$currentEvidence = ConvertTo-AiWingetPackageEvidence -Package $currentShape -RequestedId 'Current.Package'
+Assert-Equal $currentEvidence.installedVersion '1.0.0' 'Evidence should support current module object shape without AvailableVersion'
+Assert-Equal $currentEvidence.availableVersion '' 'Missing optional AvailableVersion should not fail evidence collection'
+
+$olderShape = [pscustomobject]@{
+    PackageIdentifier = 'Older.Package'
+    PackageName = 'Older package'
+    Version = '2.0.0'
+    LatestVersion = '2.1.0'
+    UpdateAvailable = $true
+}
+$olderEvidence = ConvertTo-AiWingetPackageEvidence -Package $olderShape -RequestedId 'fallback'
+Assert-Equal $olderEvidence.id 'Older.Package' 'Evidence should support alternate identifier names'
+Assert-Equal $olderEvidence.availableVersion '2.1.0' 'Evidence should support alternate latest-version names'
+Assert-True $olderEvidence.updateAvailable 'Evidence should support alternate update flags'
+
+$minimalEvidence = ConvertTo-AiWingetPackageEvidence -Package ([pscustomobject]@{}) -RequestedId 'Minimal.Package'
+Assert-Equal $minimalEvidence.id 'Minimal.Package' 'Minimal package objects should retain the requested id'
+Assert-Equal $minimalEvidence.installedVersion '' 'Minimal package objects should not fail under StrictMode'
+
+# Keep fallback tests fast and deterministic by invoking each retry body once.
+function Invoke-DevConfigRetry {
+    param([scriptblock] $ScriptBlock, [string] $Name, [int] $MaxAttempts, [int] $InitialDelaySeconds)
+    & $ScriptBlock
+}
+$Script:DevConfigWinGetMode = 'Module'
+$script:cliArguments = $null
+function Test-DevConfigWingetCliUsable { return $true }
+function Install-WinGetPackage { throw 'module install error' }
+function Update-WinGetPackage { throw 'module upgrade error' }
+function Invoke-DevConfigWingetCli {
+    param([string[]] $Arguments)
+    $script:cliArguments = $Arguments
+    return [pscustomobject]@{ ExitCode = 0; Output = '' }
+}
+Install-DevConfigWingetPackage -Id 'Fallback.Install'
+Assert-Equal $script:cliArguments[0] 'install' 'Module install error should fall back to CLI install'
+$Script:DevConfigWinGetMode = 'Module'
+$script:updateModuleCalls = 0
+function Update-WinGetPackage { $script:updateModuleCalls++; throw 'module upgrade error' }
+Update-DevConfigWingetPackage -Id 'Fallback.Upgrade'
+Assert-Equal $script:cliArguments[0] 'upgrade' 'Module upgrade error should fall back to CLI upgrade'
+Assert-Equal $script:updateModuleCalls 1 'Upgrade fallback should attempt the module before CLI'
+
+$Script:DevConfigWinGetMode = 'Module'
+function Invoke-DevConfigWingetCli {
+    param([string[]] $Arguments)
+    return [pscustomobject]@{ ExitCode = 9; Output = 'real failure' }
+}
+Assert-ThrowsLike {
+    Update-DevConfigWingetPackage -Id 'Fallback.Failure'
+} '*CLI exit: 9*' 'A real nonzero module and CLI failure should remain fatal'
+
+# Exercise Ensure-AiWingetPackage's state machine without touching machine state.
+$script:packageState = 'Current'
+$script:installCount = 0
+$script:upgradeCount = 0
+function Initialize-DevConfigWinGet {}
+function Get-DevConfigWingetPackageState { param($Id) [pscustomobject]@{ State = $script:packageState; Package = $null } }
+function Install-DevConfigWingetPackage { param($Id) $script:installCount++ }
+function Update-DevConfigWingetPackage { param($Id) $script:upgradeCount++ }
+function Wait-DevConfigWingetPackageSettled { param($Id) }
+function Ensure-DevConfigWingetPackage {
+    param($Id)
+    $operation = Get-AiWingetPackageAction -State $script:packageState
+    if ($operation -eq 'install') { $script:installCount++; return 'installed' }
+    if ($operation -eq 'upgrade') { $script:upgradeCount++; return 'upgraded' }
+    return 'already-current'
+}
+function Update-DevConfigSessionPath {}
+function Test-DevConfigWingetPackageInstalled { param($Id) return $true }
+function Get-AiWingetPackageEvidence { param($Id) return @{ id = $Id } }
+
+$currentResult = Ensure-AiWingetPackage -Id 'State.Current'
+Assert-Equal $currentResult.Action 'already-current' 'Installed current package should skip'
+Assert-Equal $script:installCount 0 'Current package should not install'
+Assert-Equal $script:upgradeCount 0 'Current package should not upgrade'
+
+$script:packageState = 'UpgradeAvailable'
+$upgradeResult = Ensure-AiWingetPackage -Id 'State.Upgrade'
+Assert-Equal $upgradeResult.Action 'upgraded' 'Installed outdated package should upgrade'
+Assert-Equal $script:upgradeCount 1 'Upgrade state should invoke upgrade exactly once'
+
+$script:packageState = 'Absent'
+$installResult = Ensure-AiWingetPackage -Id 'State.Absent'
+Assert-Equal $installResult.Action 'installed' 'Absent package should install'
+Assert-Equal $script:installCount 1 'Absent state should invoke install exactly once'
+
 $directSetup = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\_common\direct-setup.ps1') -Raw
 Assert-True ($directSetup.Contains('''--installPath'', "`"$installPath`""')) 'Build Tools install path should remain one quoted Start-Process argument'
 Assert-True ($directSetup -match 'Get-AiWingetPackageEvidence') 'Package evidence should respect the selected WinGet frontend'

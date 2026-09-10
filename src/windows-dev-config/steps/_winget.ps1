@@ -239,26 +239,34 @@ function Test-DevConfigWingetPackageInstalled {
     param(
         [Parameter(Mandatory)] [string] $Id
     )
+    return (Get-DevConfigWingetPackageState -Id $Id).State -eq 'Current'
+}
+
+function Get-DevConfigWingetPackageState {
+    param(
+        [Parameter(Mandatory)] [string] $Id
+    )
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
         $listed = Invoke-DevConfigWingetCli -Arguments @('list', '--id', $Id, '--exact', '--accept-source-agreements')
         if ($listed.ExitCode -eq $Script:DevConfigWingetNotFound) {
-            return $false
+            return [pscustomobject]@{ State = 'Absent'; Package = $null }
         }
         if ($listed.ExitCode -ne 0) {
             throw "winget list $Id failed with exit code $($listed.ExitCode)"
         }
-        # useLatest requires the package to be current, not only installed, so match the module path.
-        return -not (Test-DevConfigWingetUpgradeAvailable -Id $Id)
+        $state = if (Test-DevConfigWingetUpgradeAvailable -Id $Id) { 'UpgradeAvailable' } else { 'Current' }
+        return [pscustomobject]@{ State = $state; Package = $null }
     }
 
     # EqualsCaseInsensitive avoids ambiguous substring matches.
     $pkg = Get-WinGetPackage -Id $Id -Source winget -MatchOption EqualsCaseInsensitive
     if (-not $pkg) {
-        return $false
+        return [pscustomobject]@{ State = 'Absent'; Package = $null }
     }
 
-    # useLatest requires the package to be current, not only installed.
-    return -not $pkg.IsUpdateAvailable
+    $updateProperty = $pkg.PSObject.Properties['IsUpdateAvailable']
+    $state = if ($updateProperty -and [bool]$updateProperty.Value) { 'UpgradeAvailable' } else { 'Current' }
+    return [pscustomobject]@{ State = $state; Package = $pkg }
 }
 
 # winget list exits 0 whether or not an upgrade exists, and every message it prints is localized.
@@ -282,7 +290,17 @@ function Get-DevConfigWingetInstallArguments {
     )
     return @(
         'install', '--id', $Id, '--exact', '--source', 'winget', '--silent',
-        '--accept-package-agreements', '--accept-source-agreements'
+        '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity'
+    )
+}
+
+function Get-DevConfigWingetUpgradeArguments {
+    param(
+        [Parameter(Mandatory)] [string] $Id
+    )
+    return @(
+        'upgrade', '--id', $Id, '--exact', '--source', 'winget', '--silent',
+        '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity'
     )
 }
 
@@ -299,12 +317,90 @@ function Install-DevConfigWingetPackage {
             return
         }
 
-        $result = Install-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive
-        # NoApplicableUpgrade means the package is already installed and current.
-        if (-not $result.Succeeded() -and $result.Status -ne 'NoApplicableUpgrade') {
-            throw "winget install $Id failed: $($result.ErrorMessage())"
+        try {
+            $result = Install-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive
+            # NoApplicableUpgrade means the package is already installed and current.
+            if (-not $result.Succeeded() -and $result.Status -ne 'NoApplicableUpgrade') {
+                throw "winget module install $Id failed: $($result.ErrorMessage())"
+            }
+            return
+        } catch {
+            $moduleError = $_.Exception.Message
+            if (-not (Test-DevConfigWingetCliUsable)) {
+                throw
+            }
+            Write-Host "  WinGet module install failed; retrying with winget.exe ($moduleError)" -ForegroundColor Yellow
+            $r = Invoke-DevConfigWingetCli -Arguments (Get-DevConfigWingetInstallArguments -Id $Id)
+            if ($r.ExitCode -ne 0 -and $r.ExitCode -ne $Script:DevConfigWingetNoUpgrade) {
+                throw "winget install $Id failed after module fallback (module: $moduleError; CLI exit: $($r.ExitCode))"
+            }
+            $Script:DevConfigWinGetMode = 'Cli'
         }
     }
+}
+
+function Update-DevConfigWingetPackage {
+    param(
+        [Parameter(Mandatory)] [string] $Id
+    )
+    Invoke-DevConfigRetry -Name "winget upgrade $Id" -ScriptBlock {
+        if ($Script:DevConfigWinGetMode -eq 'Cli') {
+            $r = Invoke-DevConfigWingetCli -Arguments (Get-DevConfigWingetUpgradeArguments -Id $Id)
+            if ($r.ExitCode -ne 0 -and $r.ExitCode -ne $Script:DevConfigWingetNoUpgrade) {
+                throw "winget upgrade $Id failed with exit code $($r.ExitCode)"
+            }
+            return
+        }
+
+        try {
+            $result = Update-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive
+            if (-not $result.Succeeded() -and $result.Status -ne 'NoApplicableUpgrade') {
+                throw "winget module upgrade $Id failed: $($result.ErrorMessage())"
+            }
+            return
+        } catch {
+            $moduleError = $_.Exception.Message
+            if (-not (Test-DevConfigWingetCliUsable)) {
+                throw
+            }
+            Write-Host "  WinGet module upgrade failed; retrying with winget.exe ($moduleError)" -ForegroundColor Yellow
+            $r = Invoke-DevConfigWingetCli -Arguments (Get-DevConfigWingetUpgradeArguments -Id $Id)
+            if ($r.ExitCode -ne 0 -and $r.ExitCode -ne $Script:DevConfigWingetNoUpgrade) {
+                throw "winget upgrade $Id failed after module fallback (module: $moduleError; CLI exit: $($r.ExitCode))"
+            }
+            $Script:DevConfigWinGetMode = 'Cli'
+        }
+    }
+}
+
+function Ensure-DevConfigWingetPackage {
+    param(
+        [Parameter(Mandatory)] [string] $Id
+    )
+
+    $state = Get-DevConfigWingetPackageState -Id $Id
+    switch ($state.State) {
+        'Current' {
+            return 'already-current'
+        }
+        'UpgradeAvailable' {
+            Update-DevConfigWingetPackage -Id $Id
+            $action = 'upgraded'
+        }
+        'Absent' {
+            Install-DevConfigWingetPackage -Id $Id
+            $action = 'installed'
+        }
+        default {
+            throw "Unknown WinGet package state '$($state.State)' for '$Id'."
+        }
+    }
+
+    Wait-DevConfigWingetPackageSettled -Id $Id
+    if ((Get-DevConfigWingetPackageState -Id $Id).State -ne 'Current') {
+        throw "WinGet did not verify '$Id' as installed and current after $action."
+    }
+    return $action
 }
 
 # Get-WinGetPackage catalog reads can lag after install, so wait before checking the result.

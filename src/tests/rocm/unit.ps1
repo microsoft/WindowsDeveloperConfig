@@ -26,7 +26,7 @@ Assert-Equal $catalog.Components.AmdRocm.Version '10.0.0' 'ROCm should pin the p
 Assert-True ($catalog.Components.AmdRocm.IndexUrl -like 'https://stable.repo.amd.com/*') 'ROCm should use the official stable AMD feed'
 
 $wingetArgs = Get-DevConfigWingetInstallArguments -Id 'Python.Python.3.13'
-Assert-Equal ($wingetArgs -join ' ') 'install --id Python.Python.3.13 --exact --source winget --silent --accept-package-agreements --accept-source-agreements' 'Direct package command should be exact and noninteractive'
+Assert-Equal ($wingetArgs -join ' ') 'install --id Python.Python.3.13 --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity' 'Direct package command should be exact and noninteractive'
 
 $script = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\rocm\install.ps1') -Raw
 Assert-True ($script -match '\[switch\]\s*\$PlanOnly') 'ROCm should support portable plan mode'
