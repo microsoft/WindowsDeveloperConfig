@@ -189,6 +189,27 @@ function Get-AiDetectedVendor {
     return 'None'
 }
 
+function Get-AiProcessId {
+    [CmdletBinding()]
+    param([AllowNull()] $ProcessObject)
+    if ($null -eq $ProcessObject) { return $null }
+    foreach ($name in @('ProcessId', 'Id')) {
+        $property = $ProcessObject.PSObject.Properties[$name]
+        if ($property -and $null -ne $property.Value) {
+            return [int]$property.Value
+        }
+    }
+    return $null
+}
+
+function Get-AiProcessIds {
+    [CmdletBinding()]
+    param([AllowEmptyCollection()] [object[]] $ProcessObjects = @())
+    return @($ProcessObjects |
+        ForEach-Object { Get-AiProcessId -ProcessObject $_ } |
+        Where-Object { $null -ne $_ })
+}
+
 function Get-AmdGpuName {
     $names = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
         Where-Object { $_.PNPDeviceID -match 'VEN_1002' -or $_.Name -match 'AMD|Radeon' } |
@@ -293,8 +314,11 @@ function Get-NvidiaDriverInfo {
         return $null
     }
 
-    $allOutput = @(& nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader,nounits 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $allOutput.Count -eq 0) {
+    $result = Invoke-DevConfigNativeCommand -FilePath 'nvidia-smi' -Arguments @(
+        '--query-gpu=name,driver_version,compute_cap', '--format=csv,noheader,nounits'
+    )
+    $allOutput = @($result.Output -split '\r?\n' | Where-Object { $_ })
+    if ($result.ExitCode -ne 0 -or $allOutput.Count -eq 0) {
         return $null
     }
     $output = $allOutput | Select-Object -First 1
@@ -666,8 +690,9 @@ print(json.dumps({
     "torchaudio": versions["torchaudio"],
 }, sort_keys=True))
 '@
-    $json = (& $PythonPath -c $script 2>$null | Select-Object -Last 1)
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
+    $result = Invoke-DevConfigNativeCommand -FilePath $PythonPath -Arguments @('-c', $script)
+    $json = @($result.Output -split '\r?\n' | Where-Object { $_ }) | Select-Object -Last 1
+    if ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($json)) {
         return $null
     }
     try {
@@ -698,8 +723,9 @@ for name in names:
         result[name] = None
 print(json.dumps(result, sort_keys=True))
 "@
-    $json = (& $PythonPath -c $script 2>$null | Select-Object -Last 1)
-    if ($LASTEXITCODE -ne 0 -or -not $json) { return $false }
+    $result = Invoke-DevConfigNativeCommand -FilePath $PythonPath -Arguments @('-c', $script)
+    $json = @($result.Output -split '\r?\n' | Where-Object { $_ }) | Select-Object -Last 1
+    if ($result.ExitCode -ne 0 -or -not $json) { return $false }
     $installed = $json | ConvertFrom-Json
     foreach ($name in $Expected.Keys) {
         if ($installed.$name -ne $Expected[$name]) { return $false }
@@ -732,9 +758,11 @@ function Get-Python313Path {
     $launcher = Get-Command py -ErrorAction SilentlyContinue
     if ($launcher) {
         $selector = if ($Architecture -eq 'Arm64') { '-3.13-arm64' } else { '-3.13-64' }
-        $launcherPath = [string](& $launcher.Source $selector -c 'import sys; print(sys.executable)' 2>$null |
-            Select-Object -First 1)
-        if ($LASTEXITCODE -eq 0 -and $launcherPath) {
+        $launcherResult = Invoke-DevConfigNativeCommand -FilePath $launcher.Source -Arguments @(
+            $selector, '-c', 'import sys; print(sys.executable)'
+        )
+        $launcherPath = [string](@($launcherResult.Output -split '\r?\n' | Where-Object { $_ }) | Select-Object -First 1)
+        if ($launcherResult.ExitCode -eq 0 -and $launcherPath) {
             [void]$candidates.Add($launcherPath.Trim())
         }
     }
@@ -745,9 +773,11 @@ function Get-Python313Path {
         }
     }
     foreach ($candidate in $candidates | Select-Object -Unique) {
-        $version = [string](& $candidate -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>$null |
-            Select-Object -First 1)
-        if ($LASTEXITCODE -eq 0 -and $version.Trim() -eq '3.13') {
+        $versionResult = Invoke-DevConfigNativeCommand -FilePath $candidate -Arguments @(
+            '-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
+        )
+        $version = [string](@($versionResult.Output -split '\r?\n' | Where-Object { $_ }) | Select-Object -First 1)
+        if ($versionResult.ExitCode -eq 0 -and $version.Trim() -eq '3.13') {
             return $candidate
         }
     }
@@ -908,9 +938,10 @@ function Invoke-CheckedCommand {
         [string] $DisplayName = $FilePath
     )
 
-    & $FilePath @ArgumentList
-    if ($LASTEXITCODE -ne 0) {
-        throw "$DisplayName failed with exit code $LASTEXITCODE."
+    $result = Invoke-DevConfigNativeCommand -FilePath $FilePath -Arguments $ArgumentList
+    if ($result.Output) { Write-Host $result.Output.TrimEnd() }
+    if ($result.ExitCode -ne 0) {
+        throw "$DisplayName failed with exit code $($result.ExitCode)."
     }
 }
 
@@ -1140,8 +1171,9 @@ function Get-CudaNvccPath {
         if (-not (Test-Path -LiteralPath $candidate)) {
             continue
         }
-        $versionOutput = (& $candidate --version 2>&1 | Out-String)
-        if ($LASTEXITCODE -eq 0 -and
+        $versionResult = Invoke-DevConfigNativeCommand -FilePath $candidate -Arguments @('--version')
+        $versionOutput = $versionResult.Output
+        if ($versionResult.ExitCode -eq 0 -and
             (-not $ToolkitVersion -or $versionOutput -match "release $([regex]::Escape($ToolkitVersion))")) {
             $nvcc = $candidate
             break
@@ -1191,9 +1223,12 @@ function Get-VsDevCmdPath {
     if (-not (Test-Path -LiteralPath $vswhere)) {
         throw 'Visual Studio Installer vswhere.exe was not found after installing the C++ Build Tools workload.'
     }
-    $installationOutput = @(& $vswhere -all -products Microsoft.VisualStudio.Product.BuildTools -property installationPath 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        throw "vswhere.exe failed while locating Visual Studio Build Tools (exit $LASTEXITCODE)."
+    $vswhereResult = Invoke-DevConfigNativeCommand -FilePath $vswhere -Arguments @(
+        '-all', '-products', 'Microsoft.VisualStudio.Product.BuildTools', '-property', 'installationPath'
+    )
+    $installationOutput = @($vswhereResult.Output -split '\r?\n' | Where-Object { $_ })
+    if ($vswhereResult.ExitCode -ne 0) {
+        throw "vswhere.exe failed while locating Visual Studio Build Tools (exit $($vswhereResult.ExitCode))."
     }
     return Resolve-VsDevCmdPath -InstallationPaths $installationOutput -Architecture $Architecture
 }
@@ -1243,8 +1278,9 @@ function Import-MsvcEnvironment {
     $target = if ($Architecture -eq 'Arm64') { 'arm64' } else { 'x64' }
     $vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
     $command = "set `"PATH=$vsInstaller;%PATH%`" && call `"$vsDevCmd`" -arch=$target -host_arch=$target >nul && set"
-    $environmentLines = @(& $env:ComSpec /d /s /c $command)
-    if ($LASTEXITCODE -ne 0) {
+    $environmentResult = Invoke-DevConfigNativeCommand -FilePath $env:ComSpec -Arguments @('/d', '/s', '/c', $command)
+    $environmentLines = @($environmentResult.Output -split '\r?\n')
+    if ($environmentResult.ExitCode -ne 0) {
         throw "VsDevCmd failed to initialize the $Architecture compiler environment."
     }
     foreach ($line in $environmentLines) {

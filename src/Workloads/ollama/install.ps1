@@ -47,12 +47,22 @@ if ($architecture -eq 'X64') {
         $destination = Join-Path $env:LOCALAPPDATA 'DevConfig\ollama\runtime'
         $managedProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'ollama.exe'" -ErrorAction SilentlyContinue |
             Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($destination, [StringComparison]::OrdinalIgnoreCase) })
+        $managedProcessIds = @(Get-AiProcessIds -ProcessObjects $managedProcesses)
         foreach ($process in $managedProcesses) {
-            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+            $processId = Get-AiProcessId -ProcessObject $process
+            if ($null -eq $processId) {
+                [void]$report.result.warnings.Add('A managed Ollama process was detected without a usable process id; cleanup evidence was skipped.')
+                continue
+            }
+            Stop-Process -Id $processId -Force -ErrorAction Stop
         }
-        foreach ($process in $managedProcesses) {
-            try { Wait-Process -Id $process.ProcessId -Timeout 30 -ErrorAction Stop } catch {
-                throw "Managed Ollama process $($process.ProcessId) did not exit before runtime upgrade."
+        foreach ($processId in $managedProcessIds) {
+            $deadline = (Get-Date).AddSeconds(30)
+            while (Get-Process -Id $processId -ErrorAction SilentlyContinue) {
+                if ((Get-Date) -ge $deadline) {
+                    throw "Managed Ollama process $processId did not exit before runtime upgrade."
+                }
+                Start-Sleep -Milliseconds 250
             }
         }
         $resolved = Install-VerifiedGitHubLatestAsset `
@@ -69,7 +79,7 @@ if ($architecture -eq 'X64') {
             Tag = $resolved.Tag
             Asset = $resolved.Asset.name
             Sha256 = $resolved.Asset.digest
-            stoppedManagedProcesses = @($managedProcesses.ProcessId)
+            stoppedManagedProcesses = $managedProcessIds
         }
     }
 }

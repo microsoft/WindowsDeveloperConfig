@@ -67,11 +67,17 @@ if ($PlanOnly) {
     Assert-AiAdministrator
     $pythonPackage = Ensure-AiWingetPackage -Id 'Python.Python.3.13'
     $pythonPath = Get-Python313Path -Architecture $architecture
-    $pythonVersionText = (& $pythonPath -c 'import platform; print(platform.python_version())').Trim()
-    if ($LASTEXITCODE -ne 0) { throw 'Python failed while reporting its version.' }
+    $pythonVersionResult = Invoke-DevConfigNativeCommand -FilePath $pythonPath -Arguments @(
+        '-c', 'import platform; print(platform.python_version())'
+    )
+    $pythonVersionText = $pythonVersionResult.Output.Trim()
+    if ($pythonVersionResult.ExitCode -ne 0) { throw 'Python failed while reporting its version.' }
     $pythonVersion = [version]$pythonVersionText
-    $pythonMachine = (& $pythonPath -c 'import platform; print(platform.machine())').Trim()
-    if ($LASTEXITCODE -ne 0) { throw 'Python failed while reporting its architecture.' }
+    $pythonMachineResult = Invoke-DevConfigNativeCommand -FilePath $pythonPath -Arguments @(
+        '-c', 'import platform; print(platform.machine())'
+    )
+    $pythonMachine = $pythonMachineResult.Output.Trim()
+    if ($pythonMachineResult.ExitCode -ne 0) { throw 'Python failed while reporting its architecture.' }
     Assert-PythonArchitecture -Architecture $architecture -PythonMachine $pythonMachine
 }
 $driver = Get-NvidiaDriverInfo
@@ -272,14 +278,20 @@ if ($packageAction -eq 'VerifyOnly') {
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'check') -DisplayName 'PyTorch dependency check'
 }
 
-$tensorEvidence = (& $venvPython (Join-Path $PSScriptRoot 'smoke.py') --backend $plan.Backend 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0) {
+$tensorResult = Invoke-DevConfigNativeCommand -FilePath $venvPython -Arguments @(
+    (Join-Path $PSScriptRoot 'smoke.py'), '--backend', $plan.Backend
+)
+$tensorEvidence = $tensorResult.Output.Trim()
+if ($tensorResult.ExitCode -ne 0) {
     throw "PyTorch $($plan.Backend) tensor smoke failed: $tensorEvidence"
 }
 if ($plan.InstallTriton) {
     $tritonSmoke = if ($plan.Backend -eq 'XPU') { 'xpu-smoke.py' } else { 'triton-smoke.py' }
-    $tritonEvidence = (& $venvPython (Join-Path $PSScriptRoot $tritonSmoke) 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
+    $tritonResult = Invoke-DevConfigNativeCommand -FilePath $venvPython -Arguments @(
+        (Join-Path $PSScriptRoot $tritonSmoke)
+    )
+    $tritonEvidence = $tritonResult.Output.Trim()
+    if ($tritonResult.ExitCode -ne 0) {
         throw "Triton $($plan.Backend) GPU kernel smoke failed: $tritonEvidence"
     }
     Write-Host "TRITON_READY: $($plan.TritonRequirement)"

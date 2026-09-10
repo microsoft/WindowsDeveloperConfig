@@ -155,6 +155,10 @@ Assert-True ($installScript -match 'Install-VerifiedDownload') 'Fresh direct-whe
 Assert-True ($installScript -match 'Get-PipLocalWheelInstallArguments') 'Fresh direct-wheel install should install the one cached wheel'
 Assert-True ($installScript -match 'tensor smoke failed') 'Matching rerun should still execute the tensor readiness probe'
 Assert-True ($installScript -match 'GPU kernel smoke failed') 'Matching rerun should still execute the Triton readiness probe'
+Assert-True ($installScript -notmatch '\$LASTEXITCODE') 'PyTorch should not depend on inherited LASTEXITCODE state'
+$probeScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'probe.ps1') -Raw
+Assert-True ($probeScript -notmatch '\$LASTEXITCODE') 'PyTorch probe should not depend on inherited LASTEXITCODE state'
+Assert-True ($probeScript -match 'Invoke-DevConfigNativeCommand') 'PyTorch probe should use guarded native execution'
 Assert-True ($installScript -match 'Get-Python313Path') 'PyTorch should select the installed Python 3.13 explicitly'
 Assert-True ($installScript -match 'Import-MsvcEnvironment') 'Triton path should import the architecture-native MSVC build environment'
 Assert-True ((Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\_common\ai-support.ps1') -Raw) -like '*PATH=$vsInstaller;%PATH%*') 'Triton compiler environment should put vswhere.exe on PATH before VsDevCmd runs'

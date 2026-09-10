@@ -124,6 +124,23 @@ $directSetup = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workload
 Assert-True ($directSetup.Contains('''--installPath'', "`"$installPath`""')) 'Build Tools install path should remain one quoted Start-Process argument'
 Assert-True ($directSetup -match 'Get-AiWingetPackageEvidence') 'Package evidence should respect the selected WinGet frontend'
 
+$freshProcessScript = Join-Path $env:TEMP "devconfig-lastexitcode-$([guid]::NewGuid().ToString('N')).ps1"
+try {
+    @(
+        'Set-StrictMode -Version Latest',
+        ". '$((Resolve-Path (Join-Path $PSScriptRoot '..\..\windows-dev-config\steps\_environment.ps1')).Path)'",
+        '$result = Invoke-DevConfigNativeCommand -FilePath $env:ComSpec -Arguments @(''/d'',''/c'',''exit 0'')',
+        'if ($result.ExitCode -ne 0) { throw "unexpected exit $($result.ExitCode)" }',
+        'try { Invoke-DevConfigNativeCommand -FilePath ''__missing_devconfig_command__.exe'' } catch { Write-Output MISSING_NATIVE_FAILED }',
+        'Write-Output FRESH_LASTEXITCODE_OK'
+    ) | Set-Content -LiteralPath $freshProcessScript -Encoding utf8
+    $freshResult = & pwsh -NoProfile -File $freshProcessScript 2>&1 | Out-String
+    Assert-True ($freshResult -match 'FRESH_LASTEXITCODE_OK') 'Fresh StrictMode process should execute native command without preexisting LASTEXITCODE'
+    Assert-True ($freshResult -match 'MISSING_NATIVE_FAILED') 'Fresh StrictMode process should treat native launch failure as failure'
+} finally {
+    Remove-Item -LiteralPath $freshProcessScript -Force -ErrorAction SilentlyContinue
+}
+
 $report = New-AiWorkloadReport -Id 'unit' -Request @{ PlanOnly = $true }
 Add-AiReportAcquisition -Report $report -Entry @{ component = 'test'; sourceType = 'unit'; action = 'planned' }
 Set-AiAcquisitionAction -Report $report -Index 0 -Action 'already-current'

@@ -35,6 +35,17 @@ Assert-True ($installScript -match 'Ensure-AiWingetPackage') 'Ollama x64 should 
 Assert-True ($installScript -notmatch 'apply-configuration') 'Ollama should not use winget configure'
 Assert-True ($installScript -match '/api/ps') 'Ollama report should use machine-readable VRAM allocation evidence'
 Assert-True ($installScript -match '\$inferenceEvidence = \$null') 'Ollama model-smoke opt-out should use explicit skipped evidence'
-Assert-True ($installScript -match 'Stop-Process -Id \$process\.ProcessId') 'Ollama should stop only resolver-owned portable servers before swapping the runtime'
+Assert-True ($installScript -match 'Stop-Process -Id \$processId') 'Ollama should stop only resolver-owned portable servers before swapping the runtime'
+$currentProcess = [pscustomobject]@{ ProcessId = 123 }
+$alternateProcess = [pscustomobject]@{ Id = 456 }
+$minimalProcess = [pscustomobject]@{}
+Assert-Equal (Get-AiProcessId -ProcessObject $currentProcess) 123 'Ollama cleanup should support CIM ProcessId'
+Assert-Equal (Get-AiProcessId -ProcessObject $alternateProcess) 456 'Ollama cleanup should support Process.Id'
+Assert-Equal (Get-AiProcessId -ProcessObject $minimalProcess) $null 'Missing process id should not throw under StrictMode'
+Assert-Equal @(Get-AiProcessIds -ProcessObjects @()).Count 0 'Empty process collection should produce an empty id list'
+Assert-Equal ((Get-AiProcessIds -ProcessObjects @($currentProcess)) -join ',') '123' 'Single process collection should project one id'
+Assert-Equal ((Get-AiProcessIds -ProcessObjects @($currentProcess, $alternateProcess, $minimalProcess)) -join ',') '123,456' 'Multiple process collection should project only usable ids'
+Assert-True ($installScript -match 'Get-AiProcessId') 'Ollama cleanup should use guarded process id extraction'
+Assert-True ($installScript -match 'Get-Process -Id \$processId -ErrorAction SilentlyContinue') 'Ollama cleanup should treat an already-absent process as successful termination'
 
 Write-Host "UNIT_OK: ollama ($script:AssertionCount assertions)"
