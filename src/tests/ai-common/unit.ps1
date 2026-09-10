@@ -123,6 +123,7 @@ Assert-Equal $script:installCount 1 'Absent state should invoke install exactly 
 $directSetup = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\_common\direct-setup.ps1') -Raw
 Assert-True ($directSetup.Contains('''--installPath'', "`"$installPath`""')) 'Build Tools install path should remain one quoted Start-Process argument'
 Assert-True ($directSetup -match 'Get-AiWingetPackageEvidence') 'Package evidence should respect the selected WinGet frontend'
+Assert-True ($directSetup -match 'Enable-AiUtf8Console') 'Standalone AI entry points should normalize UTF-8 console capture'
 
 $freshProcessScript = Join-Path $env:TEMP "devconfig-lastexitcode-$([guid]::NewGuid().ToString('N')).ps1"
 try {

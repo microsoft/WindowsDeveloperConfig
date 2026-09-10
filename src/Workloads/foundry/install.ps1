@@ -74,8 +74,8 @@ if ($PlanOnly) {
 }
 
 Invoke-CheckedCommand -FilePath 'foundry' -ArgumentList @('--version') -DisplayName 'Foundry Local CLI verification'
-& foundry server status *> $null
-if ($LASTEXITCODE -ne 0) {
+$serverStatus = Invoke-DevConfigNativeCommand -FilePath 'foundry' -Arguments @('server', 'status')
+if ($serverStatus.ExitCode -ne 0) {
     Write-Host 'Foundry Local server is not ready; restarting it once.'
     Invoke-CheckedCommand -FilePath 'foundry' -ArgumentList @('server', 'restart') -DisplayName 'Foundry Local server restart'
     Invoke-CheckedCommand -FilePath 'foundry' -ArgumentList @('server', 'status') -DisplayName 'Foundry Local server readiness'
@@ -89,18 +89,25 @@ if ($SkipModelSmoke) {
     $commands = Get-FoundryModelSmokeCommands -Model $modelPlan.Model -Marker $modelPlan.Marker
     Write-Host "Downloading Foundry catalog model $($modelPlan.Model) (approximately $($modelPlan.ApproximateDownloadMb) MB, $($modelPlan.License))."
     Invoke-CheckedCommand -FilePath 'foundry' -ArgumentList $commands.Download -DisplayName 'Foundry Local model download'
-    $modelInfo = (& foundry model info $modelPlan.Model 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or -not $modelInfo) {
+    $modelInfoResult = Invoke-DevConfigNativeCommand -FilePath 'foundry' -Arguments @('model', 'info', $modelPlan.Model)
+    $modelInfo = $modelInfoResult.Output.Trim()
+    if ($modelInfoResult.ExitCode -ne 0 -or -not $modelInfo) {
         throw "Foundry Local could not report the selected $($modelPlan.Model) hardware variant."
     }
     Write-Host $modelInfo
     $completeArguments = @($commands.Complete)
-    $completion = (& foundry @completeArguments 2>&1 | Out-String)
-    if ($LASTEXITCODE -ne 0 -or $completion -notmatch [regex]::Escape($modelPlan.Marker)) {
+    $completionResult = Invoke-DevConfigNativeCommand -FilePath 'foundry' -Arguments $completeArguments
+    $completion = $completionResult.Output
+    if ($completionResult.ExitCode -ne 0 -or $completion -notmatch [regex]::Escape($modelPlan.Marker)) {
         throw "Foundry Local model inference did not produce marker '$($modelPlan.Marker)'. Output: $completion"
     }
-    $cache = (& foundry cache location 2>&1 | Out-String).Trim()
-    $logs = (& foundry server logs -n 200 2>&1 | Out-String).Trim()
+    $cacheResult = Invoke-DevConfigNativeCommand -FilePath 'foundry' -Arguments @('cache', 'location')
+    if ($cacheResult.ExitCode -ne 0) {
+        throw "Foundry Local cache location failed: $($cacheResult.Output)"
+    }
+    $cache = Get-AiWindowsPathFromOutput -Text $cacheResult.Output
+    $logsResult = Invoke-DevConfigNativeCommand -FilePath 'foundry' -Arguments @('server', 'logs', '-n', '200')
+    $logs = $logsResult.Output.Trim()
     $report.acceptance.inference = [ordered]@{
         modelAlias = $modelPlan.Model
         modelInfo = $modelInfo

@@ -5,6 +5,68 @@ function Get-AiCatalogData {
     return Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'ai-catalog.psd1')
 }
 
+function Enable-AiUtf8Console {
+    try {
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [Console]::InputEncoding = $utf8NoBom
+        [Console]::OutputEncoding = $utf8NoBom
+        $global:OutputEncoding = $utf8NoBom
+    } catch {
+        Write-Verbose "Could not force UTF-8 console encoding: $($_.Exception.Message)"
+    }
+    try {
+        $null = & $env:ComSpec /d /c 'chcp 65001 >nul 2>&1'
+    } catch {
+        Write-Verbose "Could not set the console code page to UTF-8: $($_.Exception.Message)"
+    }
+}
+
+function ConvertFrom-AiPrefixedJsonArray {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $Text)
+
+    $normalized = $Text -replace "`r`n", "`n" -replace "`r", "`n"
+    $lines = @($normalized -split "`n")
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        if (-not $lines[$index].TrimStart().StartsWith('[')) {
+            continue
+        }
+        $jsonText = ($lines[$index..($lines.Count - 1)] -join "`n").Trim()
+        try {
+            $data = @($jsonText | ConvertFrom-Json -ErrorAction Stop)
+            $diagnostics = if ($index -gt 0) {
+                ($lines[0..($index - 1)] -join "`n").Trim()
+            } else {
+                ''
+            }
+            return [pscustomobject]@{
+                Data = $data
+                Json = $jsonText
+                Diagnostics = $diagnostics
+            }
+        } catch {
+            continue
+        }
+    }
+    throw 'No valid JSON array was found after the diagnostic output.'
+}
+
+function Get-AiWindowsPathFromOutput {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $Text)
+
+    $withoutAnsi = [regex]::Replace($Text, "$([char]27)\[[0-?]*[ -/]*[@-~]", '')
+    $match = [regex]::Match($withoutAnsi, '(?im)([A-Za-z]:\\[^\r\n]+)')
+    if (-not $match.Success) {
+        throw "No absolute Windows path was found in output: $Text"
+    }
+    $path = $match.Groups[1].Value.Trim().Trim('"', "'", ' ')
+    if (-not [System.IO.Path]::IsPathRooted($path)) {
+        throw "Output did not contain a rooted Windows path: $Text"
+    }
+    return $path
+}
+
 function Get-DevConfigArchitecture {
     [CmdletBinding()]
     param([ValidateSet('', 'X64', 'Arm64')] [string] $Override = '')

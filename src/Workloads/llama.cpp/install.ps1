@@ -114,9 +114,10 @@ if ($SkipModelSmoke) {
         -Sha256 $modelPlan.Sha256 `
         -ExpectedSize $modelPlan.Size
     $arguments = Get-LlamaInferenceArguments -ModelPath $modelPath -Marker $modelPlan.Marker
-    $output = (& $llamaCli @arguments 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $output -notmatch [regex]::Escape($modelPlan.Marker)) {
-        throw "llama.cpp model inference did not produce marker '$($modelPlan.Marker)' (exit $LASTEXITCODE). Output: $output"
+    $inferenceResult = Invoke-DevConfigNativeCommand -FilePath $llamaCli -Arguments $arguments
+    $output = $inferenceResult.Output.Trim()
+    if ($inferenceResult.ExitCode -ne 0 -or $output -notmatch [regex]::Escape($modelPlan.Marker)) {
+        throw "llama.cpp model inference did not produce marker '$($modelPlan.Marker)' (exit $($inferenceResult.ExitCode)). Output: $output"
     }
     $benchArguments = @(
         '-m', $modelPath,
@@ -126,26 +127,24 @@ if ($SkipModelSmoke) {
     if ($plan.Backend -eq 'CPU') {
         $benchArguments += @('--device', 'none')
     }
-    $benchmark = (& $llamaBench @benchArguments 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
-        throw "llama-bench failed while collecting backend evidence (exit $LASTEXITCODE): $benchmark"
+    $benchmarkResult = Invoke-DevConfigNativeCommand -FilePath $llamaBench -Arguments $benchArguments
+    $benchmark = $benchmarkResult.Output.Trim()
+    if ($benchmarkResult.ExitCode -ne 0) {
+        throw "llama-bench failed while collecting backend evidence (exit $($benchmarkResult.ExitCode)): $benchmark"
     }
+    $parsedBenchmark = ConvertFrom-AiPrefixedJsonArray -Text $benchmark
     $report.acceptance.inference = [ordered]@{
         model = $modelPlan.FileName
         modelSha256 = $modelPlan.Sha256
         marker = $modelPlan.Marker
         backendPlan = $plan.Backend
-        benchmarkJson = $benchmark
+        benchmark = $parsedBenchmark.Data
+        benchmarkJson = $parsedBenchmark.Json
+        benchmarkDiagnostics = $parsedBenchmark.Diagnostics
     }
     $inferenceEvidence = $report.acceptance.inference
-    try {
-        $benchData = $benchmark | ConvertFrom-Json
-        $measurements = @($benchData)
-        $gpuMeasurements = @($measurements | Where-Object { [int]$_.n_gpu_layers -gt 0 })
-        $report.result.fallbackUsed = $plan.Backend -ne 'CPU' -and $gpuMeasurements.Count -eq 0
-    } catch {
-        [void]$report.result.warnings.Add('llama-bench output could not be parsed as JSON; inspect acceptance.benchmarkJson.')
-    }
+    $gpuMeasurements = @($parsedBenchmark.Data | Where-Object { [int]$_.n_gpu_layers -gt 0 })
+    $report.result.fallbackUsed = $plan.Backend -ne 'CPU' -and $gpuMeasurements.Count -eq 0
     Write-Host "LLAMA_CPP_READY: architecture=$architecture, backend=$($plan.Backend), model=$($modelPlan.FileName), sha256=$($modelPlan.Sha256)."
 }
 Add-AiReportPhase -Report $report -Name 'llama-inference' -Status $(if ($SkipModelSmoke) { 'skipped' } else { 'ready' }) -Evidence $inferenceEvidence

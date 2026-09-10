@@ -30,7 +30,16 @@ Assert-True ($installScript -match '\[switch\]\s*\$SkipModelSmoke') 'Foundry sho
 Assert-True ($installScript -match '\[switch\]\s*\$PlanOnly') 'Foundry should expose portable plan mode'
 Assert-True ($installScript -match 'Ensure-AiWingetPackage') 'Foundry should use direct package acquisition'
 Assert-True ($installScript -notmatch 'apply-configuration') 'Foundry should not use winget configure'
-Assert-True ($installScript -match 'server logs -n 200') 'Foundry report should retain execution-provider diagnostics'
+Assert-True ($installScript -match "'server', 'logs', '-n', '200'") 'Foundry report should retain execution-provider diagnostics'
 Assert-True ($installScript -match '\$inferenceEvidence = \$null') 'Foundry model-smoke opt-out should use explicit skipped evidence'
+
+$decoratedCache = "$([char]0x25A0) note: C:\Users\mihippel\.foundry\cache\models"
+Assert-Equal (Get-AiWindowsPathFromOutput -Text $decoratedCache) 'C:\Users\mihippel\.foundry\cache\models' 'Decorated Foundry output should produce a clean absolute cache path'
+$ansiCache = "$([char]27)[32mready$([char]27)[0m C:\Foundry Cache\models"
+Assert-Equal (Get-AiWindowsPathFromOutput -Text $ansiCache) 'C:\Foundry Cache\models' 'ANSI decoration should be removed before parsing the cache path'
+Assert-ThrowsLike {
+    Get-AiWindowsPathFromOutput -Text 'cache unavailable'
+} '*No absolute Windows path*' 'Foundry cache output without a path should fail actionably'
+Assert-True ($installScript -match 'Invoke-DevConfigNativeCommand') 'Foundry output should use guarded UTF-8 native capture'
 
 Write-Host "UNIT_OK: foundry ($script:AssertionCount assertions)"

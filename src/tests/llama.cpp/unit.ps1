@@ -80,11 +80,33 @@ Assert-True ('--conversation' -notin $arguments) 'llama.cpp command should not u
 Assert-True ('--single-turn' -in $arguments) 'llama.cpp command should exit after the predefined prompt'
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\llama.cpp\install.ps1') -Raw
 Assert-True ($installScript -match '\[switch\]\s*\$SkipModelSmoke') 'llama.cpp should expose model-smoke opt-out'
-Assert-True ($installScript -match '2>&1') 'llama.cpp failures should retain stderr diagnostics'
+Assert-True ($installScript -match 'Invoke-DevConfigNativeCommand') 'llama.cpp failures should retain combined native diagnostics'
 Assert-True ($installScript -match '\[switch\]\s*\$PlanOnly') 'llama.cpp should expose portable plan mode'
 Assert-True ($installScript -match 'Ensure-AiWingetPackage') 'llama.cpp x64 should use direct package acquisition'
 Assert-True ($installScript -notmatch 'apply-configuration') 'llama.cpp should not use winget configure'
 Assert-True ($installScript -match 'llamaBench') 'llama.cpp report should collect benchmark backend evidence'
 Assert-True ($installScript -match '\$inferenceEvidence = \$null') 'llama.cpp model-smoke opt-out should use explicit skipped evidence'
+
+$prefixedBenchmark = @'
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: NVIDIA RTX Spark N1X, compute capability 12.1
+[
+  {
+    "backend": "CUDA",
+    "n_gpu_layers": 999,
+    "devices": "CUDA0",
+    "avg_ts": 127.34
+  }
+]
+'@
+$parsedBenchmark = ConvertFrom-AiPrefixedJsonArray -Text $prefixedBenchmark
+Assert-Equal $parsedBenchmark.Data.Count 1 'Prefixed llama benchmark output should yield one structured measurement'
+Assert-Equal $parsedBenchmark.Data[0].backend 'CUDA' 'Structured benchmark should preserve the actual backend'
+Assert-Equal $parsedBenchmark.Data[0].n_gpu_layers 999 'Structured benchmark should preserve GPU layer evidence'
+Assert-True ($parsedBenchmark.Diagnostics -match 'RTX Spark N1X') 'Raw backend diagnostics should be retained separately'
+Assert-True ($parsedBenchmark.Json.TrimStart().StartsWith('[')) 'Stored benchmark JSON should exclude diagnostic prefixes'
+Assert-ThrowsLike {
+    ConvertFrom-AiPrefixedJsonArray -Text 'CUDA diagnostics without JSON'
+} '*No valid JSON array*' 'Missing benchmark JSON should fail actionably'
 
 Write-Host "UNIT_OK: llama.cpp ($script:AssertionCount assertions)"

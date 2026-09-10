@@ -9,6 +9,8 @@ $stepsRoot = Join-Path $PSScriptRoot '..\..\windows-dev-config\steps'
 . (Join-Path $stepsRoot '_step-runner.ps1')
 . (Join-Path $stepsRoot '_winget.ps1')
 
+Enable-AiUtf8Console
+
 function Write-AiPhase {
     param(
         [Parameter(Mandatory)] [string] $Name,
