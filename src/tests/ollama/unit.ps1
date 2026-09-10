@@ -47,5 +47,10 @@ Assert-Equal ((Get-AiProcessIds -ProcessObjects @($currentProcess)) -join ',') '
 Assert-Equal ((Get-AiProcessIds -ProcessObjects @($currentProcess, $alternateProcess, $minimalProcess)) -join ',') '123,456' 'Multiple process collection should project only usable ids'
 Assert-True ($installScript -match 'Get-AiProcessId') 'Ollama cleanup should use guarded process id extraction'
 Assert-True ($installScript -match 'Get-Process -Id \$processId -ErrorAction SilentlyContinue') 'Ollama cleanup should treat an already-absent process as successful termination'
+Assert-True ($installScript -match 'Get-AiFreeTcpPort') 'Ollama ARM64 should allocate a resolver-owned API endpoint'
+Assert-True ($installScript -match '\$env:OLLAMA_HOST') 'Ollama ARM64 CLI and server should use the owned endpoint'
+Assert-True ($installScript -match 'expectedVersion') 'Ollama ARM64 should verify the owned server matches the acquired release'
+$freePort = Get-AiFreeTcpPort
+Assert-True ($freePort -gt 0 -and $freePort -le 65535) 'Free TCP port helper should return a usable loopback port'
 
 Write-Host "UNIT_OK: ollama ($script:AssertionCount assertions)"

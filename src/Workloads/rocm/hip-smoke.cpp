@@ -1,6 +1,7 @@
 #include <hip/hip_runtime.h>
 
 #include <cstdio>
+#include <cstdlib>
 
 #define CHECK(call)                                                        \
     do {                                                                   \
@@ -17,13 +18,15 @@ __global__ void write_marker(int* value) {
     }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    const int device_index = argc > 1 ? std::atoi(argv[1]) : 0;
     int device_count = 0;
     CHECK(hipGetDeviceCount(&device_count));
-    if (device_count < 1) return 2;
+    if (device_index < 0 || device_index >= device_count) return 2;
+    CHECK(hipSetDevice(device_index));
 
     hipDeviceProp_t properties{};
-    CHECK(hipGetDeviceProperties(&properties, 0));
+    CHECK(hipGetDeviceProperties(&properties, device_index));
 
     int* device_value = nullptr;
     int host_value = 0;
@@ -34,6 +37,6 @@ int main() {
     CHECK(hipMemcpy(&host_value, device_value, sizeof(host_value), hipMemcpyDeviceToHost));
     CHECK(hipFree(device_value));
 
-    std::printf("HIP_KERNEL_READY device=%s value=%d\n", properties.name, host_value);
+    std::printf("HIP_KERNEL_READY device_index=%d device=%s value=%d\n", device_index, properties.name, host_value);
     return host_value == 42 ? 0 : 3;
 }

@@ -10,11 +10,16 @@
 .PARAMETER SkipWorkloadSmoke
   Skip compiling and executing the CUDA kernel. The default proves that the
   compiler, host toolchain, driver, and GPU work together.
+
+.PARAMETER DeviceIndex
+  Zero-based NVIDIA device index used for nvidia-smi qualification and kernel
+  execution on same-vendor multi-adapter systems.
 #>
 [CmdletBinding()]
 param(
     [switch] $ToolkitOnly,
     [switch] $SkipWorkloadSmoke,
+    [ValidateRange(0, 63)] [int] $DeviceIndex = 0,
     [switch] $PlanOnly,
     [string] $ReportPath = ''
 )
@@ -31,6 +36,7 @@ $component = if ($architecture -eq 'Arm64') { $catalog.CudaArm64 } else { $catal
 $report = New-AiWorkloadReport -Id 'cuda' -Request @{
     ToolkitOnly = [bool]$ToolkitOnly
     SkipWorkloadSmoke = [bool]$SkipWorkloadSmoke
+    DeviceIndex = $DeviceIndex
     PlanOnly = [bool]$PlanOnly
 }
 if (-not $ReportPath) { $ReportPath = Get-AiDefaultReportPath -Id 'cuda' }
@@ -52,11 +58,53 @@ try {
 if (-not $PlanOnly) { Assert-AiAdministrator }
 
 $gpu = Get-NvidiaGpu
+$driver = $null
+$driverError = $null
+if ($gpu) {
+    try {
+        $driver = Get-NvidiaDriverInfo -DeviceIndex $DeviceIndex
+    } catch {
+        $driverError = $_.Exception.Message
+    }
+}
 if (-not $gpu -and -not $ToolkitOnly) {
     if ($PlanOnly) {
         [void]$report.result.blockers.Add('No NVIDIA GPU detected; default kernel acceptance would fail. Use -ToolkitOnly for compiler-only planning.')
     } else {
     throw "No NVIDIA GPU was detected. CUDA Toolkit can be installed without a GPU only with -ToolkitOnly; GPU execution requires supported NVIDIA hardware and a current driver."
+    }
+}
+if ($driverError) {
+    if ($PlanOnly) {
+        [void]$report.result.blockers.Add($driverError)
+    } else {
+        throw $driverError
+    }
+}
+if ($gpu -and -not $driver -and -not $driverError -and -not $ToolkitOnly) {
+    $message = "NVIDIA device index $DeviceIndex is present, but nvidia-smi did not report a usable driver. Install/update the NVIDIA driver and rerun."
+    if ($PlanOnly) {
+        [void]$report.result.blockers.Add($message)
+    } else {
+        throw $message
+    }
+}
+if ($driver -and -not $ToolkitOnly) {
+    $hardwareError = if ($architecture -eq 'Arm64' -and
+        ($driver.DriverVersion -lt [version]'616.0' -or $driver.ComputeCapability.Major -lt 12)) {
+        "CUDA 13.4 ARM64 Developer Preview requires driver 616+ and compute capability 12.x; device index $DeviceIndex reports driver $($driver.DriverVersion), capability $($driver.ComputeCapability)."
+    } elseif ($architecture -eq 'X64' -and
+        ($driver.DriverVersion -lt [version]'580.0' -or $driver.ComputeCapability -lt [version]'7.5')) {
+        "The current stable CUDA 13 x64 flow requires driver 580+ and compute capability 7.5+; device index $DeviceIndex reports driver $($driver.DriverVersion), capability $($driver.ComputeCapability). Use -ToolkitOnly for compiler-only setup."
+    } else {
+        $null
+    }
+    if ($hardwareError) {
+        if ($PlanOnly) {
+            [void]$report.result.blockers.Add($hardwareError)
+        } else {
+            throw $hardwareError
+        }
     }
 }
 
@@ -93,7 +141,8 @@ if (-not $PlanOnly -and $architecture -eq 'X64') {
 if ($PlanOnly) {
     Add-AiReportPhase -Report $report -Name 'cuda-kernel' -Status 'planned' -Evidence @{
         source = (Join-Path $PSScriptRoot 'smoke.cu')
-        target = 'detected NVIDIA GPU'
+        target = "NVIDIA device index $DeviceIndex"
+        driver = $driver
     }
     Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
     Write-Host $(if ($report.result.blockers.Count) { 'PLAN_UNSUPPORTED: cuda' } else { 'PLAN_OK: cuda' })
@@ -106,7 +155,6 @@ $nvccVersionEvidence = (& $nvcc --version 2>&1 | Out-String).Trim()
 if ($nvccVersionEvidence -match 'release\s+([0-9]+\.[0-9]+)') {
     $report.acquisitions[0].version = $Matches[1]
 }
-$driver = Get-NvidiaDriverInfo
 $readiness = Get-CudaReadiness `
     -ToolkitAvailable $true `
     -NvidiaGpuPresent ([bool]$gpu) `
@@ -140,8 +188,8 @@ if ($SkipWorkloadSmoke -or -not $readiness.GpuReady) {
         if ($LASTEXITCODE -ne 0) {
             throw "CUDA smoke kernel compilation failed with exit code $LASTEXITCODE."
         }
-        $output = (& $executable 2>&1 | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0 -or $output -ne 'CUDA_KERNEL_READY') {
+        $output = (& $executable $DeviceIndex 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $output -notmatch '^CUDA_KERNEL_READY') {
             throw "CUDA smoke kernel failed on the GPU (exit $LASTEXITCODE, output '$output')."
         }
         Write-Host 'CUDA_WORKLOAD_READY: compiled and executed a CUDA kernel on the detected GPU.'
@@ -150,6 +198,7 @@ if ($SkipWorkloadSmoke -or -not $readiness.GpuReady) {
             compiled = $true
             executed = $true
             marker = 'CUDA_KERNEL_READY'
+            deviceIndex = $DeviceIndex
             device = $driver.Name
             computeCapability = $driver.ComputeCapability.ToString()
         }

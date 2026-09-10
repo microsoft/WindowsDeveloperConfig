@@ -5,6 +5,42 @@ function Get-AiCatalogData {
     return Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'ai-catalog.psd1')
 }
 
+function Get-AiCapabilityMatrix {
+    return @((Get-AiCatalogData).CapabilityMatrix)
+}
+
+function Resolve-AiCapabilityCell {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)] [string] $Id)
+
+    $cell = Get-AiCapabilityMatrix | Where-Object { $_.Id -eq $Id } | Select-Object -First 1
+    if (-not $cell) {
+        throw "Unknown AI capability cell '$Id'."
+    }
+    if ($cell.Status -eq 'upstream-unavailable') {
+        throw [string]$cell.Blocker
+    }
+    $resolver = Get-Command -Name $cell.Resolver -CommandType Function -ErrorAction SilentlyContinue
+    if (-not $resolver) {
+        throw "Capability '$Id' references missing resolver '$($cell.Resolver)'."
+    }
+    $arguments = @{}
+    foreach ($entry in $cell.ResolverArguments.GetEnumerator()) {
+        $arguments[$entry.Key] = $entry.Value
+    }
+    $plan = & $resolver.Name @arguments
+    foreach ($entry in $cell.Expected.GetEnumerator()) {
+        $property = $plan.PSObject.Properties[$entry.Key]
+        if (-not $property) {
+            throw "Capability '$Id' resolver result did not contain expected field '$($entry.Key)'."
+        }
+        if ($property.Value -ne $entry.Value) {
+            throw "Capability '$Id' expected $($entry.Key)='$($entry.Value)' but resolved '$($property.Value)'."
+        }
+    }
+    return $plan
+}
+
 function Enable-AiUtf8Console {
     try {
         $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -67,6 +103,267 @@ function Get-AiWindowsPathFromOutput {
     return $path
 }
 
+function Invoke-AiNativeCommandSeparated {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $FilePath,
+        [string[]] $Arguments = @()
+    )
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FilePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Native command '$FilePath' did not start."
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            StandardOutput = $stdoutTask.GetAwaiter().GetResult()
+            StandardError = $stderrTask.GetAwaiter().GetResult()
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function ConvertFrom-AiJsonArrayWithDiagnostics {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Json,
+        [AllowEmptyString()] [string] $Diagnostics = ''
+    )
+    try {
+        $data = @($Json | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        throw "llama-bench stdout was not a valid JSON array: $($_.Exception.Message)"
+    }
+    if ($data.Count -eq 0) {
+        throw 'llama-bench returned an empty JSON array.'
+    }
+    return [pscustomobject]@{
+        Data = $data
+        Json = $Json.Trim()
+        Diagnostics = $Diagnostics.Trim()
+    }
+}
+
+function ConvertFrom-AiKeyedJsonLine {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Text,
+        [Parameter(Mandatory)] [string] $Prefix
+    )
+
+    $line = @($Text -split '\r?\n' | Where-Object { $_.StartsWith($Prefix) }) | Select-Object -Last 1
+    if (-not $line) {
+        throw "Output did not contain a '$Prefix' JSON record."
+    }
+    $json = $line.Substring($Prefix.Length)
+    try {
+        return $json | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "The '$Prefix' record was not valid JSON: $json"
+    }
+}
+
+function Test-AiDeviceNameMatch {
+    [CmdletBinding()]
+    param(
+        [AllowNull()] [string] $Expected,
+        [AllowNull()] [string] $Actual
+    )
+    if (-not $Expected -or -not $Actual) { return $false }
+    $normalizedExpected = ($Expected -replace '\((TM|R)\)', '' -replace '[^A-Za-z0-9]+', ' ').Trim()
+    $normalizedActual = ($Actual -replace '\((TM|R)\)', '' -replace '[^A-Za-z0-9]+', ' ').Trim()
+    return $normalizedActual -eq $normalizedExpected -or
+        $normalizedActual.Contains($normalizedExpected) -or
+        $normalizedExpected.Contains($normalizedActual)
+}
+
+function Get-FoundryExecutionProviderEvidence {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()] [string] $ModelInfo = '',
+        [AllowEmptyString()] [string] $ServerLogs = ''
+    )
+    $providerPattern = '(?i)(CUDAExecutionProvider|NvTensorRTRTXExecutionProvider|QNNExecutionProvider|OpenVINOExecutionProvider|VitisAIExecutionProvider|MIGraphXExecutionProvider|WebGPUExecutionProvider|DmlExecutionProvider|CPUExecutionProvider)'
+    $selectionMatches = @([regex]::Matches($ServerLogs, '(?im)Device:\s*([^,\r\n]+),\s*EPs:\s*([^\r\n]+)'))
+    if ($selectionMatches.Count -gt 0) {
+        $selection = $selectionMatches[$selectionMatches.Count - 1]
+        $selectedDevice = $selection.Groups[1].Value.Trim()
+        $providerText = $selection.Groups[2].Value
+    } else {
+        $inVariantTable = $false
+        $deviceParts = [System.Collections.Generic.List[string]]::new()
+        $providerParts = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in @($ModelInfo -split '\r?\n')) {
+            if ($line -match '^\|\s*Variant\s*\|') {
+                $inVariantTable = $true
+                continue
+            }
+            if (-not $inVariantTable) { continue }
+            if ($line -match '^\+') {
+                if ($deviceParts.Count -gt 0 -or $providerParts.Count -gt 0) { break }
+                continue
+            }
+            if ($line -notmatch '^\|') { continue }
+            $columns = @($line -split '\|')
+            if ($columns.Count -lt 6 -or $columns[1] -match '^-+$') { continue }
+            $devicePart = $columns[3].Trim()
+            $providerPart = $columns[4].Trim()
+            if ($devicePart -and $devicePart -ne 'Device') { [void]$deviceParts.Add($devicePart) }
+            if ($providerPart -and $providerPart -notin @('Execution', 'Provider')) { [void]$providerParts.Add($providerPart) }
+        }
+        $selectedDevice = ($deviceParts -join '').Trim()
+        $providerText = ($providerParts -join '').Trim()
+        if (-not $selectedDevice -or -not $providerText) {
+            throw 'Foundry inference succeeded, but neither the current inference logs nor the selected model variant identified its device and execution provider.'
+        }
+    }
+    $providers = @([regex]::Matches($providerText, $providerPattern) |
+        ForEach-Object { $_.Groups[1].Value } |
+        Select-Object -Unique)
+    if ($providers.Count -eq 0) {
+        throw "Foundry selection event for device '$selectedDevice' did not identify a supported execution provider."
+    }
+    return [pscustomobject]@{
+        SelectedDevice = $selectedDevice
+        SelectedProvider = $providers -join ','
+        ObservedProviders = $providers
+        CpuFallback = $providers.Count -eq 1 -and $providers[0] -ieq 'CPUExecutionProvider'
+    }
+}
+
+function Get-AiAppendedLogText {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()] [string] $Before = '',
+        [AllowEmptyString()] [string] $After = ''
+    )
+    $beforeCounts = @{}
+    foreach ($line in @($Before -split '\r?\n' | Where-Object { $_ })) {
+        $beforeCounts[$line] = 1 + $(if ($beforeCounts.ContainsKey($line)) { $beforeCounts[$line] } else { 0 })
+    }
+    $appended = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in @($After -split '\r?\n' | Where-Object { $_ })) {
+        if ($beforeCounts.ContainsKey($line) -and $beforeCounts[$line] -gt 0) {
+            $beforeCounts[$line]--
+        } else {
+            [void]$appended.Add($line)
+        }
+    }
+    return $appended -join "`n"
+}
+
+function Get-LlamaBenchmarkBackendEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object[]] $Data,
+        [AllowEmptyString()] [string] $Diagnostics = '',
+        [Parameter(Mandatory)] [ValidateSet('CUDA', 'ROCm', 'SYCL', 'OpenVINO', 'Vulkan', 'OpenCL', 'CPU')] [string] $Backend,
+        [AllowNull()] [string] $ExpectedDeviceName,
+        [AllowNull()] [string] $RequestedDevice
+    )
+
+    $actualBackends = @($Data | ForEach-Object {
+        $property = $_.PSObject.Properties['backends']
+        if ($property) { @($property.Value) | ForEach-Object { [string]$_ } }
+    } | Where-Object { $_ } | Select-Object -Unique)
+    $requestedDevices = @($Data | ForEach-Object {
+        $property = $_.PSObject.Properties['devices']
+        if ($property) { [string]$property.Value }
+    } | Where-Object { $_ } | Select-Object -Unique)
+    $gpuInfo = @($Data | ForEach-Object {
+        $property = $_.PSObject.Properties['gpu_info']
+        if ($property) { [string]$property.Value }
+    } | Where-Object { $_ } | Select-Object -Unique)
+    $requestedGpuMeasurements = @($Data | Where-Object {
+        $property = $_.PSObject.Properties['n_gpu_layers']
+        $property -and [int]$property.Value -gt 0
+    })
+    $offloadMatches = @([regex]::Matches($Diagnostics, '(?im)offloaded\s+([0-9]+)\s*/\s*([0-9]+)\s+layers(?:\s+to\s+GPU)?'))
+    $actualOffloadedLayers = 0
+    $totalModelLayers = 0
+    foreach ($match in $offloadMatches) {
+        $actualOffloadedLayers = [math]::Max($actualOffloadedLayers, [int]$match.Groups[1].Value)
+        $totalModelLayers = [math]::Max($totalModelLayers, [int]$match.Groups[2].Value)
+    }
+    $evidenceText = (@($actualBackends) + @($gpuInfo) + @($Diagnostics)) -join "`n"
+    $backendPattern = switch ($Backend) {
+        'CUDA' { 'CUDA' }
+        'ROCm' { 'ROCm|HIP' }
+        'SYCL' { 'SYCL' }
+        'OpenVINO' { 'OpenVINO' }
+        'Vulkan' { 'Vulkan' }
+        'OpenCL' { 'OpenCL' }
+        'CPU' { 'CPU' }
+    }
+    if (($actualBackends -join "`n") -notmatch $backendPattern) {
+        throw "llama-bench did not identify the selected $Backend backend. Actual backends: $($actualBackends -join ', ')."
+    }
+    if ($Backend -ne 'CPU' -and $gpuInfo.Count -eq 0) {
+        throw "llama-bench identified $Backend but did not provide physical device evidence in gpu_info."
+    }
+    if ($Backend -eq 'CPU') {
+        if ($actualOffloadedLayers -gt 0) {
+            throw "llama-bench offloaded $actualOffloadedLayers layers while the CPU backend was selected."
+        }
+    } elseif ($actualOffloadedLayers -le 0) {
+        throw "llama-bench identified $Backend but diagnostics did not prove any layers were actually offloaded."
+    }
+    $vendorPattern = switch ($Backend) {
+        'CUDA' { 'NVIDIA|CUDA' }
+        'ROCm' { 'AMD|Radeon|ROCm|HIP' }
+        'SYCL' { 'Intel|SYCL' }
+        'OpenVINO' { 'OpenVINO' }
+        'Vulkan' { 'Vulkan' }
+        'OpenCL' { 'Qualcomm|Adreno|OpenCL' }
+        'CPU' { 'CPU' }
+    }
+    if ($evidenceText -notmatch $vendorPattern) {
+        throw "llama-bench did not report device evidence for the selected $Backend backend."
+    }
+    if ($ExpectedDeviceName -and $Backend -ne 'CPU' -and $ExpectedDeviceName -ne 'OpenVINO-selected device') {
+        if (-not (Test-AiDeviceNameMatch -Expected $ExpectedDeviceName -Actual $evidenceText)) {
+            throw "llama-bench selected $Backend but did not identify the expected device '$ExpectedDeviceName'."
+        }
+    }
+    if ($RequestedDevice -and $Backend -ne 'CPU') {
+        $matchingRequestedDevices = @($requestedDevices | Where-Object { $_ -ieq $RequestedDevice })
+        if ($matchingRequestedDevices.Count -eq 0) {
+            throw "llama-bench structured devices '$($requestedDevices -join ',')' did not match requested selector '$RequestedDevice'."
+        }
+        $selectorPattern = "(?im)using device\s+$([regex]::Escape($RequestedDevice))\b|dev\s*=\s*$([regex]::Escape($RequestedDevice))\b"
+        if ($Diagnostics -notmatch $selectorPattern) {
+            throw "llama-bench did not prove that requested device selector '$RequestedDevice' was used."
+        }
+    }
+
+    return [pscustomobject]@{
+        Backend = $Backend
+        ActualBackends = $actualBackends
+        RequestedDevices = $requestedDevices
+        GpuInfo = $gpuInfo
+        ExpectedDevice = $ExpectedDeviceName
+        RequestedDevice = $RequestedDevice
+        RequestedGpuLayerMeasurements = $requestedGpuMeasurements.Count
+        ActualOffloadedLayers = $actualOffloadedLayers
+        TotalModelLayers = $totalModelLayers
+        HardwareAccelerated = $Backend -ne 'CPU' -and $actualOffloadedLayers -gt 0
+    }
+}
+
 function Get-DevConfigArchitecture {
     [CmdletBinding()]
     param([ValidateSet('', 'X64', 'Arm64')] [string] $Override = '')
@@ -114,6 +411,7 @@ function Resolve-CudaInstallPlan {
         return [pscustomobject]@{
             Architecture = $Architecture
             Method = 'WinGet'
+            PackageId = 'Nvidia.CUDA'
             ToolkitVersion = $null
             Preview = $false
             InstallerUrl = $null
@@ -129,7 +427,7 @@ function Resolve-CudaInstallPlan {
     return [pscustomobject]@{
         Architecture = $Architecture
         Method = 'NvidiaInstaller'
-        ConfigurationName = 'configuration.arm64.winget'
+        InstallerIdentity = $catalog.Artifact
         ToolkitVersion = $catalog.Version.Substring(0, 4)
         Preview = $true
         InstallerUrl = $catalog.Uri
@@ -159,35 +457,155 @@ function Resolve-LlamaCppInstallPlan {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [ValidateSet('X64', 'Arm64')] [string] $Architecture,
+        [ValidateSet('Auto', 'CUDA', 'ROCm', 'SYCL', 'OpenVINO', 'Vulkan', 'OpenCL', 'CPU')] [string] $Backend = 'Auto',
         [bool] $HasNvidia = $false,
-        [int] $DriverMajor = 0,
-        [version] $ComputeCapability = [version]'0.0'
+        [version] $DriverVersion = [version]'0.0',
+        [version] $ComputeCapability = [version]'0.0',
+        [string] $NvidiaGpuName,
+        [string] $AmdGpuName,
+        [string] $AmdGfxTarget,
+        [string] $IntelGpuName,
+        [string] $QualcommGpuName,
+        [bool] $HasOpenCl = $false,
+        [bool] $HasVulkan = $false,
+        [string] $VulkanGpuName
     )
 
-    if ($Architecture -eq 'X64') {
-        return [pscustomobject]@{
-            Method = 'WinGet'
-            PackageId = 'ggml.llamacpp'
-            AssetPatterns = @()
-            Backend = 'Vulkan'
+    $catalog = (Get-AiCatalogData).Components.LlamaCppRolling
+    $assets = $catalog.BackendAssets
+    $cudaAsset = $null
+    if ($HasNvidia) {
+        if ($Architecture -eq 'Arm64') {
+            if ($DriverVersion -ge [version]'616.0' -and $ComputeCapability.Major -ge 12) {
+                $cudaAsset = $assets.Cuda134Arm64
+            }
+        } elseif ($DriverVersion -ge [version]'580.0' -and $ComputeCapability -ge [version]'7.5') {
+            $cudaAsset = $assets.Cuda133X64
+        } elseif ($DriverVersion -ge [version]'551.61' -and
+            $ComputeCapability -ge [version]'5.0' -and
+            $ComputeCapability.Major -lt 10) {
+            $cudaAsset = $assets.Cuda124X64
         }
     }
+    $rocmSupported = $Architecture -eq 'X64' -and [bool]$AmdGpuName -and [bool]$AmdGfxTarget
+    $syclSupported = $Architecture -eq 'X64' -and (Test-IntelXpuGpuSupported -GpuName $IntelGpuName)
+    $openClSupported = $Architecture -eq 'Arm64' -and [bool]$QualcommGpuName -and $HasOpenCl
 
-    $catalog = (Get-AiCatalogData).Components.LlamaCppRolling
-    $useCuda = $HasNvidia -and $DriverMajor -ge 616 -and $ComputeCapability.Major -ge 12
+    $selectedBackend = if ($Backend -eq 'Auto') {
+        if ($cudaAsset) {
+            'CUDA'
+        } elseif ($rocmSupported) {
+            'ROCm'
+        } elseif ($syclSupported) {
+            'SYCL'
+        } elseif ($openClSupported) {
+            'OpenCL'
+        } elseif ($Architecture -eq 'X64' -and $HasVulkan) {
+            'Vulkan'
+        } else {
+            'CPU'
+        }
+    } else {
+        $Backend
+    }
+
+    $selectedAsset = switch ($selectedBackend) {
+        'CUDA' {
+            if (-not $cudaAsset) {
+                if ($Architecture -eq 'Arm64') {
+                    throw 'llama.cpp CUDA on Windows ARM64 requires an RTX Spark-class NVIDIA GPU, compute capability 12.x, and driver branch 616 or newer.'
+                }
+                if ($HasNvidia -and $ComputeCapability.Major -ge 10 -and $DriverVersion -lt [version]'580.0') {
+                    throw "llama.cpp CUDA 13.3 is required for NVIDIA compute capability $ComputeCapability, but driver $DriverVersion is below branch 580."
+                }
+                throw 'llama.cpp CUDA on Windows x64 requires an NVIDIA GPU with compute capability 5.0 or newer and driver 551.61 or newer.'
+            }
+            $cudaAsset
+        }
+        'ROCm' {
+            if (-not $rocmSupported) {
+                throw "llama.cpp ROCm requires Windows x64 and an AMD GPU in the ROCm 10.0 Windows support matrix. Detected: '$AmdGpuName'."
+            }
+            $assets.Rocm10X64
+        }
+        'SYCL' {
+            if (-not $syclSupported) {
+                throw "llama.cpp SYCL requires Windows x64 and a supported Intel GPU. Detected: '$IntelGpuName'."
+            }
+            $assets.SyclX64
+        }
+        'OpenVINO' {
+            if ($Architecture -ne 'X64') {
+                throw 'llama.cpp OpenVINO is not published for native Windows ARM64.'
+            }
+            $assets.OpenVinoX64
+        }
+        'Vulkan' {
+            if ($Architecture -ne 'X64') {
+                throw 'llama.cpp Vulkan is not selected on Windows ARM64; use CUDA, OpenCL, or CPU.'
+            }
+            if (-not $HasVulkan) {
+                throw 'llama.cpp Vulkan was requested, but no Vulkan loader and usable display adapter were detected.'
+            }
+            $assets.VulkanX64
+        }
+        'OpenCL' {
+            if (-not $openClSupported) {
+                throw "llama.cpp OpenCL is published here only for Qualcomm Adreno on Windows ARM64 with a working OpenCL loader. Detected: '$QualcommGpuName'; OpenCL loader: $HasOpenCl."
+            }
+            $assets.OpenClAdrenoArm64
+        }
+        'CPU' {
+            if ($Architecture -eq 'Arm64') { $assets.CpuArm64 } else { $assets.CpuX64 }
+        }
+    }
+    $deviceName = switch ($selectedBackend) {
+        'CUDA' { $NvidiaGpuName }
+        'ROCm' { $AmdGpuName }
+        'SYCL' { $IntelGpuName }
+        'OpenVINO' { if ($IntelGpuName) { $IntelGpuName } else { 'OpenVINO-selected device' } }
+        'Vulkan' { $VulkanGpuName }
+        'OpenCL' { $QualcommGpuName }
+        default { 'CPU' }
+    }
     return [pscustomobject]@{
         Method = 'GitHubRelease'
         PackageId = $null
-        AssetPatterns = if ($useCuda) {
-            @(
-                $catalog.CudaArm64Pattern,
-                $catalog.CudaRuntimeArm64Pattern
-            )
-        } else {
-            @($catalog.CpuArm64Pattern)
-        }
-        Backend = if ($useCuda) { 'CUDA 13.4 Preview' } else { 'CPU' }
+        AssetPatterns = @($selectedAsset.Patterns)
+        Backend = $selectedAsset.Backend
+        Runtime = $selectedAsset.Runtime
+        Vendor = $selectedAsset.Vendor
+        DeviceName = $deviceName
+        Maturity = $(if ($selectedAsset.ContainsKey('Maturity')) { $selectedAsset.Maturity } else { $catalog.Maturity })
+        AmdGfxTarget = $(if ($selectedBackend -eq 'ROCm') { $AmdGfxTarget } else { $null })
     }
+}
+
+function Get-QualcommGpuName {
+    $names = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+        Where-Object { $_.PNPDeviceID -match 'VEN_(17CB|QCOM)' -or $_.Name -match 'Qualcomm|Adreno' } |
+        ForEach-Object Name)
+    return $names | Sort-Object | Select-Object -First 1
+}
+
+function Get-VulkanGpuName {
+    $names = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -and $_.Name -notmatch 'Microsoft Basic|Remote Display|Indirect Display' } |
+        ForEach-Object Name)
+    return $names | Sort-Object | Select-Object -First 1
+}
+
+function Test-AiOpenClRuntimeAvailable {
+    [CmdletBinding()]
+    param()
+    return Test-Path -LiteralPath (Join-Path $env:WINDIR 'System32\OpenCL.dll')
+}
+
+function Test-AiVulkanRuntimeAvailable {
+    [CmdletBinding()]
+    param([AllowNull()] [string] $GpuName)
+    if (-not $GpuName) { return $false }
+    return Test-Path -LiteralPath (Join-Path $env:WINDIR 'System32\vulkan-1.dll')
 }
 
 function Resolve-OllamaInstallPlan {
@@ -272,10 +690,25 @@ function Get-AiProcessIds {
         Where-Object { $null -ne $_ })
 }
 
+function Get-AiFreeTcpPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    } finally {
+        $listener.Stop()
+    }
+}
+
 function Get-AmdGpuName {
+    param([Nullable[int]] $DeviceIndex = $null)
     $names = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
         Where-Object { $_.PNPDeviceID -match 'VEN_1002' -or $_.Name -match 'AMD|Radeon' } |
         ForEach-Object Name)
+    if ($null -ne $DeviceIndex) {
+        if ($DeviceIndex -ge $names.Count) { return $null }
+        return $names[$DeviceIndex]
+    }
     return Select-AmdGpuName -GpuNames $names
 }
 
@@ -310,9 +743,14 @@ function Resolve-RocmInstallPlan {
 }
 
 function Get-IntelGpuName {
+    param([Nullable[int]] $DeviceIndex = $null)
     $names = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
         Where-Object { $_.PNPDeviceID -match 'VEN_8086' -or $_.Name -match 'Intel' } |
         ForEach-Object Name)
+    if ($null -ne $DeviceIndex) {
+        if ($DeviceIndex -ge $names.Count) { return $null }
+        return $names[$DeviceIndex]
+    }
     return Select-IntelGpuName -GpuNames $names
 }
 
@@ -370,7 +808,7 @@ function Test-IntelXpuGpuSupported {
 
 function Get-NvidiaDriverInfo {
     [CmdletBinding()]
-    param()
+    param([ValidateRange(0, 63)] [int] $DeviceIndex = 0)
 
     if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
         return $null
@@ -383,7 +821,10 @@ function Get-NvidiaDriverInfo {
     if ($result.ExitCode -ne 0 -or $allOutput.Count -eq 0) {
         return $null
     }
-    $output = $allOutput | Select-Object -First 1
+    if ($DeviceIndex -ge $allOutput.Count) {
+        throw "NVIDIA device index $DeviceIndex was requested, but nvidia-smi reported $($allOutput.Count) device(s)."
+    }
+    $output = $allOutput[$DeviceIndex]
 
     $parts = @($output -split ',' | ForEach-Object { $_.Trim() })
     if ($parts.Count -lt 3) {
@@ -434,6 +875,7 @@ function Resolve-PyTorchPlan {
         [version] $ComputeCapability = [version]'0.0',
         [ValidateSet('NVIDIA', 'AMD', 'Intel', 'None')] [string] $GpuVendor = 'None',
         [string] $GpuName,
+        [string] $AmdGpuName,
         [string] $IntelGpuName,
         [string] $AmdGfxTarget,
         [bool] $HasAmd = $false,
@@ -460,6 +902,12 @@ function Resolve-PyTorchPlan {
         if ($Backend -eq 'Auto' -and $HasNvidia -and -not $canUseCudaPreview) {
             throw 'An NVIDIA GPU is present on Windows ARM64, but it does not meet the CUDA 13.4 PyTorch Developer Preview requirements. Use -Backend CPU to explicitly accept CPU-only PyTorch.'
         }
+        if ($Backend -eq 'Auto' -and -not $canUseCudaPreview -and ($HasAmd -or $GpuVendor -eq 'AMD')) {
+            throw 'AMD ROCm PyTorch is not published for native Windows ARM64. Use -Backend CPU to explicitly accept CPU-only PyTorch.'
+        }
+        if ($Backend -eq 'Auto' -and -not $canUseCudaPreview -and ($HasIntel -or $GpuVendor -eq 'Intel')) {
+            throw 'Intel XPU PyTorch is not published for native Windows ARM64. Use -Backend CPU to explicitly accept CPU-only PyTorch.'
+        }
         $selectedBackend = if ($Backend -eq 'Auto') {
             if ($canUseCudaPreview) { 'CUDA' } else { 'CPU' }
         } else {
@@ -476,6 +924,9 @@ function Resolve-PyTorchPlan {
         if ($Backend -eq 'CUDA' -and $DriverMajor -lt 525) {
             throw "CUDA backend was requested, but NVIDIA driver branch $DriverMajor is too old. Install a branch 525 or newer driver."
         }
+        if ($Backend -eq 'CUDA' -and $ComputeCapability -lt [version]'5.0') {
+            throw "CUDA backend was requested, but NVIDIA compute capability $ComputeCapability is below the supported Windows CUDA wheel minimum of 5.0."
+        }
         $amdPresent = $HasAmd -or $GpuVendor -eq 'AMD'
         $amdRocmSupported = $amdPresent -and [bool]$AmdGfxTarget
         $intelPresent = $HasIntel -or $GpuVendor -eq 'Intel'
@@ -488,13 +939,16 @@ function Resolve-PyTorchPlan {
             throw "XPU backend was requested, but the detected Intel GPU '$intelCandidateName' is not in the validated Windows PyTorch XPU families."
         }
         if ($Backend -eq 'Auto' -and $amdPresent -and -not $amdRocmSupported -and -not $HasNvidia -and -not $intelXpuSupported) {
-            throw "An AMD GPU is present, but '$GpuName' is not in the ROCm 10.0 Windows support matrix. Use -Backend CPU to explicitly accept CPU-only PyTorch."
+            throw "An AMD GPU is present, but '$AmdGpuName' is not in the ROCm 10.0 Windows support matrix. Use -Backend CPU to explicitly accept CPU-only PyTorch."
         }
         if ($Backend -eq 'Auto' -and $intelPresent -and -not $intelXpuSupported -and -not $HasNvidia -and -not $amdRocmSupported) {
             throw "An Intel GPU is present, but '$intelCandidateName' is not in the validated Windows PyTorch XPU families. Use -Backend CPU to explicitly accept CPU-only PyTorch."
         }
+        $cudaSupported = $HasNvidia -and $DriverMajor -ge 525 -and
+            $ComputeCapability -ge [version]'5.0' -and
+            -not ($ComputeCapability.Major -ge 10 -and $DriverMajor -lt 580)
         $selectedBackend = if ($Backend -eq 'Auto') {
-            if ($HasNvidia -and $DriverMajor -ge 525) {
+            if ($cudaSupported) {
                 'CUDA'
             } elseif ($amdRocmSupported) {
                 'ROCm'
@@ -505,6 +959,10 @@ function Resolve-PyTorchPlan {
             }
         } else {
             $Backend
+        }
+        if ($Backend -eq 'Auto' -and $HasNvidia -and -not $cudaSupported -and
+            -not $amdRocmSupported -and -not $intelXpuSupported) {
+            throw "An NVIDIA GPU is present, but driver branch $DriverMajor and compute capability $ComputeCapability do not match a supported Windows CUDA wheel. Use -Backend CPU to explicitly accept CPU-only PyTorch."
         }
     }
 
@@ -530,7 +988,7 @@ function Resolve-PyTorchPlan {
             $torchRequirement = "torch @ $directWheelUrl#sha256=$directWheelSha256"
         } elseif ($ComputeCapability.Major -ge 10 -and $DriverMajor -lt 580) {
             throw "This NVIDIA GPU reports compute capability $ComputeCapability and needs a CUDA 13 wheel, but driver branch $DriverMajor is below 580. Update the NVIDIA driver."
-        } elseif ($DriverMajor -ge 580) {
+        } elseif ($DriverMajor -ge 580 -and $ComputeCapability -ge [version]'7.5') {
             $runtime = 'cu130'
             $indexUrl = 'https://download.pytorch.org/whl/cu130'
             $torchVersion = '2.14.0+cu130'
@@ -579,6 +1037,19 @@ function Resolve-PyTorchPlan {
     return [pscustomobject]@{
         Architecture = $Architecture
         Backend = $selectedBackend
+        Vendor = switch ($selectedBackend) {
+            'CUDA' { 'NVIDIA' }
+            'ROCm' { 'AMD' }
+            'XPU' { 'Intel' }
+            default { 'CPU' }
+        }
+        DeviceName = switch ($selectedBackend) {
+            'CUDA' { $GpuName }
+            'ROCm' { $AmdGpuName }
+            'XPU' { $intelCandidateName }
+            default { 'CPU' }
+        }
+        AmdGfxTarget = if ($selectedBackend -eq 'ROCm') { $AmdGfxTarget } else { $null }
         TorchRequirement = $torchRequirement
         TorchVersion = $torchVersion
         AdditionalRequirements = $additionalRequirements
@@ -593,7 +1064,9 @@ function Resolve-PyTorchPlan {
         InstallTriton = $installTriton
         TritonRequirement = $tritonRequirement
         TritonVersion = $tritonVersion
-        TritonReason = if ($installTriton) {
+        TritonReason = if ($SkipTriton) {
+            'Triton installation and verification were disabled by the caller.'
+        } elseif ($installTriton) {
             "Compatible PyTorch $selectedBackend stack detected."
         } elseif ($selectedBackend -ne 'CUDA') {
             "No supported native-Windows Triton package is selected for $selectedBackend."
@@ -1023,15 +1496,23 @@ function Assert-CommandAvailable {
 
 function Add-UserPathEntry {
     [CmdletBinding()]
-    param([Parameter(Mandatory)] [string] $Path)
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [switch] $Prepend
+    )
 
     $current = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $entries = @($current -split ';' | Where-Object { $_ })
-    if ($Path -notin $entries) {
-        $newPath = (@($entries) + $Path) -join ';'
-        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+    $currentEntries = @($current -split ';' | Where-Object { $_ })
+    if ($Prepend) {
+        $entries = @($currentEntries | Where-Object { $_ -ne $Path })
+        [Environment]::SetEnvironmentVariable('Path', ((@($Path) + $entries) -join ';'), 'User')
+    } elseif ($Path -notin $currentEntries) {
+        [Environment]::SetEnvironmentVariable('Path', ((@($currentEntries) + $Path) -join ';'), 'User')
     }
-    if ($Path -notin @($env:Path -split ';')) {
+    if ($Prepend) {
+        $processEntries = @($env:Path -split ';' | Where-Object { $_ -and $_ -ne $Path })
+        $env:Path = (@($Path) + $processEntries) -join ';'
+    } elseif ($Path -notin @($env:Path -split ';')) {
         $env:Path = "$Path;$env:Path"
     }
 }
@@ -1426,7 +1907,7 @@ function Install-VerifiedGitHubReleaseAsset {
         [Parameter(Mandatory)] [string] $AssetPattern,
         [Parameter(Mandatory)] [string] $Destination,
         [Parameter(Mandatory)] [string] $VersionMarker,
-        [Parameter(Mandatory)] [string] $RequiredFile
+        [Parameter(Mandatory)] [string[]] $RequiredFile
     )
 
     return Install-VerifiedGitHubReleaseAssets `
@@ -1444,7 +1925,8 @@ function Install-VerifiedGitHubReleaseAssets {
         [Parameter(Mandatory)] [string[]] $AssetPatterns,
         [Parameter(Mandatory)] [string] $Destination,
         [Parameter(Mandatory)] [string] $VersionMarker,
-        [Parameter(Mandatory)] [string] $RequiredFile,
+        [Parameter(Mandatory)] [string[]] $RequiredFile,
+        [string] $CacheDirectory = '',
         [int] $MaxPages = 5
     )
 
@@ -1474,29 +1956,64 @@ function Install-VerifiedGitHubReleaseAssets {
     }
 
     $markerPath = Join-Path $Destination $VersionMarker
-    $selection = "$($release.tag_name)|$(@($assets.name) -join '|')"
+    $selection = "$($release.tag_name)|$(@($assets | ForEach-Object { "$($_.name)=$($_.digest)" }) -join '|')"
+    $requiredFilesPresent = @($RequiredFile | Where-Object {
+        Test-Path -LiteralPath (Join-Path $Destination $_)
+    }).Count -eq $RequiredFile.Count
     if ((Test-Path -LiteralPath $markerPath) -and
-        (Test-Path -LiteralPath (Join-Path $Destination $RequiredFile)) -and
+        $requiredFilesPresent -and
         ((Get-Content -LiteralPath $markerPath -Raw).Trim() -eq $selection)) {
-        return $release.tag_name
+        return [pscustomobject]@{
+            Tag = $release.tag_name
+            Assets = $assets
+            Action = 'already-current'
+            Destination = $Destination
+            CacheDirectory = $CacheDirectory
+        }
     }
 
+    $hadExistingRuntime = Test-Path -LiteralPath $Destination
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "devconfig-$([guid]::NewGuid().ToString('N'))"
     $extractPath = Join-Path $tempRoot 'expanded'
     New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
     try {
         foreach ($asset in $assets) {
-            $archivePath = Join-Path $tempRoot $asset.name
-            Invoke-WebRequest -Uri $asset.browser_download_url -Headers $headers -OutFile $archivePath -UseBasicParsing
             $expectedHash = $asset.digest.Substring(7)
+            if ($CacheDirectory) {
+                $releaseCache = Join-Path $CacheDirectory $release.tag_name
+                New-Item -ItemType Directory -Path $releaseCache -Force | Out-Null
+                $archivePath = Join-Path $releaseCache $asset.name
+            } else {
+                $archivePath = Join-Path $tempRoot $asset.name
+            }
+            $cacheValid = (Test-Path -LiteralPath $archivePath) -and
+                ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -eq $expectedHash)
+            if (-not $cacheValid) {
+                $downloadPath = "$archivePath.download-$([guid]::NewGuid().ToString('N'))"
+                try {
+                    Invoke-WebRequest -Uri $asset.browser_download_url -Headers $headers -OutFile $downloadPath -UseBasicParsing
+                    $downloadHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash
+                    if ($downloadHash -ne $expectedHash) {
+                        throw "SHA-256 mismatch for '$($asset.name)'. Expected $expectedHash; got $downloadHash."
+                    }
+                    Move-Item -LiteralPath $downloadPath -Destination $archivePath -Force
+                } finally {
+                    if (Test-Path -LiteralPath $downloadPath) {
+                        Remove-Item -LiteralPath $downloadPath -Force
+                    }
+                }
+            }
             $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
             if ($actualHash -ne $expectedHash) {
                 throw "SHA-256 mismatch for '$($asset.name)'. Expected $expectedHash; got $actualHash."
             }
             Expand-Archive -LiteralPath $archivePath -DestinationPath $extractPath -Force
         }
-        if (-not (Test-Path -LiteralPath (Join-Path $extractPath $RequiredFile))) {
-            throw "Verified release $($release.tag_name) did not contain required file '$RequiredFile'."
+        $missingFiles = @($RequiredFile | Where-Object {
+            -not (Test-Path -LiteralPath (Join-Path $extractPath $_))
+        })
+        if ($missingFiles.Count -gt 0) {
+            throw "Verified release $($release.tag_name) did not contain required files: $($missingFiles -join ', ')."
         }
         Install-VerifiedDirectorySwap -Source $extractPath -Destination $Destination
         Set-Content -LiteralPath $markerPath -Value $selection -Encoding ascii
@@ -1506,7 +2023,13 @@ function Install-VerifiedGitHubReleaseAssets {
         }
     }
 
-    return $release.tag_name
+    return [pscustomobject]@{
+        Tag = $release.tag_name
+        Assets = $assets
+        Action = $(if ($hadExistingRuntime) { 'upgraded' } else { 'installed' })
+        Destination = $Destination
+        CacheDirectory = $CacheDirectory
+    }
 }
 
 function Install-VerifiedGitHubLatestAsset {

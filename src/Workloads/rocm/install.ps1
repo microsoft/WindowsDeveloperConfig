@@ -1,9 +1,14 @@
 <#
 .SYNOPSIS
   Install AMD ROCm Core SDK on supported Windows x64 hardware and execute a HIP kernel.
+
+.PARAMETER DeviceIndex
+  Zero-based AMD device index used for HIP kernel execution on same-vendor
+  multi-adapter systems.
 #>
 [CmdletBinding()]
 param(
+    [ValidateRange(0, 63)] [int] $DeviceIndex = 0,
     [switch] $PlanOnly,
     [string] $ReportPath = ''
 )
@@ -15,7 +20,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot '..\_common\ai-report.ps1')
 
 $architecture = Get-DevConfigArchitecture
-$gpuName = Get-AmdGpuName
+$gpuName = Get-AmdGpuName -DeviceIndex $DeviceIndex
 $rocmPlan = $null
 $planError = $null
 try {
@@ -31,6 +36,7 @@ $report = New-AiWorkloadReport -Id 'rocm' -Request @{
     PlanOnly = [bool]$PlanOnly
     GpuName = $gpuName
     GfxTarget = $gfx
+    DeviceIndex = $DeviceIndex
 }
 if (-not $ReportPath) { $ReportPath = Get-AiDefaultReportPath -Id 'rocm' }
 trap {
@@ -84,7 +90,7 @@ Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
     packageEvidence = $(if ($PlanOnly) { $null } else { $pythonPackage.Evidence })
 })
 if ($PlanOnly) {
-    Add-AiReportPhase -Report $report -Name 'hip-kernel' -Status 'planned' -Evidence @{ gpu = $gpuName; gfx = $gfx }
+    Add-AiReportPhase -Report $report -Name 'hip-kernel' -Status 'planned' -Evidence @{ gpu = $gpuName; gfx = $gfx; deviceIndex = $DeviceIndex }
     Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
     Write-Host 'PLAN_OK: rocm'
     return
@@ -131,9 +137,17 @@ try {
     Invoke-CheckedCommand -FilePath $hipcc -ArgumentList @(
         (Join-Path $PSScriptRoot 'hip-smoke.cpp'), '-O2', '-o', $executable
     ) -DisplayName 'HIP kernel compilation'
-    $evidence = (& $executable 2>&1 | Out-String).Trim()
+    $evidence = (& $executable $DeviceIndex 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $evidence -notmatch '^HIP_KERNEL_READY') {
         throw "HIP kernel acceptance failed (exit $LASTEXITCODE): $evidence"
+    }
+    $deviceMatch = [regex]::Match($evidence, '^HIP_KERNEL_READY device_index=([0-9]+) device=(.+?) value=42$')
+    if (-not $deviceMatch.Success) {
+        throw "HIP kernel evidence did not contain the selected device: $evidence"
+    }
+    $actualGpuName = $deviceMatch.Groups[2].Value
+    if (-not (Test-AiDeviceNameMatch -Expected $gpuName -Actual $actualGpuName)) {
+        throw "HIP device index $DeviceIndex executed on '$actualGpuName', but acquisition was resolved for '$gpuName' ($gfx). Use the matching -DeviceIndex."
     }
 } finally {
     Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
@@ -144,6 +158,8 @@ $report.acceptance.hipKernel = [ordered]@{
     executed = $true
     evidence = $evidence
     gpu = $gpuName
+    actualGpu = $actualGpuName
+    deviceIndex = $DeviceIndex
     gfxTarget = $gfx
     hostCompiler = $compiler
 }

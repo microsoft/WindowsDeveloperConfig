@@ -29,6 +29,21 @@ $wingetArgs = Get-DevConfigWingetInstallArguments -Id 'Python.Python.3.13'
 Assert-Equal ($wingetArgs -join ' ') 'install --id Python.Python.3.13 --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity' 'Direct package command should be exact and noninteractive'
 
 $script = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\rocm\install.ps1') -Raw
+Assert-True ($script -match '\[int\]\s*\$DeviceIndex') 'ROCm should expose same-vendor adapter selection'
+Assert-True ($script -match 'Test-AiDeviceNameMatch') 'ROCm should verify that the executed HIP device matches the resolved gfx package'
+$hipSmoke = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\rocm\hip-smoke.cpp') -Raw
+Assert-True ($hipSmoke -match 'hipSetDevice\(device_index\)') 'HIP kernel should execute on the requested AMD adapter'
+$probe = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'probe.ps1') -Raw
+Assert-True ($probe -match 'DeviceIndex') 'ROCm verification probe should reuse the selected adapter'
+
+function Get-CimInstance {
+    return @(
+        [pscustomobject]@{ Name = 'AMD Unsupported iGPU'; PNPDeviceID = 'PCI\VEN_1002&DEV_0001' },
+        [pscustomobject]@{ Name = 'AMD Radeon RX 9070 XT'; PNPDeviceID = 'PCI\VEN_1002&DEV_0002' }
+    )
+}
+Assert-Equal (Get-AmdGpuName -DeviceIndex 0) 'AMD Unsupported iGPU' 'ROCm indexed lookup should preserve exact adapter zero'
+Assert-Equal (Get-AmdGpuName -DeviceIndex 1) 'AMD Radeon RX 9070 XT' 'ROCm indexed lookup should preserve exact adapter one'
 Assert-True ($script -match '\[switch\]\s*\$PlanOnly') 'ROCm should support portable plan mode'
 Assert-True ($script -match 'hip-smoke\.cpp') 'ROCm should compile a real HIP kernel'
 Assert-True ($script -notmatch 'apply-configuration') 'ROCm should use direct acquisition'

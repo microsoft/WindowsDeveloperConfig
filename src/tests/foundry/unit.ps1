@@ -42,4 +42,33 @@ Assert-ThrowsLike {
 } '*No absolute Windows path*' 'Foundry cache output without a path should fail actionably'
 Assert-True ($installScript -match 'Invoke-DevConfigNativeCommand') 'Foundry output should use guarded UTF-8 native capture'
 
+$cpuProviderEvidence = Get-FoundryExecutionProviderEvidence -ServerLogs @'
+Failed to register WebGPUExecutionProvider
+CUDAExecutionProvider dependency is unavailable
+2026-09-10 [INF] Device: CPU,EPs: CPUExecutionProvider
+'@
+Assert-Equal $cpuProviderEvidence.SelectedProvider 'CPUExecutionProvider' 'Failed accelerator registrations should not hide the actual CPU provider'
+Assert-True $cpuProviderEvidence.CpuFallback 'Foundry CPU provider should be reported as a truthful fallback'
+$gpuProviderEvidence = Get-FoundryExecutionProviderEvidence -ServerLogs '2026-09-10 [INF] Device: GPU,EPs: DmlExecutionProvider'
+Assert-Equal $gpuProviderEvidence.SelectedProvider 'DmlExecutionProvider' 'Foundry should retain a conclusive accelerator provider'
+Assert-Equal $gpuProviderEvidence.SelectedDevice 'GPU' 'Foundry should retain the source-managed selected device'
+Assert-True (-not $gpuProviderEvidence.CpuFallback) 'Accelerator provider should not be marked as CPU fallback'
+Assert-ThrowsLike {
+    Get-FoundryExecutionProviderEvidence -ServerLogs 'Available providers: DmlExecutionProvider, CPUExecutionProvider'
+} '*neither the current inference logs nor the selected model variant*' 'Foundry readiness should reject provider availability lists without a selection event'
+$cachedVariantEvidence = Get-FoundryExecutionProviderEvidence -ModelInfo @'
+| Variant         | Model ID       | Device | Execution      | Size   | Cached |
+|                 |                |        | Provider       |        |        |
+|-----------------+----------------+--------+----------------+--------+--------|
+| qwen3-0.6b-gene | qwen3-0.6b-gen | CPU    | CPUExecutionPr | 593 MB | yes    |
+| ric-cpu         | eric-cpu:4     |        | ovider         |        |        |
++-----------------+----------------+--------+----------------+--------+--------+
+'@
+Assert-Equal $cachedVariantEvidence.SelectedProvider 'CPUExecutionProvider' 'Cached Foundry reruns should use the selected variant provider when no new server event is emitted'
+Assert-Equal $cachedVariantEvidence.SelectedDevice 'CPU' 'Cached Foundry variant evidence should retain the selected device'
+$logDelta = Get-AiAppendedLogText `
+    -Before "old line`n2026-09-10 [INF] Device: CPU,EPs: CPUExecutionProvider" `
+    -After "old line`n2026-09-10 [INF] Device: CPU,EPs: CPUExecutionProvider`n2026-09-10 [INF] Device: GPU,EPs: DmlExecutionProvider"
+Assert-Equal $logDelta '2026-09-10 [INF] Device: GPU,EPs: DmlExecutionProvider' 'Foundry provider parsing should use only log lines appended by the current inference'
+
 Write-Host "UNIT_OK: foundry ($script:AssertionCount assertions)"

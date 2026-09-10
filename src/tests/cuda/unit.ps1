@@ -36,6 +36,15 @@ Assert-True ($compile -like '*Microsoft Visual Studio\Installer;%PATH%*') 'CUDA 
 
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\cuda\install.ps1') -Raw
 Assert-True ($installScript -match '\[switch\]\s*\$SkipWorkloadSmoke') 'CUDA should expose workload-smoke opt-out'
+Assert-True ($installScript -match '\[int\]\s*\$DeviceIndex') 'CUDA should expose same-vendor adapter selection'
+Assert-True ($installScript -match 'Get-NvidiaDriverInfo -DeviceIndex \$DeviceIndex') 'CUDA should qualify the requested NVIDIA adapter'
+Assert-True ($installScript -match 'current stable CUDA 13 x64 flow requires driver 580\+') 'CUDA x64 should fail before acquisition on unsupported CUDA 13 hardware'
+Assert-True ($installScript -match 'CUDA 13\.4 ARM64 Developer Preview requires driver 616\+') 'CUDA ARM64 should enforce the qualified N1X driver/device tuple'
+$smokeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\cuda\smoke.cu') -Raw
+Assert-True ($smokeSource -match 'cudaSetDevice\(device_index\)') 'CUDA kernel should execute on the requested NVIDIA adapter'
+Assert-True ($smokeSource -match 'cudaGetDeviceProperties') 'CUDA kernel evidence should report the actual device'
+$probeScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'probe.ps1') -Raw
+Assert-True ($probeScript -match 'DeviceIndex') 'CUDA verification probe should reuse the selected adapter'
 $directSetup = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\_common\direct-setup.ps1') -Raw
 Assert-True ($directSetup -match 'Microsoft\.VisualStudio\.Component\.VC\.Tools\.ARM64') 'Direct setup should install native compiler tools'
 Assert-True ($directSetup -match 'Invoke-DevConfigProcess') 'Direct setup should use PR #93 bounded process execution'

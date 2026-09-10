@@ -6,11 +6,16 @@ if (-not (Test-Path -LiteralPath $reportPath)) { throw "Intel AI report not foun
 $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
 $profile = $report.request.Profile
 $device = $report.request.SelectedDevice
+$openVinoTarget = if ($report.request.PSObject.Properties['OpenVinoDeviceId'] -and $report.request.OpenVinoDeviceId) {
+    $report.request.OpenVinoDeviceId
+} else {
+    $device
+}
 
 if ($profile -in @('OpenVINO', 'Full')) {
     $python = Join-Path $env:LOCALAPPDATA 'DevConfig\intel-ai\openvino\.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $python)) { throw "OpenVINO environment not found at '$python'." }
-    $output = (& $python (Join-Path $PSScriptRoot '..\..\Workloads\intel-ai\openvino-smoke.py') $device 2>&1 | Out-String).Trim()
+    $output = (& $python (Join-Path $PSScriptRoot '..\..\Workloads\intel-ai\openvino-smoke.py') $openVinoTarget 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $output -notmatch '^OPENVINO_SMOKE=') {
         throw "OpenVINO probe failed: $output"
     }

@@ -261,9 +261,9 @@ flows:
 
   - id: pytorch
     name: PyTorch
-    description: Contained PyTorch environment with CPU/CUDA selection and guarded Triton Windows
+    description: Self-contained PyTorch for CPU, NVIDIA CUDA, AMD ROCm, or Intel XPU
     category: ai
-    tags: [ai, pytorch, python, cuda, triton, machine-learning]
+    tags: [ai, pytorch, python, nvidia, cuda, amd, rocm, hip, intel, xpu, triton, machine-learning]
     icon: 🔥
     onboardingUrl: https://pytorch.org/get-started/locally/
     manual_test: true
@@ -277,9 +277,9 @@ flows:
 
   - id: llama.cpp
     name: llama.cpp
-    description: Native llama.cpp CLI plus a pinned Qwen3-0.6B GGUF inference test
+    description: Hardware-selected llama.cpp CUDA, ROCm, SYCL, OpenVINO, Vulkan, OpenCL, or CPU runtime
     category: ai
-    tags: [ai, llama, gguf, inference, local-models, vulkan]
+    tags: [ai, llama, gguf, inference, local-models, nvidia, cuda, amd, rocm, intel, sycl, openvino, vulkan, qualcomm, adreno, opencl, cpu]
     icon: 🦙
     onboardingUrl: https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md
     manual_test: true

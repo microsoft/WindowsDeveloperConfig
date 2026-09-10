@@ -95,6 +95,10 @@ if ($SkipModelSmoke) {
         throw "Foundry Local could not report the selected $($modelPlan.Model) hardware variant."
     }
     Write-Host $modelInfo
+    $logsBeforeResult = Invoke-DevConfigNativeCommand -FilePath 'foundry' -Arguments @('server', 'logs', '-n', '200')
+    if ($logsBeforeResult.ExitCode -ne 0) {
+        throw "Foundry Local could not capture the pre-inference server log boundary: $($logsBeforeResult.Output)"
+    }
     $completeArguments = @($commands.Complete)
     $completionResult = Invoke-DevConfigNativeCommand -FilePath 'foundry' -Arguments $completeArguments
     $completion = $completionResult.Output
@@ -107,7 +111,12 @@ if ($SkipModelSmoke) {
     }
     $cache = Get-AiWindowsPathFromOutput -Text $cacheResult.Output
     $logsResult = Invoke-DevConfigNativeCommand -FilePath 'foundry' -Arguments @('server', 'logs', '-n', '200')
+    if ($logsResult.ExitCode -ne 0) {
+        throw "Foundry Local could not capture post-inference provider evidence: $($logsResult.Output)"
+    }
     $logs = $logsResult.Output.Trim()
+    $currentInferenceLogs = Get-AiAppendedLogText -Before $logsBeforeResult.Output -After $logsResult.Output
+    $providerEvidence = Get-FoundryExecutionProviderEvidence -ModelInfo $modelInfo -ServerLogs $currentInferenceLogs
     $report.acceptance.inference = [ordered]@{
         modelAlias = $modelPlan.Model
         modelInfo = $modelInfo
@@ -115,16 +124,15 @@ if ($SkipModelSmoke) {
         outputMatched = $true
         cache = $cache
         serverLogTail = $logs
+        currentInferenceProviderLogs = $currentInferenceLogs
+        selectedExecutionProvider = $providerEvidence.SelectedProvider
+        selectedDevice = $providerEvidence.SelectedDevice
+        observedExecutionProviders = $providerEvidence.ObservedProviders
         evidenceClass = 'resolved-variant-plus-successful-inference'
     }
     $inferenceEvidence = $report.acceptance.inference
-    $acceleratorProvider = $logs -match '(?i)(CUDAExecutionProvider|NvTensorRTRTXExecutionProvider|QNNExecutionProvider|OpenVINOExecutionProvider|VitisAIExecutionProvider|MIGraphXExecutionProvider|WebGPUExecutionProvider|DmlExecutionProvider)'
-    $cpuProvider = $logs -match '(?i)CPUExecutionProvider'
-    $report.result.fallbackUsed = $cpuProvider -and -not $acceleratorProvider
-    if (-not $acceleratorProvider -and -not $cpuProvider) {
-        [void]$report.result.warnings.Add('Execution provider could not be conclusively parsed from the Foundry server log tail; inspect acceptance.serverLogTail.')
-    }
-    Write-Host "FOUNDRY_READY: $($modelPlan.Model) downloaded to '$cache' and generated the deterministic marker using the selected hardware variant."
+    $report.result.fallbackUsed = $providerEvidence.CpuFallback
+    Write-Host "FOUNDRY_READY: $($modelPlan.Model) downloaded to '$cache' and generated the deterministic marker using $($providerEvidence.SelectedProvider)."
 }
 Add-AiReportPhase -Report $report -Name 'foundry-inference' -Status $(if ($SkipModelSmoke) { 'skipped' } else { 'ready' }) -Evidence $inferenceEvidence
 Complete-AiWorkloadReport -Report $report -Ready (-not $SkipModelSmoke) -Path $ReportPath

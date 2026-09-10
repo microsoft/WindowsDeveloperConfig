@@ -29,6 +29,19 @@ Assert-ThrowsLike {
 $script = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\intel-ai\install.ps1') -Raw
 Assert-True ($script -match "ValidateSet\('Auto', 'CPU', 'GPU', 'NPU'\)") 'Intel flow should expose explicit device selection'
 Assert-True ($script -match "ValidateSet\('OpenVINO', 'SYCL', 'Full'\)") 'Intel flow should expose runtime/toolkit profiles'
+Assert-True ($script -match '\$OpenVinoDeviceId') 'Intel OpenVINO should expose an exact device id for same-vendor adapters'
+Assert-True ($script -match '\$SyclDeviceSelector') 'Intel SYCL should expose ONEAPI_DEVICE_SELECTOR for same-vendor adapters'
+$probe = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'probe.ps1') -Raw
+Assert-True ($probe -match 'OpenVinoDeviceId') 'Intel verification probe should reuse the selected OpenVINO device id'
+
+function Get-CimInstance {
+    return @(
+        [pscustomobject]@{ Name = 'Intel HD Graphics 4000'; PNPDeviceID = 'PCI\VEN_8086&DEV_0001' },
+        [pscustomobject]@{ Name = 'Intel Arc B580 Graphics'; PNPDeviceID = 'PCI\VEN_8086&DEV_0002' }
+    )
+}
+Assert-Equal (Get-IntelGpuName -DeviceIndex 0) 'Intel HD Graphics 4000' 'Intel indexed lookup should preserve exact adapter zero'
+Assert-Equal (Get-IntelGpuName -DeviceIndex 1) 'Intel Arc B580 Graphics' 'Intel indexed lookup should preserve exact adapter one'
 Assert-True ($script -match '\[switch\]\s*\$PlanOnly') 'Intel flow should support portable plan mode'
 Assert-True ($script -notmatch 'apply-configuration') 'Intel flow should use direct acquisition'
 Assert-True ($script -match 'Test-PythonDistributionVersions') 'Intel flow should skip package work when exact OpenVINO versions are installed'

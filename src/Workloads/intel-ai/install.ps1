@@ -1,11 +1,21 @@
 <#
 .SYNOPSIS
   Install and verify Intel OpenVINO acceleration, with optional oneAPI/SYCL tooling.
+
+.PARAMETER OpenVinoDeviceId
+  Optional exact OpenVINO device such as GPU.1 or NPU.0. Device still declares
+  the required class used for prerequisite validation.
+
+.PARAMETER SyclDeviceSelector
+  Optional ONEAPI_DEVICE_SELECTOR value such as level_zero:gpu:1 for
+  same-vendor multi-adapter SYCL execution.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('Auto', 'CPU', 'GPU', 'NPU')] [string] $Device = 'Auto',
     [ValidateSet('OpenVINO', 'SYCL', 'Full')] [string] $Profile = 'OpenVINO',
+    [string] $OpenVinoDeviceId = '',
+    [string] $SyclDeviceSelector = '',
     [switch] $PlanOnly,
     [string] $ReportPath = ''
 )
@@ -36,12 +46,19 @@ try {
     $planError = $_.Exception.Message
 }
 $selectedDevice = if ($intelPlan) { $intelPlan.Device } else { $Device }
+$openVinoTarget = if ($OpenVinoDeviceId) { $OpenVinoDeviceId } else { $selectedDevice }
+if (-not $planError -and $OpenVinoDeviceId -and $Profile -in @('OpenVINO', 'Full') -and
+    $OpenVinoDeviceId -notmatch "^$([regex]::Escape($selectedDevice))(\.|$)") {
+    $planError = "OpenVINO device '$OpenVinoDeviceId' does not match the requested $selectedDevice device class."
+}
 $catalog = (Get-AiCatalog).Components
 $component = $catalog.IntelOpenVino
 $report = New-AiWorkloadReport -Id 'intel-ai' -Request @{
     Device = $Device
     SelectedDevice = $selectedDevice
     Profile = $Profile
+    OpenVinoDeviceId = $OpenVinoDeviceId
+    SyclDeviceSelector = $SyclDeviceSelector
     PlanOnly = [bool]$PlanOnly
 }
 if (-not $ReportPath) { $ReportPath = Get-AiDefaultReportPath -Id 'intel-ai' }
@@ -118,8 +135,8 @@ if ($Profile -in @('SYCL', 'Full')) {
     Set-AiAcquisitionAction -Report $report -Index $oneApiAcquisitionIndex -Action $oneApi.Action
 }
 if ($PlanOnly) {
-    Add-AiReportPhase -Report $report -Name 'openvino-inference' -Status $(if ($Profile -eq 'SYCL') { 'skipped' } else { 'planned' }) -Evidence @{ device = $selectedDevice }
-    Add-AiReportPhase -Report $report -Name 'sycl-kernel' -Status $(if ($Profile -eq 'OpenVINO') { 'skipped' } else { 'planned' }) -Evidence @{ device = 'GPU' }
+    Add-AiReportPhase -Report $report -Name 'openvino-inference' -Status $(if ($Profile -eq 'SYCL') { 'skipped' } else { 'planned' }) -Evidence @{ device = $openVinoTarget }
+    Add-AiReportPhase -Report $report -Name 'sycl-kernel' -Status $(if ($Profile -eq 'OpenVINO') { 'skipped' } else { 'planned' }) -Evidence @{ device = 'GPU'; selector = $SyclDeviceSelector }
     Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
     Write-Host 'PLAN_OK: intel-ai'
     return
@@ -149,9 +166,9 @@ if ($Profile -in @('OpenVINO', 'Full')) {
     } else {
         Write-Host 'OPENVINO_PACKAGES_CURRENT: skipping package resolution and installation.'
     }
-    $openvinoEvidence = (& $venvPython (Join-Path $PSScriptRoot 'openvino-smoke.py') $selectedDevice 2>&1 | Out-String).Trim()
+    $openvinoEvidence = (& $venvPython (Join-Path $PSScriptRoot 'openvino-smoke.py') $openVinoTarget 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $openvinoEvidence -notmatch '^OPENVINO_SMOKE=') {
-        throw "OpenVINO $selectedDevice inference failed: $openvinoEvidence"
+        throw "OpenVINO $openVinoTarget inference failed: $openvinoEvidence"
     }
     $report.acceptance.openvino = $openvinoEvidence
     Set-AiAcquisitionAction -Report $report -Index $openVinoAcquisitionIndex -Action $(if ($packagesCurrent) { 'already-current' } else { 'installed-or-upgraded' })
@@ -165,12 +182,13 @@ if ($Profile -in @('SYCL', 'Full')) {
     New-Item -ItemType Directory -Path $temporary -Force | Out-Null
     try {
         $output = Join-Path $temporary 'sycl-smoke.exe'
-        $command = "call `"$setvars`" >nul && icpx -fsycl `"$PSScriptRoot\sycl-smoke.cpp`" -o `"$output`" && `"$output`""
+        $selectorPrefix = if ($SyclDeviceSelector) { "set `"ONEAPI_DEVICE_SELECTOR=$SyclDeviceSelector`" && " } else { '' }
+        $command = "$selectorPrefix" + "call `"$setvars`" >nul && icpx -fsycl `"$PSScriptRoot\sycl-smoke.cpp`" -o `"$output`" && `"$output`""
         $syclEvidence = (& $env:ComSpec /d /s /c $command 2>&1 | Out-String).Trim()
         if ($LASTEXITCODE -ne 0 -or $syclEvidence -notmatch 'SYCL_DEVICE_READY:') {
             throw "oneAPI SYCL GPU kernel failed: $syclEvidence"
         }
-        $report.acceptance.sycl = $syclEvidence
+        $report.acceptance.sycl = [ordered]@{ selector = $SyclDeviceSelector; evidence = $syclEvidence }
     } finally {
         Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
     }

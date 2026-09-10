@@ -1,6 +1,17 @@
 <#
 .SYNOPSIS
-  Install llama.cpp, acquire a pinned small GGUF, and run text inference.
+  Install a hardware-selected llama.cpp backend, acquire a pinned small GGUF,
+  and prove the selected backend with benchmark and inference evidence.
+
+.PARAMETER Backend
+  Auto prefers supported NVIDIA CUDA, AMD ROCm, Intel SYCL, Qualcomm Adreno
+  OpenCL, x64 Vulkan, then CPU. OpenVINO is an explicit Windows x64 option.
+  Explicit backend requests fail instead of silently selecting another backend.
+
+.PARAMETER Device
+  Optional llama.cpp runtime device identifier such as CUDA0, Vulkan0, or SYCL0.
+  Use this to target a same-vendor secondary adapter. When omitted, the selected
+  backend chooses its default device and the actual device is recorded.
 
 .PARAMETER SkipModelSmoke
   Skip the default Qwen3-0.6B GGUF download and inference. The install then
@@ -8,6 +19,8 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateSet('Auto', 'CUDA', 'ROCm', 'SYCL', 'OpenVINO', 'Vulkan', 'OpenCL', 'CPU')] [string] $Backend = 'Auto',
+    [string] $Device = '',
     [switch] $SkipModelSmoke,
     [switch] $PlanOnly,
     [string] $ReportPath = ''
@@ -21,66 +34,122 @@ Set-StrictMode -Version Latest
 
 $architecture = Get-DevConfigArchitecture
 $driver = Get-NvidiaDriverInfo
-$plan = Resolve-LlamaCppInstallPlan `
-    -Architecture $architecture `
-    -HasNvidia ([bool]$driver) `
-    -DriverMajor $(if ($driver) { $driver.DriverMajor } else { 0 }) `
-    -ComputeCapability $(if ($driver) { $driver.ComputeCapability } else { [version]'0.0' })
+$amdGpuName = Get-AmdGpuName
+$amdGfxTarget = if ($amdGpuName) { Get-AmdGfxTarget -GpuName $amdGpuName } else { $null }
+$intelGpuName = Get-IntelGpuName
+$qualcommGpuName = Get-QualcommGpuName
+$hasOpenCl = Test-AiOpenClRuntimeAvailable
+$vulkanGpuName = Get-VulkanGpuName
+$hasVulkan = Test-AiVulkanRuntimeAvailable -GpuName $vulkanGpuName
 $component = (Get-AiCatalog).Components.LlamaCppRolling
 $report = New-AiWorkloadReport -Id 'llama.cpp' -Request @{
+    Backend = $Backend
+    Device = $Device
     SkipModelSmoke = [bool]$SkipModelSmoke
     PlanOnly = [bool]$PlanOnly
-    SelectedBackend = $plan.Backend
+    SelectedBackend = $null
+    DetectedNvidiaDevice = $(if ($driver) { $driver.Name } else { $null })
+    NvidiaDriverVersion = $(if ($driver) { $driver.DriverVersion.ToString() } else { $null })
+    NvidiaComputeCapability = $(if ($driver) { $driver.ComputeCapability.ToString() } else { $null })
+    DetectedAmdDevice = $amdGpuName
+    DetectedIntelDevice = $intelGpuName
+    DetectedQualcommDevice = $qualcommGpuName
+    OpenClAvailable = $hasOpenCl
+    VulkanAvailable = $hasVulkan
 }
 if (-not $ReportPath) { $ReportPath = Get-AiDefaultReportPath -Id 'llama.cpp' }
 trap {
     Write-AiFailureReport -Report $report -Path $ReportPath -ErrorRecord $_
     throw $_
 }
+try {
+    $plan = Resolve-LlamaCppInstallPlan `
+        -Architecture $architecture `
+        -Backend $Backend `
+        -HasNvidia ([bool]$driver) `
+        -DriverVersion $(if ($driver) { $driver.DriverVersion } else { [version]'0.0' }) `
+        -ComputeCapability $(if ($driver) { $driver.ComputeCapability } else { [version]'0.0' }) `
+        -NvidiaGpuName $(if ($driver) { $driver.Name } else { $null }) `
+        -AmdGpuName $amdGpuName `
+        -AmdGfxTarget $amdGfxTarget `
+        -IntelGpuName $intelGpuName `
+        -QualcommGpuName $qualcommGpuName `
+        -HasOpenCl $hasOpenCl `
+        -HasVulkan $hasVulkan `
+        -VulkanGpuName $vulkanGpuName
+} catch {
+    if ($PlanOnly) {
+        [void]$report.result.blockers.Add($_.Exception.Message)
+        Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
+        Write-Host 'PLAN_UNSUPPORTED: llama.cpp'
+        return
+    }
+    throw
+}
+$report.request.SelectedBackend = $plan.Backend
+$report.request.SelectedVendor = $plan.Vendor
+$report.request.SelectedDevice = $plan.DeviceName
+$report.request.SelectedRuntime = $plan.Runtime
+$report.result.fallbackUsed = $Backend -eq 'Auto' -and $plan.Backend -in @('Vulkan', 'CPU')
+if ($report.result.fallbackUsed) {
+    [void]$report.result.warnings.Add("Auto selected the compatibility fallback '$($plan.Backend)'; this is not reported as vendor-native acceleration.")
+}
 if (-not $PlanOnly) { Assert-AiAdministrator }
-if ($plan.Method -eq 'WinGet') {
-    $acquisition = Ensure-AiWingetPackage -Id 'ggml.llamacpp' -PlanOnly:$PlanOnly
-    if (-not $PlanOnly) {
-        Update-DevConfigSessionPath
-        $llamaCli = (Get-Command llama-cli -ErrorAction Stop).Source
-        $llamaBench = (Get-Command llama-bench -ErrorAction Stop).Source
+$legacyDestination = Join-Path $env:LOCALAPPDATA 'DevConfig\llama.cpp'
+$destination = Join-Path $legacyDestination 'runtime'
+$assetCache = Join-Path $legacyDestination 'asset-cache'
+if ($PlanOnly) {
+    $acquisition = [pscustomobject]@{
+        Action = 'resolve-rolling-release'
+        Tag = $null
+        Assets = @()
+        Source = 'github'
+        CacheDirectory = $assetCache
     }
 } else {
-    $legacyDestination = Join-Path $env:LOCALAPPDATA 'DevConfig\llama.cpp'
-    $destination = Join-Path $legacyDestination 'runtime'
-    if ($PlanOnly) {
-        $acquisition = [pscustomobject]@{ Action = 'resolve-rolling-release'; Source = 'github' }
-    } else {
-        $tag = Install-VerifiedGitHubReleaseAssets `
-            -Repository 'ggml-org/llama.cpp' `
-            -AssetPatterns $plan.AssetPatterns `
-            -Destination $destination `
-            -VersionMarker '.devconfig-version' `
-            -RequiredFile 'llama-cli.exe'
-        Remove-UserPathEntry -Path $legacyDestination
-        Add-UserPathEntry -Path $destination
-        $llamaCli = Join-Path $destination 'llama-cli.exe'
-        $llamaBench = Join-Path $destination 'llama-bench.exe'
-        if (-not (Test-Path -LiteralPath $llamaCli) -or -not (Test-Path -LiteralPath $llamaBench)) {
-            throw "The verified $tag ARM64 archive was extracted to '$destination', but required llama.cpp executables were not found."
-        }
-        $acquisition = [pscustomobject]@{ Action = 'resolved'; Source = 'github'; Tag = $tag }
+    $acquisition = Install-VerifiedGitHubReleaseAssets `
+        -Repository $component.Repository `
+        -AssetPatterns $plan.AssetPatterns `
+        -Destination $destination `
+        -VersionMarker '.devconfig-version' `
+        -RequiredFile @('llama-cli.exe', 'llama-bench.exe') `
+        -CacheDirectory $assetCache
+    Remove-UserPathEntry -Path $legacyDestination
+    Add-UserPathEntry -Path $destination -Prepend
+    $llamaCli = Join-Path $destination 'llama-cli.exe'
+    $llamaBench = Join-Path $destination 'llama-bench.exe'
+    if (-not (Test-Path -LiteralPath $llamaCli) -or -not (Test-Path -LiteralPath $llamaBench)) {
+        throw "The verified $($acquisition.Tag) $($plan.Runtime) asset set was extracted to '$destination', but required llama.cpp executables were not found."
     }
 }
+$assetIdentity = @($acquisition.Assets | ForEach-Object {
+    [ordered]@{
+        name = $_.name
+        sha256 = ([string]$_.digest).Substring(7)
+        bytes = $_.size
+        cachePath = Join-Path (Join-Path $assetCache $acquisition.Tag) $_.name
+    }
+})
 Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
     component = $component.Component
-    vendor = $component.Vendor
+    vendor = $plan.Vendor
     architecture = $architecture
-    maturity = $(if ($plan.Method -eq 'WinGet') { 'stable-community-winget' } else { $component.Maturity })
-    sourceType = $(if ($plan.Method -eq 'WinGet') { 'winget' } else { $component.SourceType })
-    packageId = $(if ($plan.Method -eq 'WinGet') { 'ggml.llamacpp' } else { $null })
+    maturity = $plan.Maturity
+    sourceType = $component.SourceType
     repository = $component.Repository
     backend = $plan.Backend
+    runtime = $plan.Runtime
+    selectedDevice = $plan.DeviceName
+    requestedRuntimeDevice = $Device
+    driverPrecondition = $(if ($plan.Backend -eq 'CUDA' -and $driver) { "NVIDIA $($driver.DriverVersion), compute capability $($driver.ComputeCapability)" } else { 'Use the installed vendor display/compute driver reported in host.gpus; this flow does not replace GPU drivers.' })
+    amdGfxTarget = $plan.AmdGfxTarget
     assetPatterns = $plan.AssetPatterns
+    resolvedTag = $acquisition.Tag
+    resolvedAssets = $assetIdentity
     versionPolicy = $component.VersionPolicy
     integrity = $component.Integrity
-    cachePath = $component.CachePath
-    installPath = $component.InstallPath
+    cachePath = $assetCache
+    installPath = $destination
     reasonNormalChannelInsufficient = $component.NormalChannelLimitation
     expectedStableSource = $component.ExpectedStableSource
     migrationTrigger = $component.MigrationTrigger
@@ -91,6 +160,8 @@ if ($PlanOnly) {
     Add-AiReportPhase -Report $report -Name 'model-inference' -Status $(if ($SkipModelSmoke) { 'skipped' } else { 'planned' }) -Evidence @{
         model = 'Qwen3-0.6B-Q4_K_M.gguf'
         backend = $plan.Backend
+        runtime = $plan.Runtime
+        device = $plan.DeviceName
     }
     Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
     Write-Host 'PLAN_OK: llama.cpp'
@@ -99,6 +170,13 @@ if ($PlanOnly) {
 
 Invoke-CheckedCommand -FilePath $llamaCli -ArgumentList @('--version') -DisplayName 'llama.cpp CLI verification'
 Invoke-CheckedCommand -FilePath $llamaCli -ArgumentList @('--help') -DisplayName 'llama.cpp help verification'
+$statePath = Join-Path $legacyDestination 'selected-backend.json'
+Write-DevConfigTextFile -Path $statePath -Content ([ordered]@{
+    backend = $plan.Backend
+    runtime = $plan.Runtime
+    expectedDevice = $plan.DeviceName
+    requestedDevice = $Device
+} | ConvertTo-Json -Compress)
 
 $modelPlan = Get-LlamaModelSmokePlan
 $inferenceEvidence = $null
@@ -114,6 +192,12 @@ if ($SkipModelSmoke) {
         -Sha256 $modelPlan.Sha256 `
         -ExpectedSize $modelPlan.Size
     $arguments = Get-LlamaInferenceArguments -ModelPath $modelPath -Marker $modelPlan.Marker
+    $arguments += @('-ngl', $(if ($plan.Backend -eq 'CPU') { '0' } else { '999' }))
+    if ($plan.Backend -eq 'CPU') {
+        $arguments += @('--device', 'none')
+    } elseif ($Device) {
+        $arguments += @('--device', $Device)
+    }
     $inferenceResult = Invoke-DevConfigNativeCommand -FilePath $llamaCli -Arguments $arguments
     $output = $inferenceResult.Output.Trim()
     if ($inferenceResult.ExitCode -ne 0 -or $output -notmatch [regex]::Escape($modelPlan.Marker)) {
@@ -122,30 +206,46 @@ if ($SkipModelSmoke) {
     $benchArguments = @(
         '-m', $modelPath,
         '-ngl', $(if ($plan.Backend -eq 'CPU') { '0' } else { '999' }),
-        '-p', '32', '-n', '1', '-r', '1', '-o', 'json'
+        '-p', '32', '-n', '1', '-r', '1', '-o', 'json', '-v'
     )
     if ($plan.Backend -eq 'CPU') {
         $benchArguments += @('--device', 'none')
+    } elseif ($Device) {
+        $benchArguments += @('--device', $Device)
     }
-    $benchmarkResult = Invoke-DevConfigNativeCommand -FilePath $llamaBench -Arguments $benchArguments
-    $benchmark = $benchmarkResult.Output.Trim()
+    $benchmarkResult = Invoke-AiNativeCommandSeparated -FilePath $llamaBench -Arguments $benchArguments
+    $benchmark = $benchmarkResult.StandardOutput.Trim()
     if ($benchmarkResult.ExitCode -ne 0) {
-        throw "llama-bench failed while collecting backend evidence (exit $($benchmarkResult.ExitCode)): $benchmark"
+        throw "llama-bench failed while collecting backend evidence (exit $($benchmarkResult.ExitCode)): $($benchmarkResult.StandardError)"
     }
-    $parsedBenchmark = ConvertFrom-AiPrefixedJsonArray -Text $benchmark
+    $parsedBenchmark = ConvertFrom-AiJsonArrayWithDiagnostics -Json $benchmark -Diagnostics $benchmarkResult.StandardError
+    $backendEvidence = Get-LlamaBenchmarkBackendEvidence `
+        -Data @($parsedBenchmark.Data) `
+        -Diagnostics $parsedBenchmark.Diagnostics `
+        -Backend $plan.Backend `
+        -ExpectedDeviceName $(if ($Device) { $null } else { $plan.DeviceName }) `
+        -RequestedDevice $Device
     $report.acceptance.inference = [ordered]@{
         model = $modelPlan.FileName
         modelSha256 = $modelPlan.Sha256
+        modelBytes = $modelPlan.Size
+        modelLicense = $modelPlan.License
         marker = $modelPlan.Marker
         backendPlan = $plan.Backend
+        runtimePlan = $plan.Runtime
+        selectedVendor = $plan.Vendor
+        selectedDevice = $plan.DeviceName
+        requestedRuntimeDevice = $Device
+        requestedRuntimeDevices = $backendEvidence.RequestedDevices
+        actualRuntimeDevices = $backendEvidence.GpuInfo
+        amdGfxTarget = $plan.AmdGfxTarget
+        backendEvidence = $backendEvidence
         benchmark = $parsedBenchmark.Data
         benchmarkJson = $parsedBenchmark.Json
         benchmarkDiagnostics = $parsedBenchmark.Diagnostics
     }
     $inferenceEvidence = $report.acceptance.inference
-    $gpuMeasurements = @($parsedBenchmark.Data | Where-Object { [int]$_.n_gpu_layers -gt 0 })
-    $report.result.fallbackUsed = $plan.Backend -ne 'CPU' -and $gpuMeasurements.Count -eq 0
-    Write-Host "LLAMA_CPP_READY: architecture=$architecture, backend=$($plan.Backend), model=$($modelPlan.FileName), sha256=$($modelPlan.Sha256)."
+    Write-Host "LLAMA_CPP_READY: architecture=$architecture, backend=$($plan.Backend), runtime=$($plan.Runtime), device=$($backendEvidence.GpuInfo -join ','), model=$($modelPlan.FileName), sha256=$($modelPlan.Sha256)."
 }
 Add-AiReportPhase -Report $report -Name 'llama-inference' -Status $(if ($SkipModelSmoke) { 'skipped' } else { 'ready' }) -Evidence $inferenceEvidence
 Complete-AiWorkloadReport -Report $report -Ready (-not $SkipModelSmoke) -Path $ReportPath

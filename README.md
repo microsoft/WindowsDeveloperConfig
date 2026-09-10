@@ -140,7 +140,7 @@ write a machine-readable report.
 | Intel AI | OpenVINO device inference; optional oneAPI/SYCL GPU toolkit and kernel | `.\Workloads\intel-ai\install.ps1` |
 | Foundry Local | Architecture-native WinML package + Qwen3-0.6B model inference | `.\Workloads\foundry\install.ps1` |
 | PyTorch | CPython 3.13 + contained CPU/CUDA/ROCm/XPU environment; vendor-appropriate Triton where supported | `.\Workloads\pytorch\install.ps1` |
-| llama.cpp | x64 Vulkan or verified ARM64 CPU/CUDA runtime + pinned Qwen3-0.6B GGUF inference | `.\Workloads\llama.cpp\install.ps1` |
+| llama.cpp | Hardware-selected official rolling CUDA/ROCm/SYCL/OpenVINO/Vulkan/OpenCL/CPU runtime + pinned GGUF inference | `.\Workloads\llama.cpp\install.ps1` |
 | Ollama | WinGet x64 or verified current ARM64 release + official qwen3:0.6b inference | `.\Workloads\ollama\install.ps1` |
 
 Want the PATH refresh in your current shell? Use the matching shim instead of calling `winget configure` directly:
@@ -162,13 +162,23 @@ NVIDIA, AMD, Intel, and Qualcomm execution providers.
 
 | Workload | Windows x64 | Windows ARM64 | Prerequisites and selected path |
 | --- | --- | --- | --- |
-| CUDA | WinGet CUDA stable | NVIDIA CUDA 13.4 Developer Preview | NVIDIA GPU + current driver by default. Installs MSVC, compiles with `nvcc -arch=native`, and executes a kernel. `-ToolkitOnly` permits compiler-only setup. |
+| CUDA | WinGet CUDA 13 stable; GPU readiness requires driver 580+ and CC7.5+ | NVIDIA CUDA 13.4 Developer Preview | NVIDIA GPU + qualified driver by default. Installs MSVC, compiles with `nvcc -arch=native`, and executes a kernel. `-ToolkitOnly` permits compiler-only setup. |
 | AMD ROCm / HIP | ROCm Core SDK 10.0 on supported Radeon/Ryzen AI GPUs | Not published | Uses AMD's stable Windows x64 feed and executes a compiled HIP kernel. Native Windows Triton is unsupported. |
 | Intel AI | OpenVINO CPU/GPU/NPU; optional oneAPI/SYCL | Not published | OpenVINO performs generated-model inference on the requested device. `-Profile Full` also executes a SYCL GPU kernel. |
 | Foundry Local | Supported | Supported | Windows 11 24H2/build 26100+. Uses WinML and does **not** require CUDA. Downloads `qwen3-0.6b` and runs a marker completion. |
-| PyTorch | CPU, NVIDIA CUDA, AMD ROCm, or Intel XPU | Stable CPU, or pinned NVIDIA CUDA 13.4 Developer Preview on RTX Spark | `-Backend Auto` deterministically selects NVIDIA → AMD → Intel → CPU. Explicit backend requests never silently fall back. |
-| Triton Windows | NVIDIA CUDA (`triton-windows`) or Intel XPU (`triton-xpu`) | NVIDIA CUDA 13.4 preview stack | AMD native Windows Triton is unsupported. Supported paths execute a real compiled GPU kernel. |
-| llama.cpp | WinGet Vulkan build | Verified official CPU or CUDA 13.4 rolling release | Downloads a pinned, checksum-verified Qwen3-0.6B Q4_K_M GGUF and performs constrained inference. |
+| PyTorch CPU | Stable official CPU wheel | Stable official CPU wheel | Contained CPU runtime and tensor acceptance. |
+| PyTorch CUDA | Stable official CUDA wheel chosen from driver/device capability | Pinned NVIDIA CUDA 13.4 Developer Preview wheel on RTX Spark | Self-contained wheel runtime; standalone `cuda` is not required for ordinary tensor use. Triton JIT acquires its compiler/toolchain automatically. |
+| PyTorch ROCm | AMD stable Windows x64 feed with exact `device-<gfx>` runtime tuple | Unsupported/unpublished | Self-contained AMD runtime tuple inside the PyTorch venv; does not require the standalone `rocm` SDK flow. |
+| PyTorch XPU | Official PyTorch XPU index with `torch`, `torchvision`, and `triton-xpu` | Unsupported/unpublished | Self-contained Intel XPU runtime tuple; does not install full oneAPI. |
+| Triton Windows CUDA | Community `triton-windows` on qualified NVIDIA CUDA stacks | NVIDIA CUDA 13.4 preview stack | Executes a real vector-add GPU kernel. |
+| Triton XPU / `torch.compile` | Official `triton-xpu` through the PyTorch XPU index | Unsupported/unpublished | Executes a cold `torch.compile` workload on the Intel GPU. |
+| llama.cpp CUDA x64 | Official rolling CUDA 13.3 or 12.4 app + paired cudart assets | Unsupported | Auto selects the newest compatible CUDA runtime from driver and compute capability, then proves NVIDIA device offload and GPU layers. |
+| llama.cpp CUDA ARM64 | Unsupported | Qualified CUDA 13.4 Developer Preview app + paired cudart assets | Retains the N1X path and requires RTX Spark-class hardware, driver 616+, backend/device evidence, GPU layers, and real inference. |
+| llama.cpp ROCm x64 | Official rolling ROCm 10.0 asset | Unsupported | Requires an AMD GPU in the Windows ROCm matrix and proves ROCm/AMD offload. |
+| llama.cpp SYCL / OpenVINO x64 | Official rolling SYCL and OpenVINO 2026.3.1 assets | Unsupported | Auto prefers SYCL for a supported Intel GPU because it directly proves Intel GPU execution. OpenVINO is explicit/general x64 inference; no NPU claim is made. |
+| llama.cpp OpenCL Adreno ARM64 | Unsupported | Official rolling Qualcomm Adreno OpenCL asset | Requires a detected Qualcomm/Adreno GPU plus the Windows OpenCL loader and proves OpenCL/Adreno offload. |
+| llama.cpp Vulkan x64 fallback | Official rolling Vulkan asset | Unsupported | Used by Auto only after no supported vendor-native backend is available and a Vulkan loader/device exists. Reports Vulkan explicitly. |
+| llama.cpp CPU fallback | Official rolling CPU asset | Official rolling CPU asset | Used when no qualified accelerator exists or explicitly requested; benchmark must show no GPU layers. |
 | Ollama | WinGet desktop package | Verified current official ARM64 ZIP | Starts or reuses `ollama serve`, pulls official `qwen3:0.6b`, verifies its model blob, and performs structured inference. |
 
 Run a flow from PowerShell:
@@ -190,7 +200,23 @@ PyTorch accepts explicit backend and Triton policy switches:
 .\Workloads\pytorch\install.ps1 -Backend CUDA -RequireTriton
 .\Workloads\pytorch\install.ps1 -Backend ROCm
 .\Workloads\pytorch\install.ps1 -Backend XPU -RequireTriton
+.\Workloads\llama.cpp\install.ps1 -Backend CUDA
+.\Workloads\llama.cpp\install.ps1 -Backend ROCm
+.\Workloads\llama.cpp\install.ps1 -Backend SYCL
+.\Workloads\llama.cpp\install.ps1 -Backend OpenVINO
 ```
+
+`-Backend Auto` uses the deterministic priority **supported NVIDIA CUDA →
+supported AMD ROCm → supported Intel XPU → CPU**. Explicit `ROCm` or `XPU`
+can select a supported secondary adapter on mixed-GPU systems.
+
+### Vendor setup layers
+
+| Vendor | Native developer flow | PyTorch flow |
+| --- | --- | --- |
+| NVIDIA | `cuda` installs the CUDA compiler/toolkit and proves a native kernel. | `pytorch -Backend CUDA` installs its own wheel runtime. Standalone CUDA is not universally required; compatible Triton JIT/toolchain dependencies are acquired automatically. |
+| AMD | `rocm` installs the ROCm Core SDK/HIP compiler and proves a native HIP kernel. | `pytorch -Backend ROCm` installs the official AMD device-specific runtime package tuple inside its own venv; the separate `rocm` flow is not a prerequisite for tensor inference. |
+| Intel | `intel-ai -Profile OpenVINO` is CPU/GPU/NPU inference; `-Profile SYCL` or `Full` installs full oneAPI for native SYCL development. | `pytorch -Backend XPU` installs the official XPU wheel tuple and `triton-xpu` inside its own venv; it does not install full oneAPI. |
 
 Every AI entry point accepts `-PlanOnly` and `-ReportPath`. Plan mode performs
 hardware/support resolution without installing software. Applied runs write JSON
@@ -199,6 +225,7 @@ inventory command is:
 
 ```powershell
 .\src\tools\collect-ai-hardware.ps1
+.\src\tools\get-ai-capabilities.ps1 -OutputPath "$env:TEMP\ai-capabilities.json"
 ```
 
 Default acceptance proves each workload is usable, not merely installed:
@@ -206,6 +233,19 @@ CUDA executes a compiled GPU kernel; PyTorch performs a tensor operation on the
 selected backend and, when supported, Triton runs a GPU kernel; and each local
 model runtime downloads a small Apache-2.0 Qwen model and performs deterministic
 text inference.
+
+llama.cpp `-Backend Auto` prefers **supported NVIDIA CUDA → supported AMD ROCm
+→ supported Intel SYCL → Qualcomm Adreno OpenCL → x64 Vulkan → CPU**. Explicit
+`OpenVINO` is available on x64 for its official general inference backend. The
+resolver takes every archive for a selection from one `bNNNNN` release, requires
+GitHub's SHA-256 digest for each asset, caches the verified archives under
+`%LOCALAPPDATA%\DevConfig\llama.cpp\asset-cache`, and atomically replaces the
+runtime. `llama-bench -o json` must identify the selected backend/device and
+diagnostics must report an actual nonzero `offloaded X/Y layers` result for
+every accelerator path before the flow is ready; requested `-ngl` is not treated
+as proof. Physical hardware comes from the official `gpu_info` field; `devices`
+is retained only as the requested selector and must agree with explicit
+`-Device`.
 
 | Flow | Default model download | Cache |
 | --- | ---: | --- |
@@ -232,9 +272,35 @@ kernel acceptance tests.
 
 **Hardware validation status:** Windows ARM64 on NVIDIA RTX Spark N1X is
 validated end-to-end for CUDA, PyTorch CUDA, Triton, Foundry Local, llama.cpp,
-and Ollama. AMD ROCm/HIP and Intel OpenVINO/oneAPI are hardware-gated and ready
-for partner execution on supported Windows x64 systems; their current gap is
-physical AMD/Intel hardware coverage, not static planning or unit coverage.
+and Ollama. AMD ROCm/HIP, Intel OpenVINO/oneAPI/XPU, NVIDIA x64 llama.cpp CUDA,
+and Qualcomm ARM64 llama.cpp OpenCL are hardware-gated and ready for partner
+execution. Their current gap is physical partner hardware coverage, not static
+planning, asset discovery, or unit coverage.
+
+### Known vendor gaps and boundaries
+
+| Vendor | GPU coverage | NPU coverage | Windows CPU architecture | Maturity / live status | Known boundaries |
+| --- | --- | --- | --- | --- | --- |
+| NVIDIA | `cuda`, PyTorch CUDA/Triton, llama.cpp CUDA | None in these vendor SDK flows; Foundry/WinML provider behavior is separate | x64 designed/partner pending; ARM64 N1X validated | x64 stable channels need live acceptance; ARM64 CUDA/PyTorch are developer previews | Foundry on N1X currently uses `CPUExecutionProvider`, not CUDA. Installers qualify but do not replace GPU drivers. |
+| AMD | Native ROCm/HIP, PyTorch ROCm, llama.cpp ROCm on AMD's exact Windows GPU/gfx matrix | Not implemented; ROCm is GPU/HIP, not Ryzen AI NPU | x64 only | Resolver/static acceptance complete; hardware pending | Native Windows AMD Triton is unavailable. Foundry/WinML AMD EP and Ollama AMD acceleration remain unvalidated and are not claimed. |
+| Intel | OpenVINO GPU, oneAPI/SYCL, PyTorch XPU/`triton-xpu`, llama.cpp SYCL/OpenVINO | OpenVINO NPU only when the requested device actually executes; no PyTorch XPU or llama SYCL NPU claim | x64 only | Resolver/static acceptance complete; hardware pending | Full oneAPI is only for native SYCL. XPU and SYCL target Intel GPUs, not NPUs. |
+| Qualcomm/Adreno | llama.cpp OpenCL ARM64; Foundry/WinML is the vendor-neutral path | Only through a validated runtime/provider such as WinML/Foundry; no standalone toolkit here | ARM64 | Resolver/static acceptance complete; hardware pending | No native PyTorch accelerator backend. Ollama ARM64 is reported as CPU/NVIDIA capability unless actual Adreno evidence becomes available. |
+| Other / fallback | Vulkan x64 compatibility fallback; CPU x64/ARM64 | None | x64/ARM64 as listed | Fallback paths | Vulkan/CPU are never labeled vendor-native. Mali and other stacks are unimplemented/unpublished without official Windows artifacts. |
+
+Auto selects a vendor/backend deterministically, and explicit backends can target
+a supported secondary vendor. Same-vendor targeting is available through
+`cuda`/`rocm` and explicit-backend PyTorch `-DeviceIndex`, llama.cpp `-Device`, OpenVINO
+`-OpenVinoDeviceId`, and SYCL `-SyclDeviceSelector`. Foundry and Ollama manage
+their own device selection; those flows report the actual provider/allocation
+rather than claiming control they do not expose. Reports retain the selected
+device and installed driver as preconditions. These flows do not update GPU
+drivers; unsupported versions fail with remediation.
+
+The executable supported-cell source of truth is
+[`CapabilityMatrix`](./src/Workloads/_common/ai-catalog.psd1). Repository tests
+resolve every implemented/source-managed cell and validate its acquisition
+metadata, probe, report contract, and partner command; only cataloged
+`upstream-unavailable` cells may remain unimplemented.
 
 ### Preview and rolling acquisition promotion
 
@@ -246,11 +312,63 @@ change after the stated detection rule and real hardware acceptance pass.
 | Component | Vendor / architecture | Current channel and identity | Integrity | Why normal channel is insufficient | Expected stable channel | Promotion trigger |
 | --- | --- | --- | --- | --- | --- | --- |
 | CUDA ARM64 | NVIDIA / ARM64 | Developer Preview `cuda_13.4.0_windows_arm64.exe` | Pinned SHA-256 + NVIDIA Authenticode | `Nvidia.CUDA` has no ARM64 payload | `Nvidia.CUDA` ARM64, unconfirmed | ARM64 WinGet manifest appears and N1X kernel passes |
+| PyTorch CUDA x64 | NVIDIA / x64 | Stable `torch==2.14.0+cu126` or `+cu130` from official PyTorch index | Official index hashes + wheel RECORD | None | Official PyTorch CUDA index | New tuple passes tensor and Triton kernel |
 | PyTorch CUDA ARM64 | NVIDIA / ARM64 | Nightly `torch-2.15.0.dev20260904+cu134-cp313-win_arm64.whl` | Pinned SHA-256 | Stable PyTorch indexes have no Windows ARM64 CUDA wheel | Official PyTorch CUDA Windows ARM64 feed, unconfirmed | Stable wheel appears and tensor/Triton tests pass |
-| Triton Windows | NVIDIA x64/ARM64 | Community `triton-windows==3.8.0.post28` | Package-index TLS + wheel RECORD | Upstream Triton has no general stable Windows package | Official PyTorch/Triton Windows feed, unconfirmed | Official package appears and kernel passes |
-| llama.cpp ARM64 | NVIDIA/Qualcomm/CPU / ARM64 | Latest complete rolling `bNNNNN` asset set | GitHub asset SHA-256 | WinGet lacks ARM64 backend variants | `ggml.llamacpp` with required backend, otherwise unconfirmed | Matching WinGet variant appears and benchmark/inference pass |
+| PyTorch ROCm x64 | AMD / x64 | Stable `torch[device-<gfx>]==2.13.0+rocm10.0.0`, matching torchvision and torchaudio from AMD feed | AMD HTTPS feed + wheel RECORD | Default PyPI has no AMD ROCm Windows build | AMD stable ROCm feed | New exact tuple lists GPU and tensor acceptance passes |
+| PyTorch XPU x64 | Intel / x64 | Stable `torch==2.14.0+xpu`, `torchvision==0.29.0+xpu` from official XPU index | Official index hashes + wheel RECORD | Default PyPI has no Intel XPU build | Official PyTorch XPU index | New tuple passes XPU tensor and `torch.compile` |
+| Triton Windows CUDA | NVIDIA x64/ARM64 | Community `triton-windows==3.8.0.post28` | Package-index TLS + wheel RECORD | Upstream Triton has no general stable Windows package | Official PyTorch/Triton Windows feed, unconfirmed | Official package appears and kernel passes |
+| Triton XPU / `torch.compile` | Intel / x64 | Stable `triton-xpu==3.8.0` from official PyTorch XPU index | Official index hashes + wheel RECORD | Standalone Intel Triton documents Linux; Windows support is integrated with PyTorch XPU | Official PyTorch XPU index | New tuple passes cold `torch.compile` |
+| llama.cpp CUDA x64 | NVIDIA / x64 | Latest complete CUDA 13.3 or 12.4 app + cudart pair from one `bNNNNN` release | GitHub asset SHA-256 digests | WinGet maps only to Vulkan | Backend-specific `ggml.llamacpp` CUDA variant, unconfirmed | Package variant appears and NVIDIA benchmark/inference pass |
+| llama.cpp CUDA ARM64 | NVIDIA / ARM64 | Latest complete CUDA 13.4 app + cudart pair; developer-preview stack | GitHub asset SHA-256 digests | WinGet has no ARM64 CUDA variant | Backend-specific `ggml.llamacpp` CUDA ARM64 variant, unconfirmed | Package variant appears and N1X benchmark/inference pass |
+| llama.cpp ROCm x64 | AMD / x64 | Latest ROCm 10.0 asset from a complete `bNNNNN` release | GitHub asset SHA-256 digest | WinGet maps only to Vulkan | Backend-specific `ggml.llamacpp` ROCm variant, unconfirmed | Package variant appears and AMD benchmark/inference pass |
+| llama.cpp SYCL / OpenVINO x64 | Intel/general / x64 | Latest SYCL or OpenVINO 2026.3.1 asset | GitHub asset SHA-256 digest | WinGet maps only to Vulkan | Backend-specific `ggml.llamacpp` SYCL/OpenVINO variants, unconfirmed | Package variant appears and selected-device benchmark/inference pass |
+| llama.cpp OpenCL Adreno ARM64 | Qualcomm / ARM64 | Latest Adreno OpenCL asset | GitHub asset SHA-256 digest | WinGet has no ARM64 Adreno variant | Backend-specific `ggml.llamacpp` OpenCL ARM64 variant, unconfirmed | Package variant appears and Adreno benchmark/inference pass |
+| llama.cpp Vulkan x64 | Cross-vendor / x64 | Latest official rolling Vulkan asset | GitHub asset SHA-256 digest | Current WinGet package cannot coexist as explicit backend variants | `ggml.llamacpp` Vulkan with reliable backend identity | Package backend/version evidence and Vulkan inference pass |
+| llama.cpp CPU x64/ARM64 | CPU / x64, ARM64 | Latest official rolling CPU asset | GitHub asset SHA-256 digest | WinGet lacks ARM64 and backend-selectable CPU variants | Backend-specific `ggml.llamacpp` CPU variants, unconfirmed | Package variants appear and CPU inference passes |
 | Foundry Local | Cross-vendor / x64, ARM64 | Preview `Microsoft.FoundryLocal` | WinGet MSIX hash/signature | Product is still preview | Same package ID at GA | Microsoft marks GA and inference/provider report passes |
 | Ollama ARM64 | CPU/NVIDIA / ARM64 | Latest stable official `ollama-windows-arm64.zip` | GitHub asset SHA-256 | Desktop WinGet ID is x64; portable package can lag | Current ARM64 WinGet payload, package ID unconfirmed | WinGet catches current release and API/GPU evidence passes |
+
+### Partner validation commands
+
+Run these unchanged from the repository root on supported partner hardware:
+
+```powershell
+# Supported AMD Windows x64 GPU:
+.\src\Workloads\pytorch\install.ps1 -Backend ROCm `
+  -ReportPath "$env:TEMP\pytorch-rocm-report.json"
+.\src\Workloads\rocm\install.ps1 `
+  -ReportPath "$env:TEMP\rocm-hip-report.json"
+
+# Supported Intel Windows x64 GPU:
+.\src\Workloads\pytorch\install.ps1 -Backend XPU -RequireTriton `
+  -ReportPath "$env:TEMP\pytorch-xpu-report.json"
+.\src\Workloads\intel-ai\install.ps1 -Device GPU -Profile Full `
+  -ReportPath "$env:TEMP\intel-ai-report.json"
+
+# Vendor-native llama.cpp plans and acceptance reports:
+.\src\Workloads\llama.cpp\install.ps1 -Backend CUDA -PlanOnly `
+  -ReportPath "$env:TEMP\llama-cuda-plan.json"
+.\src\Workloads\llama.cpp\install.ps1 -Backend ROCm -PlanOnly `
+  -ReportPath "$env:TEMP\llama-rocm-plan.json"
+.\src\Workloads\llama.cpp\install.ps1 -Backend SYCL -PlanOnly `
+  -ReportPath "$env:TEMP\llama-sycl-plan.json"
+.\src\Workloads\llama.cpp\install.ps1 -Backend OpenCL -PlanOnly `
+  -ReportPath "$env:TEMP\llama-adreno-plan.json"
+
+# Remove -PlanOnly on the matching partner machine to run benchmark + inference.
+# Optional same-vendor targeting examples:
+.\src\Workloads\pytorch\install.ps1 -Backend CUDA -DeviceIndex 1
+.\src\Workloads\llama.cpp\install.ps1 -Backend CUDA -Device CUDA1
+.\src\Workloads\intel-ai\install.ps1 -Device GPU -OpenVinoDeviceId GPU.1
+```
+
+AMD partner acceptance remains pending for the ROCm tensor and native HIP
+kernel plus llama.cpp ROCm inference. Intel partner acceptance remains pending
+for XPU tensor/`torch.compile`, OpenVINO GPU/NPU inference, optional SYCL kernel,
+and llama.cpp SYCL/OpenVINO inference. NVIDIA x64 CUDA and Qualcomm ARM64
+OpenCL llama.cpp acceptance are also partner pending. No Windows ARM64
+ROCm/XPU artifacts are published, so those combinations remain explicitly
+unsupported.
 
 <br/>
 

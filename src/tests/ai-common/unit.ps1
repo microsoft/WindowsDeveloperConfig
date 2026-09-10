@@ -17,6 +17,72 @@ foreach ($entry in $catalog.Components.GetEnumerator()) {
     }
 }
 
+$capabilities = @(Get-AiCapabilityMatrix)
+Assert-True ($capabilities.Count -ge 30) 'Capability matrix should enumerate every supported and explicitly unavailable Windows AI cell'
+Assert-Equal @($capabilities.Id | Sort-Object -Unique).Count $capabilities.Count 'Capability ids should be unique'
+$requiredCapabilityIds = @(
+    'cuda-nvidia-x64', 'cuda-nvidia-arm64', 'rocm-amd-x64',
+    'intel-openvino-cpu-x64', 'intel-openvino-gpu-x64', 'intel-openvino-npu-x64',
+    'intel-sycl-gpu-x64', 'intel-full-gpu-x64',
+    'pytorch-cpu-x64', 'pytorch-cpu-arm64', 'pytorch-cuda-x64', 'pytorch-cuda-arm64',
+    'pytorch-rocm-x64', 'pytorch-xpu-x64',
+    'triton-cuda-x64', 'triton-cuda-arm64', 'triton-xpu-x64',
+    'llama-cpu-x64', 'llama-cpu-arm64', 'llama-cuda-x64', 'llama-cuda-arm64',
+    'llama-rocm-x64', 'llama-sycl-x64', 'llama-openvino-x64', 'llama-vulkan-x64',
+    'llama-opencl-adreno-arm64',
+    'foundry-source-managed-x64', 'foundry-source-managed-arm64',
+    'ollama-source-managed-x64', 'ollama-source-managed-arm64',
+    'rocm-arm64-unavailable', 'pytorch-rocm-arm64-unavailable',
+    'pytorch-xpu-arm64-unavailable', 'pytorch-qualcomm-arm64-unavailable',
+    'triton-amd-windows-unavailable', 'generic-arm-gpu-toolkit-unavailable',
+    'amd-ryzen-ai-npu-unavailable', 'intel-ai-arm64-unavailable',
+    'other-windows-gpu-unavailable'
+)
+foreach ($id in $requiredCapabilityIds) {
+    Assert-True ($id -in $capabilities.Id) "Capability matrix should include required cell $id"
+}
+$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$implementedStatuses = @('implemented-supported', 'source-managed')
+foreach ($cell in $capabilities) {
+    Assert-True ($cell.Status -in @('implemented-supported', 'source-managed', 'upstream-unavailable')) "$($cell.Id) should use a defined capability status"
+    if ($cell.Status -in $implementedStatuses) {
+        foreach ($field in @('Workload', 'Architecture', 'Vendor', 'DeviceFamily', 'Backend', 'Maturity', 'Acquisition', 'Prerequisites', 'Resolver', 'ResolverArguments', 'Expected', 'ProbePath', 'ReportEvidence', 'PartnerCommand')) {
+            Assert-True $cell.ContainsKey($field) "$($cell.Id) should define supported-cell field $field"
+        }
+        Assert-True ([bool](Get-Command -Name $cell.Resolver -CommandType Function -ErrorAction SilentlyContinue)) "$($cell.Id) resolver should exist"
+        foreach ($identity in @($cell.Acquisition)) {
+            if ($identity -like 'component:*') {
+                $componentKey = $identity.Substring('component:'.Length)
+                Assert-True $catalog.Components.ContainsKey($componentKey) "$($cell.Id) should reference catalog component $componentKey"
+            } else {
+                Assert-True ($identity -like 'winget:*') "$($cell.Id) acquisition '$identity' should use a known identity prefix"
+            }
+        }
+        Assert-True (Test-Path -LiteralPath (Join-Path $repositoryRoot $cell.ProbePath)) "$($cell.Id) verification probe should exist"
+        Assert-True ([bool]$cell.ReportEvidence) "$($cell.Id) should define report evidence"
+        Assert-True ($cell.PartnerCommand -match '-ReportPath') "$($cell.Id) should provide a report-producing partner command"
+        $resolvedCell = Resolve-AiCapabilityCell -Id $cell.Id
+        Assert-True ($null -ne $resolvedCell) "$($cell.Id) resolver fixture should return a plan"
+    } else {
+        Assert-True $cell.ContainsKey('Blocker') "$($cell.Id) should explain the authoritative upstream boundary"
+        try {
+            Resolve-AiCapabilityCell -Id $cell.Id
+            throw "Capability '$($cell.Id)' unexpectedly resolved."
+        } catch {
+            Assert-Equal $_.Exception.Message $cell.Blocker "$($cell.Id) should return its actionable blocker"
+        }
+    }
+}
+$capabilityReportPath = Join-Path $env:TEMP "devconfig-capabilities-$([guid]::NewGuid().ToString('N')).json"
+try {
+    & (Join-Path $repositoryRoot 'src\tools\get-ai-capabilities.ps1') -OutputPath $capabilityReportPath
+    $capabilityReport = Get-Content -LiteralPath $capabilityReportPath -Raw | ConvertFrom-Json
+    Assert-Equal $capabilityReport.capabilities.Count $capabilities.Count 'Capability report tool should emit every catalog cell'
+    Assert-True (@($capabilityReport.capabilities | Where-Object status -eq 'source-managed').Count -gt 0) 'Capability report should preserve source-managed status'
+} finally {
+    Remove-Item -LiteralPath $capabilityReportPath -Force -ErrorAction SilentlyContinue
+}
+
 $wingetArgs = Get-DevConfigWingetInstallArguments -Id 'Microsoft.FoundryLocal'
 Assert-Equal ($wingetArgs -join ' ') 'install --id Microsoft.FoundryLocal --exact --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity' 'Shared WinGet install command should be exact and noninteractive'
 $upgradeArgs = Get-DevConfigWingetUpgradeArguments -Id 'Microsoft.VisualStudio.2022.BuildTools'

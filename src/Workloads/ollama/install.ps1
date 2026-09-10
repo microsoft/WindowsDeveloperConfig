@@ -110,17 +110,41 @@ if ($PlanOnly) {
 }
 
 Invoke-CheckedCommand -FilePath $ollamaPath -ArgumentList @('--version') -DisplayName 'Ollama CLI verification'
-$versionUri = [uri]'http://localhost:11434/api/version'
-try {
-    $version = Invoke-RestMethod -Uri $versionUri -TimeoutSec 3
-} catch {
-    Write-Host "Ollama API is not running; starting 'ollama serve'."
-    Start-Process -FilePath $ollamaPath -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
+$apiBase = 'http://localhost:11434'
+$ownedServer = $null
+if ($architecture -eq 'Arm64') {
+    $port = Get-AiFreeTcpPort
+    $env:OLLAMA_HOST = "127.0.0.1:$port"
+    $apiBase = "http://127.0.0.1:$port"
+    Write-Host "Starting resolver-owned ARM64 Ollama server at $apiBase."
+    $ownedServer = Start-Process -FilePath $ollamaPath -ArgumentList 'serve' -WindowStyle Hidden -PassThru
+    $versionUri = [uri]"$apiBase/api/version"
     $version = Wait-JsonEndpoint -Uri $versionUri -TimeoutSeconds 30
+} else {
+    $versionUri = [uri]"$apiBase/api/version"
+    try {
+        $version = Invoke-RestMethod -Uri $versionUri -TimeoutSec 3
+    } catch {
+        Write-Host "Ollama API is not running; starting 'ollama serve'."
+        Start-Process -FilePath $ollamaPath -ArgumentList 'serve' -WindowStyle Hidden | Out-Null
+        $version = Wait-JsonEndpoint -Uri $versionUri -TimeoutSeconds 30
+    }
 }
 
 if (-not $version.version) {
     throw 'Ollama API responded without a version value.'
+}
+if ($architecture -eq 'Arm64') {
+    $expectedVersion = ([string]$acquisition.Tag).TrimStart('v')
+    if ([string]$version.version -ne $expectedVersion) {
+        throw "Resolver-owned ARM64 Ollama API reported version '$($version.version)', expected '$expectedVersion' from release '$($acquisition.Tag)'."
+    }
+    $report.acceptance.server = [ordered]@{
+        endpoint = $apiBase
+        processId = $ownedServer.Id
+        executable = $ollamaPath
+        version = $version.version
+    }
 }
 
 $modelPlan = Get-OllamaModelSmokePlan
@@ -158,7 +182,7 @@ if ($SkipModelSmoke) {
     $request = New-OllamaGenerateRequest -Model $modelPlan.Model -Marker $modelPlan.Marker
     $response = Invoke-RestMethod `
         -Method Post `
-        -Uri 'http://localhost:11434/api/generate' `
+        -Uri "$apiBase/api/generate" `
         -ContentType 'application/json' `
         -Body ($request | ConvertTo-Json -Depth 8) `
         -TimeoutSec 300
@@ -167,7 +191,7 @@ if ($SkipModelSmoke) {
         throw "Ollama model inference did not produce marker '$($modelPlan.Marker)'. Response: $($response.response)"
     }
     $processor = (& $ollamaPath ps 2>&1 | Out-String).Trim()
-    $running = Invoke-RestMethod -Uri 'http://localhost:11434/api/ps' -TimeoutSec 30
+    $running = Invoke-RestMethod -Uri "$apiBase/api/ps" -TimeoutSec 30
     $loaded = @($running.models | Where-Object { $_.name -eq $modelPlan.Model } | Select-Object -First 1)
     $gpuFraction = if ($loaded.Count -eq 1 -and [double]$loaded[0].size -gt 0) {
         [math]::Round(([double]$loaded[0].size_vram / [double]$loaded[0].size), 4)
