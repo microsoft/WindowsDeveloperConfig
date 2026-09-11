@@ -272,10 +272,12 @@ kernel acceptance tests.
 
 **Hardware validation status:** Windows ARM64 on NVIDIA RTX Spark N1X is
 validated end-to-end for CUDA, PyTorch CUDA, Triton, Foundry Local, llama.cpp,
-and Ollama. AMD ROCm/HIP, Intel OpenVINO/oneAPI/XPU, NVIDIA x64 llama.cpp CUDA,
-and Qualcomm ARM64 llama.cpp OpenCL are hardware-gated and ready for partner
-execution. Their current gap is physical partner hardware coverage, not static
-planning, asset discovery, or unit coverage.
+and Ollama. The final Ollama rerun used a resolver-owned loopback endpoint,
+runtime 0.34.0, the verified `qwen3:0.6b` digest, real inference, and `/api/ps`
+reporting 100% GPU. AMD ROCm/HIP, Intel OpenVINO/oneAPI/XPU, NVIDIA x64
+llama.cpp CUDA, and Qualcomm ARM64 llama.cpp OpenCL are hardware-gated and
+ready for partner execution. Their current gap is physical partner hardware
+coverage, not static planning, asset discovery, or unit coverage.
 
 ### Known vendor gaps and boundaries
 
@@ -330,45 +332,129 @@ change after the stated detection rule and real hardware acceptance pass.
 
 ### Partner validation commands
 
-Run these unchanged from the repository root on supported partner hardware:
+Use the exact PR head that was statically qualified:
 
 ```powershell
-# Supported AMD Windows x64 GPU:
-.\src\Workloads\pytorch\install.ps1 -Backend ROCm `
-  -ReportPath "$env:TEMP\pytorch-rocm-report.json"
-.\src\Workloads\rocm\install.ps1 `
-  -ReportPath "$env:TEMP\rocm-hip-report.json"
-
-# Supported Intel Windows x64 GPU:
-.\src\Workloads\pytorch\install.ps1 -Backend XPU -RequireTriton `
-  -ReportPath "$env:TEMP\pytorch-xpu-report.json"
-.\src\Workloads\intel-ai\install.ps1 -Device GPU -Profile Full `
-  -ReportPath "$env:TEMP\intel-ai-report.json"
-
-# Vendor-native llama.cpp plans and acceptance reports:
-.\src\Workloads\llama.cpp\install.ps1 -Backend CUDA -PlanOnly `
-  -ReportPath "$env:TEMP\llama-cuda-plan.json"
-.\src\Workloads\llama.cpp\install.ps1 -Backend ROCm -PlanOnly `
-  -ReportPath "$env:TEMP\llama-rocm-plan.json"
-.\src\Workloads\llama.cpp\install.ps1 -Backend SYCL -PlanOnly `
-  -ReportPath "$env:TEMP\llama-sycl-plan.json"
-.\src\Workloads\llama.cpp\install.ps1 -Backend OpenCL -PlanOnly `
-  -ReportPath "$env:TEMP\llama-adreno-plan.json"
-
-# Remove -PlanOnly on the matching partner machine to run benchmark + inference.
-# Optional same-vendor targeting examples:
-.\src\Workloads\pytorch\install.ps1 -Backend CUDA -DeviceIndex 1
-.\src\Workloads\llama.cpp\install.ps1 -Backend CUDA -Device CUDA1
-.\src\Workloads\intel-ai\install.ps1 -Device GPU -OpenVinoDeviceId GPU.1
+gh pr checkout 98 --repo microsoft/WindowsDeveloperConfig
+$ExpectedHead = gh pr view 98 --repo microsoft/WindowsDeveloperConfig `
+  --json headRefOid --jq .headRefOid
+if ((git rev-parse HEAD).Trim() -ne $ExpectedHead) {
+  throw "PR #98 checkout does not match published head $ExpectedHead."
+}
 ```
 
-AMD partner acceptance remains pending for the ROCm tensor and native HIP
-kernel plus llama.cpp ROCm inference. Intel partner acceptance remains pending
-for XPU tensor/`torch.compile`, OpenVINO GPU/NPU inference, optional SYCL kernel,
-and llama.cpp SYCL/OpenVINO inference. NVIDIA x64 CUDA and Qualcomm ARM64
-OpenCL llama.cpp acceptance are also partner pending. No Windows ARM64
-ROCm/XPU artifacts are published, so those combinations remain explicitly
-unsupported.
+The workload implementation was qualified at `ec7fc5e`; later PR commits may
+update documentation only. Always run from the live PR head selected above.
+
+If GitHub CLI checkout is unavailable:
+
+```powershell
+git fetch https://github.com/Kixantrix/WindowsDeveloperConfig.git `
+  mihippel-microsoft-windows-ai-setup-workloads:pr-98
+git switch pr-98
+```
+
+Open **elevated PowerShell** in the repository root, then use this harness. It
+always inventories first, runs a non-mutating plan, stops on blockers, applies
+the same arguments, and requires `result.ready=true`.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$ReportRoot = Join-Path $env:TEMP "devconfig-ai-$env:COMPUTERNAME"
+New-Item -ItemType Directory -Path $ReportRoot -Force | Out-Null
+
+.\src\tools\collect-ai-hardware.ps1 `
+  -OutputPath "$ReportRoot\hardware.json" *>&1 |
+  Tee-Object "$ReportRoot\hardware.console.log"
+
+function Invoke-PartnerFlow {
+  param(
+    [Parameter(Mandatory)] [string] $Name,
+    [Parameter(Mandatory)] [string] $Script,
+    [string[]] $Arguments = @()
+  )
+  $planPath = Join-Path $ReportRoot "$Name-plan.json"
+  $finalPath = Join-Path $ReportRoot "$Name-final.json"
+  & $Script @Arguments -PlanOnly -ReportPath $planPath *>&1 |
+    Tee-Object (Join-Path $ReportRoot "$Name-plan.console.log")
+  $plan = Get-Content $planPath -Raw | ConvertFrom-Json
+  if ($plan.result.blockers.Count) {
+    throw "$Name blocked: $($plan.result.blockers -join '; ')"
+  }
+  & $Script @Arguments -ReportPath $finalPath *>&1 |
+    Tee-Object (Join-Path $ReportRoot "$Name-final.console.log")
+  $final = Get-Content $finalPath -Raw | ConvertFrom-Json
+  if (-not $final.result.ready) {
+    throw "$Name did not produce result.ready=true."
+  }
+}
+```
+
+Run the assigned device group:
+
+```powershell
+# NVIDIA Windows x64
+Invoke-PartnerFlow nvidia-cuda .\src\Workloads\cuda\install.ps1
+Invoke-PartnerFlow nvidia-pytorch .\src\Workloads\pytorch\install.ps1 `
+  @('-Backend', 'CUDA', '-RequireTriton')
+Invoke-PartnerFlow nvidia-llama .\src\Workloads\llama.cpp\install.ps1 `
+  @('-Backend', 'CUDA')
+
+# AMD Windows x64
+Invoke-PartnerFlow amd-pytorch .\src\Workloads\pytorch\install.ps1 `
+  @('-Backend', 'ROCm')
+Invoke-PartnerFlow amd-hip .\src\Workloads\rocm\install.ps1
+Invoke-PartnerFlow amd-llama .\src\Workloads\llama.cpp\install.ps1 `
+  @('-Backend', 'ROCm')
+
+# Intel Windows x64 GPU
+Invoke-PartnerFlow intel-pytorch-xpu .\src\Workloads\pytorch\install.ps1 `
+  @('-Backend', 'XPU', '-RequireTriton')
+Invoke-PartnerFlow intel-openvino-gpu .\src\Workloads\intel-ai\install.ps1 `
+  @('-Device', 'GPU', '-Profile', 'OpenVINO')
+Invoke-PartnerFlow intel-full-gpu .\src\Workloads\intel-ai\install.ps1 `
+  @('-Device', 'GPU', '-Profile', 'Full')
+Invoke-PartnerFlow intel-llama-sycl .\src\Workloads\llama.cpp\install.ps1 `
+  @('-Backend', 'SYCL')
+Invoke-PartnerFlow intel-llama-openvino .\src\Workloads\llama.cpp\install.ps1 `
+  @('-Backend', 'OpenVINO')
+
+# Intel Windows x64 NPU (separate from XPU/SYCL GPU paths)
+Invoke-PartnerFlow intel-openvino-npu .\src\Workloads\intel-ai\install.ps1 `
+  @('-Device', 'NPU', '-Profile', 'OpenVINO')
+
+# Qualcomm/Adreno Windows ARM64
+Invoke-PartnerFlow qualcomm-llama .\src\Workloads\llama.cpp\install.ps1 `
+  @('-Backend', 'OpenCL')
+Invoke-PartnerFlow qualcomm-foundry .\src\Workloads\foundry\install.ps1
+```
+
+Foundry acceleration is source-managed: its Qualcomm run succeeds with any
+truthfully reported provider, including CPU fallback. For same-vendor secondary
+adapters, use `-DeviceIndex`, llama.cpp `-Device`, OpenVINO
+`-OpenVinoDeviceId`, or oneAPI `-SyclDeviceSelector` as documented above.
+
+Return the entire `$ReportRoot` directory and state whether any installer
+requested or performed a reboot. Success is **not** the presence of
+`INSTALL_OK`; the final JSON must have `result.ready=true`, no blockers, and
+acceptance evidence for the intended backend/device.
+
+| Evidence | Required fields or proof |
+| --- | --- |
+| Host inventory | `host.architecture`, GPU vendor/model/driver in `host.gpus`, and relevant `host.npus` |
+| Acquisition | Each `acquisitions[]` action, source/package or artifact identity, version/requirement, integrity metadata, cache/install path |
+| Selection | Requested and selected backend/device/profile; explicit adapter selector when used |
+| CUDA / HIP | Compiler/runtime version, actual device, compute capability or gfx target, compiled/executed kernel marker |
+| PyTorch / Triton | Exact package tuple, runtime (`torch.version.cuda` or `torch.version.hip`), actual device, tensor marker, Triton vector-add or `torch.compile` evidence |
+| Intel AI | OpenVINO requested/actual CPU/GPU/NPU device and provider; SYCL actual GPU and kernel marker |
+| llama.cpp | Release tag/assets/digests, `backends`, `gpu_info`, actual `offloaded X/Y layers`, model hash and inference marker |
+| Foundry | Selected source-managed device/EP, inference marker, `fallbackUsed`; CPU fallback is valid when reported |
+| Ollama | Model digest, inference marker, actual backend/process evidence, VRAM bytes and `gpuFraction` when accelerated |
+| Outcome | `result.ready=true`, plus all `warnings` and `blockers`; plan and final console logs |
+
+Partner hardware remains pending for NVIDIA x64, AMD x64, Intel x64 GPU/NPU,
+and Qualcomm/Adreno ARM64. Native Windows ARM64 ROCm/XPU and native Windows AMD
+Triton remain explicitly upstream-unavailable.
 
 <br/>
 
