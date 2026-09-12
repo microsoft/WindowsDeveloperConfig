@@ -146,7 +146,7 @@ Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
     assetPatterns = $plan.AssetPatterns
     resolvedTag = $acquisition.Tag
     resolvedAssets = $assetIdentity
-    versionPolicy = $component.VersionPolicy
+    versionPolicy = $plan.VersionPolicy
     integrity = $component.Integrity
     cachePath = $assetCache
     installPath = $destination
@@ -191,18 +191,6 @@ if ($SkipModelSmoke) {
         -Destination $modelPath `
         -Sha256 $modelPlan.Sha256 `
         -ExpectedSize $modelPlan.Size
-    $arguments = Get-LlamaInferenceArguments -ModelPath $modelPath -Marker $modelPlan.Marker
-    $arguments += @('-ngl', $(if ($plan.Backend -eq 'CPU') { '0' } else { '999' }))
-    if ($plan.Backend -eq 'CPU') {
-        $arguments += @('--device', 'none')
-    } elseif ($Device) {
-        $arguments += @('--device', $Device)
-    }
-    $inferenceResult = Invoke-DevConfigNativeCommand -FilePath $llamaCli -Arguments $arguments
-    $output = $inferenceResult.Output.Trim()
-    if ($inferenceResult.ExitCode -ne 0 -or $output -notmatch [regex]::Escape($modelPlan.Marker)) {
-        throw "llama.cpp model inference did not produce marker '$($modelPlan.Marker)' (exit $($inferenceResult.ExitCode)). Output: $output"
-    }
     $benchArguments = @(
         '-m', $modelPath,
         '-ngl', $(if ($plan.Backend -eq 'CPU') { '0' } else { '999' }),
@@ -213,7 +201,10 @@ if ($SkipModelSmoke) {
     } elseif ($Device) {
         $benchArguments += @('--device', $Device)
     }
-    $benchmarkResult = Invoke-AiNativeCommandSeparated -FilePath $llamaBench -Arguments $benchArguments
+    $benchmarkResult = Invoke-AiNativeCommandSeparated `
+        -FilePath $llamaBench `
+        -Arguments $benchArguments `
+        -TimeoutSeconds 300
     $benchmark = $benchmarkResult.StandardOutput.Trim()
     if ($benchmarkResult.ExitCode -ne 0) {
         throw "llama-bench failed while collecting backend evidence (exit $($benchmarkResult.ExitCode)): $($benchmarkResult.StandardError)"
@@ -225,6 +216,25 @@ if ($SkipModelSmoke) {
         -Backend $plan.Backend `
         -ExpectedDeviceName $(if ($Device) { $null } else { $plan.DeviceName }) `
         -RequestedDevice $Device
+    $arguments = Get-LlamaInferenceArguments -ModelPath $modelPath -Marker $modelPlan.Marker
+    $arguments += @('-ngl', $(if ($plan.Backend -eq 'CPU') { '0' } else { '999' }))
+    if ($plan.Backend -eq 'CPU') {
+        $arguments += @('--device', 'none')
+    } elseif ($Device) {
+        $arguments += @('--device', $Device)
+    }
+    $inferenceResult = Invoke-AiNativeCommandSeparated `
+        -FilePath $llamaCli `
+        -Arguments $arguments `
+        -TimeoutSeconds 300
+    $output = @(
+        $inferenceResult.StandardOutput
+        $inferenceResult.StandardError
+    ) -join "`n"
+    $output = $output.Trim()
+    if ($inferenceResult.ExitCode -ne 0 -or $output -notmatch [regex]::Escape($modelPlan.Marker)) {
+        throw "llama.cpp model inference did not produce marker '$($modelPlan.Marker)' (exit $($inferenceResult.ExitCode)). Output: $output"
+    }
     $report.acceptance.inference = [ordered]@{
         model = $modelPlan.FileName
         modelSha256 = $modelPlan.Sha256
@@ -243,8 +253,18 @@ if ($SkipModelSmoke) {
         benchmark = $parsedBenchmark.Data
         benchmarkJson = $parsedBenchmark.Json
         benchmarkDiagnostics = $parsedBenchmark.Diagnostics
+        benchmarkJsonRepaired = $parsedBenchmark.JsonRepaired
     }
-    $inferenceEvidence = $report.acceptance.inference
+    $inferenceEvidence = [ordered]@{
+        model = $modelPlan.FileName
+        marker = $modelPlan.Marker
+        backend = $plan.Backend
+        runtime = $plan.Runtime
+        device = $backendEvidence.GpuInfo
+        hardwareAccelerated = $backendEvidence.HardwareAccelerated
+        actualOffloadedLayers = $backendEvidence.ActualOffloadedLayers
+        benchmarkJsonRepaired = $parsedBenchmark.JsonRepaired
+    }
     Write-Host "LLAMA_CPP_READY: architecture=$architecture, backend=$($plan.Backend), runtime=$($plan.Runtime), device=$($backendEvidence.GpuInfo -join ','), model=$($modelPlan.FileName), sha256=$($modelPlan.Sha256)."
 }
 Add-AiReportPhase -Report $report -Name 'llama-inference' -Status $(if ($SkipModelSmoke) { 'skipped' } else { 'ready' }) -Evidence $inferenceEvidence

@@ -60,7 +60,8 @@ Assert-Equal ($repeat | ConvertTo-Json -Compress) ($arm | ConvertTo-Json -Compre
 
 $adreno = Resolve-LlamaCppInstallPlan -Architecture Arm64 -QualcommGpuName 'Qualcomm Adreno X1-85 GPU' -HasOpenCl $true
 Assert-Equal $adreno.Backend 'OpenCL' 'ARM64 Adreno should select the official OpenCL backend'
-Assert-True ('llama-b10883-bin-win-opencl-adreno-arm64.zip' -match $adreno.AssetPatterns[0]) 'Adreno OpenCL pattern should match'
+Assert-Equal $adreno.AssetPatterns[0] '^llama-b10917-bin-win-opencl-adreno-arm64\.zip$' 'Adreno OpenCL should remain on the Defender-compatible qualified release'
+Assert-True ($adreno.VersionPolicy -match 'pinned b10917') 'Adreno OpenCL should report its backend-specific version policy'
 
 $mixedExplicitAmd = Resolve-LlamaCppInstallPlan -Architecture X64 -Backend ROCm `
     -HasNvidia $true -DriverVersion 581.10 -ComputeCapability 8.9 -NvidiaGpuName 'NVIDIA RTX 4090' `
@@ -177,10 +178,42 @@ $arguments = Get-LlamaInferenceArguments -ModelPath 'C:\models\qwen.gguf' -Marke
 Assert-True (($arguments -join ' ') -like '*--grammar*DEVCONFIG_LLAMA_READY*') 'llama.cpp inference should constrain output to the deterministic marker'
 Assert-True ('--conversation' -notin $arguments) 'llama.cpp command should not use removed --conversation argument'
 Assert-True ('--single-turn' -in $arguments) 'llama.cpp command should exit after the predefined prompt'
+$nativeProbePath = Join-Path $env:TEMP "devconfig-native-probe-$([guid]::NewGuid().ToString('N')).ps1"
+try {
+    @(
+        'param([string] $Value, [int] $DelaySeconds = 0)'
+        'if ($DelaySeconds -gt 0) { Start-Sleep -Seconds $DelaySeconds }'
+        '[Console]::Out.Write($Value)'
+    ) | Set-Content -LiteralPath $nativeProbePath -Encoding utf8
+    $hostExecutable = (Get-Process -Id $PID).Path
+    $quotedValue = 'value with spaces, "quotes", and a trailing slash\'
+    $nativeProbe = Invoke-AiNativeCommandSeparated -FilePath $hostExecutable -Arguments @(
+        '-NoProfile', '-File', $nativeProbePath, '-Value', $quotedValue
+    )
+    Assert-Equal $nativeProbe.ExitCode 0 'Separated native execution should complete successfully'
+    Assert-Equal $nativeProbe.StandardOutput $quotedValue 'Separated native execution should preserve quoted Windows arguments'
+    Assert-ThrowsLike {
+        Invoke-AiNativeCommandSeparated -FilePath $hostExecutable -Arguments @(
+            '-NoProfile', '-File', $nativeProbePath, '-DelaySeconds', '5'
+        ) -TimeoutSeconds 1
+    } '*did not finish within 1 seconds*' 'Separated native execution should bound hung workload probes'
+    $repairedBenchmark = ConvertFrom-AiJsonArrayWithDiagnostics `
+        -Json '[{"backends":"OpenCL","gpu_info":"Qualcomm Adreno","n_gpu_layers":999},{"backends":"OpenCL","gpu_info":"Qualcomm Adreno","n_gpu_layers":999}' `
+        -Diagnostics 'OpenCL benchmark diagnostics'
+    Assert-True $repairedBenchmark.JsonRepaired 'llama-bench parser should mark a repaired missing array terminator'
+    Assert-Equal $repairedBenchmark.Data.Count 2 'llama-bench parser should flatten PowerShell 5.1 JSON arrays'
+    Assert-Equal $repairedBenchmark.Data[0].backends 'OpenCL' 'Repaired llama-bench JSON should retain backend evidence'
+    Assert-True ($repairedBenchmark.Diagnostics -match 'LLAMA_BENCH_JSON_REPAIRED') 'Repaired llama-bench JSON should be disclosed in diagnostics'
+} finally {
+    Remove-Item -LiteralPath $nativeProbePath -Force -ErrorAction SilentlyContinue
+}
 $installScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\llama.cpp\install.ps1') -Raw
 $probeScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'probe.ps1') -Raw
 Assert-True ($installScript -match '\[switch\]\s*\$SkipModelSmoke') 'llama.cpp should expose model-smoke opt-out'
-Assert-True ($installScript -match 'Invoke-DevConfigNativeCommand') 'llama.cpp failures should retain combined native diagnostics'
+Assert-True ($installScript -match 'Invoke-AiNativeCommandSeparated') 'llama.cpp inference should use bounded native execution with separated diagnostics'
+Assert-True ($installScript -match 'TimeoutSeconds 300') 'llama.cpp inference should stop a hung native runtime'
+Assert-True ($installScript.IndexOf('$benchmarkResult') -lt $installScript.IndexOf('$inferenceResult')) 'llama.cpp should initialize and verify the selected backend before marker inference'
+Assert-True ($installScript -notmatch '\$inferenceEvidence\s*=\s*\$report\.acceptance\.inference') 'llama.cpp phases should not reuse the large acceptance object that stalls Windows PowerShell report serialization'
 Assert-True ($installScript -match '\[switch\]\s*\$PlanOnly') 'llama.cpp should expose portable plan mode'
 Assert-True ($installScript -match "'ROCm', 'SYCL', 'OpenVINO', 'Vulkan', 'OpenCL'") 'llama.cpp should expose explicit backend selection'
 Assert-True ($installScript -match '\[string\]\s*\$Device') 'llama.cpp should expose runtime device selection for same-vendor adapters'

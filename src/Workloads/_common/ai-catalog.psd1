@@ -266,7 +266,8 @@
                     Vendor = 'Qualcomm'
                     Architecture = 'Arm64'
                     Runtime = 'OpenCL Adreno'
-                    Patterns = @('^llama-b[0-9]+-bin-win-opencl-adreno-arm64\.zip$')
+                    Patterns = @('^llama-b10917-bin-win-opencl-adreno-arm64\.zip$')
+                    VersionPolicy = 'pinned b10917 qualified on Qualcomm ARM64; b10919 is blocked by managed Defender ransomware protection'
                 }
             }
             VersionPolicy = 'newest bNNNNN release containing a complete backend asset set'

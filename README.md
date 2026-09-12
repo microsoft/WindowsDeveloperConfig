@@ -240,7 +240,9 @@ llama.cpp `-Backend Auto` prefers **supported NVIDIA CUDA → supported AMD ROCm
 resolver takes every archive for a selection from one `bNNNNN` release, requires
 GitHub's SHA-256 digest for each asset, caches the verified archives under
 `%LOCALAPPDATA%\DevConfig\llama.cpp\asset-cache`, and atomically replaces the
-runtime. `llama-bench -o json` must identify the selected backend/device and
+runtime. Qualcomm ARM64 is pinned to qualified release `b10917` because managed
+Defender ransomware protection blocks the unsigned `b10919` Adreno executable.
+`llama-bench -o json` must identify the selected backend/device and
 diagnostics must report an actual nonzero `offloaded X/Y layers` result for
 every accelerator path before the flow is ready; requested `-ngl` is not treated
 as proof. Physical hardware comes from the official `gpu_info` field; `devices`
@@ -257,6 +259,25 @@ Use `-SkipModelSmoke` with Foundry Local, llama.cpp, or Ollama to opt out
 of the model download and inference. Use CUDA's `-SkipWorkloadSmoke` to opt out
 of kernel compilation/execution. Opted-out runs verify installation only and do
 not report full workload readiness.
+
+For physical partner validation, run the assigned llama.cpp backend from an
+elevated PowerShell. Run the plan first, then the full flow twice without skip
+switches; retain every report and console log.
+
+```powershell
+$ReportRoot = Join-Path $env:TEMP "devconfig-ai-$env:COMPUTERNAME"
+New-Item -ItemType Directory -Path $ReportRoot -Force | Out-Null
+
+.\src\Workloads\llama.cpp\install.ps1 -Backend CUDA -PlanOnly -ReportPath "$ReportRoot\llama-cuda-plan.json"
+.\src\Workloads\llama.cpp\install.ps1 -Backend ROCm -PlanOnly -ReportPath "$ReportRoot\llama-rocm-plan.json"
+.\src\Workloads\llama.cpp\install.ps1 -Backend SYCL -PlanOnly -ReportPath "$ReportRoot\llama-sycl-plan.json"
+.\src\Workloads\llama.cpp\install.ps1 -Backend OpenCL -PlanOnly -ReportPath "$ReportRoot\llama-adreno-plan.json"
+```
+
+Use the same command without `-PlanOnly` for the full and idempotence runs,
+writing distinct `*-final.json` and `*-rerun-final.json` reports. A pass requires
+`result.ready=true`, no blockers, matching `backends` and `gpu_info`, actual
+offloaded layers, and the pinned model marker.
 
 On ARM64, CUDA downloads NVIDIA's checksum- and Authenticode-verified 13.4
 Developer Preview installer (about 3.8 GB) under the NVIDIA CUDA EULA. The
@@ -371,18 +392,23 @@ function Invoke-PartnerFlow {
   param(
     [Parameter(Mandatory)] [string] $Name,
     [Parameter(Mandatory)] [string] $Script,
-    [string[]] $Arguments = @()
+    [hashtable] $Parameters = @{}
   )
   $planPath = Join-Path $ReportRoot "$Name-plan.json"
-  $finalPath = Join-Path $ReportRoot "$Name-final.json"
-  & $Script @Arguments -PlanOnly -ReportPath $planPath *>&1 |
+  $finalPath = Join-Path $ReportRoot "$Name-report.json"
+  $planParameters = @{} + $Parameters
+  $planParameters.PlanOnly = $true
+  $planParameters.ReportPath = $planPath
+  & $Script @planParameters *>&1 |
     Tee-Object (Join-Path $ReportRoot "$Name-plan.console.log")
   $plan = Get-Content $planPath -Raw | ConvertFrom-Json
   if ($plan.result.blockers.Count) {
     throw "$Name blocked: $($plan.result.blockers -join '; ')"
   }
-  & $Script @Arguments -ReportPath $finalPath *>&1 |
-    Tee-Object (Join-Path $ReportRoot "$Name-final.console.log")
+  $finalParameters = @{} + $Parameters
+  $finalParameters.ReportPath = $finalPath
+  & $Script @finalParameters *>&1 |
+    Tee-Object (Join-Path $ReportRoot "$Name-report.console.log")
   $final = Get-Content $finalPath -Raw | ConvertFrom-Json
   if (-not $final.result.ready) {
     throw "$Name did not produce result.ready=true."
@@ -396,38 +422,42 @@ Run the assigned device group:
 # NVIDIA Windows x64
 Invoke-PartnerFlow nvidia-cuda .\src\Workloads\cuda\install.ps1
 Invoke-PartnerFlow nvidia-pytorch .\src\Workloads\pytorch\install.ps1 `
-  @('-Backend', 'CUDA', '-RequireTriton')
+  @{ Backend = 'CUDA'; RequireTriton = $true }
 Invoke-PartnerFlow nvidia-llama .\src\Workloads\llama.cpp\install.ps1 `
-  @('-Backend', 'CUDA')
+  @{ Backend = 'CUDA' }
 
 # AMD Windows x64
-Invoke-PartnerFlow amd-pytorch .\src\Workloads\pytorch\install.ps1 `
-  @('-Backend', 'ROCm')
+Invoke-PartnerFlow pytorch-rocm .\src\Workloads\pytorch\install.ps1 `
+  @{ Backend = 'ROCm' }
 Invoke-PartnerFlow amd-hip .\src\Workloads\rocm\install.ps1
 Invoke-PartnerFlow amd-llama .\src\Workloads\llama.cpp\install.ps1 `
-  @('-Backend', 'ROCm')
+  @{ Backend = 'ROCm' }
 
 # Intel Windows x64 GPU
-Invoke-PartnerFlow intel-pytorch-xpu .\src\Workloads\pytorch\install.ps1 `
-  @('-Backend', 'XPU', '-RequireTriton')
+Invoke-PartnerFlow pytorch-xpu .\src\Workloads\pytorch\install.ps1 `
+  @{ Backend = 'XPU'; RequireTriton = $true }
 Invoke-PartnerFlow intel-openvino-gpu .\src\Workloads\intel-ai\install.ps1 `
-  @('-Device', 'GPU', '-Profile', 'OpenVINO')
+  @{ Device = 'GPU'; Profile = 'OpenVINO' }
 Invoke-PartnerFlow intel-full-gpu .\src\Workloads\intel-ai\install.ps1 `
-  @('-Device', 'GPU', '-Profile', 'Full')
+  @{ Device = 'GPU'; Profile = 'Full' }
 Invoke-PartnerFlow intel-llama-sycl .\src\Workloads\llama.cpp\install.ps1 `
-  @('-Backend', 'SYCL')
+  @{ Backend = 'SYCL' }
 Invoke-PartnerFlow intel-llama-openvino .\src\Workloads\llama.cpp\install.ps1 `
-  @('-Backend', 'OpenVINO')
+  @{ Backend = 'OpenVINO' }
 
 # Intel Windows x64 NPU (separate from XPU/SYCL GPU paths)
 Invoke-PartnerFlow intel-openvino-npu .\src\Workloads\intel-ai\install.ps1 `
-  @('-Device', 'NPU', '-Profile', 'OpenVINO')
+  @{ Device = 'NPU'; Profile = 'OpenVINO' }
 
 # Qualcomm/Adreno Windows ARM64
 Invoke-PartnerFlow qualcomm-llama .\src\Workloads\llama.cpp\install.ps1 `
-  @('-Backend', 'OpenCL')
+  @{ Backend = 'OpenCL' }
 Invoke-PartnerFlow qualcomm-foundry .\src\Workloads\foundry\install.ps1
 ```
+
+For example, the AMD and Intel PyTorch commands above write
+`$ReportRoot\pytorch-rocm-report.json` and
+`$ReportRoot\pytorch-xpu-report.json`, respectively.
 
 Foundry acceleration is source-managed: its Qualcomm run succeeds with any
 truthfully reported provider, including CPU fallback. For same-vendor secondary

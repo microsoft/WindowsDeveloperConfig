@@ -68,18 +68,13 @@ function ConvertFrom-AiPrefixedJsonArray {
             continue
         }
         $jsonText = ($lines[$index..($lines.Count - 1)] -join "`n").Trim()
+        $diagnostics = if ($index -gt 0) {
+            ($lines[0..($index - 1)] -join "`n").Trim()
+        } else {
+            ''
+        }
         try {
-            $data = @($jsonText | ConvertFrom-Json -ErrorAction Stop)
-            $diagnostics = if ($index -gt 0) {
-                ($lines[0..($index - 1)] -join "`n").Trim()
-            } else {
-                ''
-            }
-            return [pscustomobject]@{
-                Data = $data
-                Json = $jsonText
-                Diagnostics = $diagnostics
-            }
+            return ConvertFrom-AiJsonArrayWithDiagnostics -Json $jsonText -Diagnostics $diagnostics
         } catch {
             continue
         }
@@ -103,11 +98,49 @@ function Get-AiWindowsPathFromOutput {
     return $path
 }
 
+function ConvertTo-AiNativeCommandLineArgument {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Argument
+    )
+
+    if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $quoted = [System.Text.StringBuilder]::new()
+    [void]$quoted.Append('"')
+    $backslashes = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq [char]0x5c) {
+            $backslashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$quoted.Append([char]0x5c, ($backslashes * 2) + 1)
+            [void]$quoted.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$quoted.Append([char]0x5c, $backslashes)
+            $backslashes = 0
+        }
+        [void]$quoted.Append($character)
+    }
+    if ($backslashes -gt 0) {
+        [void]$quoted.Append([char]0x5c, $backslashes * 2)
+    }
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
+}
+
 function Invoke-AiNativeCommandSeparated {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string] $FilePath,
-        [string[]] $Arguments = @()
+        [string[]] $Arguments = @(),
+        [ValidateRange(1, 2147483)] [int] $TimeoutSeconds = 600
     )
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FilePath
@@ -115,17 +148,27 @@ function Invoke-AiNativeCommandSeparated {
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    foreach ($argument in $Arguments) {
-        [void]$startInfo.ArgumentList.Add($argument)
-    }
+    $startInfo.Arguments = @($Arguments | ForEach-Object {
+        ConvertTo-AiNativeCommandLineArgument -Argument $_
+    }) -join ' '
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
+    $started = $false
     try {
         if (-not $process.Start()) {
             throw "Native command '$FilePath' did not start."
         }
+        $started = $true
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $process.Kill() } catch {
+                Write-Verbose "Could not stop timed-out native command '$FilePath': $($_.Exception.Message)"
+            }
+            throw [System.TimeoutException]::new(
+                "Native command '$FilePath' did not finish within $TimeoutSeconds seconds, so it was stopped."
+            )
+        }
         $process.WaitForExit()
         return [pscustomobject]@{
             ExitCode = $process.ExitCode
@@ -133,6 +176,11 @@ function Invoke-AiNativeCommandSeparated {
             StandardError = $stderrTask.GetAwaiter().GetResult()
         }
     } finally {
+        if ($started -and -not $process.HasExited) {
+            try { $process.Kill() } catch {
+                Write-Verbose "Could not stop native command '$FilePath': $($_.Exception.Message)"
+            }
+        }
         $process.Dispose()
     }
 }
@@ -143,18 +191,30 @@ function ConvertFrom-AiJsonArrayWithDiagnostics {
         [Parameter(Mandatory)] [string] $Json,
         [AllowEmptyString()] [string] $Diagnostics = ''
     )
+    $jsonText = $Json.Trim()
+    $jsonRepaired = $jsonText.StartsWith('[') -and $jsonText.EndsWith('}')
+    if ($jsonRepaired) {
+        $jsonText = "$jsonText`n]"
+    }
     try {
-        $data = @($Json | ConvertFrom-Json -ErrorAction Stop)
+        $parsedData = $jsonText | ConvertFrom-Json -ErrorAction Stop
+        $data = @($parsedData)
     } catch {
         throw "llama-bench stdout was not a valid JSON array: $($_.Exception.Message)"
     }
     if ($data.Count -eq 0) {
         throw 'llama-bench returned an empty JSON array.'
     }
+    $diagnosticText = $Diagnostics.Trim()
+    if ($jsonRepaired) {
+        $repairDiagnostic = 'LLAMA_BENCH_JSON_REPAIRED: appended the missing closing array bracket.'
+        $diagnosticText = @($repairDiagnostic, $diagnosticText | Where-Object { $_ }) -join "`n"
+    }
     return [pscustomobject]@{
         Data = $data
-        Json = $Json.Trim()
-        Diagnostics = $Diagnostics.Trim()
+        Json = $jsonText
+        Diagnostics = $diagnosticText
+        JsonRepaired = $jsonRepaired
     }
 }
 
@@ -191,48 +251,115 @@ function Test-AiDeviceNameMatch {
         $normalizedExpected.Contains($normalizedActual)
 }
 
+function Get-FoundryModelVariantEvidence {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $ModelInfo,
+        [AllowEmptyString()] [string] $ServerLogs = ''
+    )
+
+    if (-not $ModelInfo) { return $null }
+    $variants = [System.Collections.Generic.List[object]]::new()
+    $current = $null
+    $inVariantTable = $false
+    foreach ($line in @($ModelInfo -split '\r?\n')) {
+        if ($line -match '^\|\s*Variant\s*\|') {
+            $inVariantTable = $true
+            continue
+        }
+        if (-not $inVariantTable) { continue }
+        if ($line -match '^\+') {
+            if ($null -ne $current) {
+                [void]$variants.Add([pscustomobject]$current)
+                $current = $null
+            }
+            if ($variants.Count -gt 0) { break }
+            continue
+        }
+        if ($line -notmatch '^\|') { continue }
+        $columns = @($line -split '\|')
+        if ($columns.Count -lt 8) { continue }
+        $devicePart = $columns[3].Trim()
+        $providerPart = $columns[4].Trim()
+        $cachedPart = $columns[6].Trim()
+        if ($devicePart -and $devicePart -ne 'Device' -and $devicePart -notmatch '^-+$') {
+            if ($null -ne $current) {
+                [void]$variants.Add([pscustomobject]$current)
+            }
+            $current = [ordered]@{
+                Device = $devicePart
+                Provider = $providerPart
+                Cached = $cachedPart
+            }
+        } elseif ($null -ne $current -and $providerPart -and $providerPart -ne 'Provider') {
+            $current.Provider += $providerPart
+        }
+    }
+    if ($null -ne $current) {
+        [void]$variants.Add([pscustomobject]$current)
+    }
+    if ($variants.Count -eq 0) { return $null }
+
+    $loadedMatches = @([regex]::Matches(
+        $ServerLogs,
+        "(?im)Model\s+'?[^'\r\n]*-(gpu|cpu|npu):\d+'?\s*(?:\r?\n)?loaded successfully"
+    ))
+    $selected = $null
+    if ($loadedMatches.Count -gt 0) {
+        $loadedDevice = $loadedMatches[$loadedMatches.Count - 1].Groups[1].Value.ToUpperInvariant()
+        $selected = @($variants | Where-Object { $_.Device -ieq $loadedDevice }) | Select-Object -First 1
+    }
+    if ($null -eq $selected) {
+        $cachedMarker = [string][char]0x25CF
+        $selected = @($variants | Where-Object {
+            $_.Cached -eq $cachedMarker -or $_.Cached -match '(?i)^(yes|true)$'
+        }) | Select-Object -First 1
+    }
+    if ($null -eq $selected -and $variants.Count -eq 1) {
+        $selected = $variants[0]
+    }
+    return $selected
+}
+
 function Get-FoundryExecutionProviderEvidence {
     [CmdletBinding()]
     param(
         [AllowEmptyString()] [string] $ModelInfo = '',
         [AllowEmptyString()] [string] $ServerLogs = ''
     )
-    $providerPattern = '(?i)(CUDAExecutionProvider|NvTensorRTRTXExecutionProvider|QNNExecutionProvider|OpenVINOExecutionProvider|VitisAIExecutionProvider|MIGraphXExecutionProvider|WebGPUExecutionProvider|DmlExecutionProvider|CPUExecutionProvider)'
+    $providerNames = @(
+        'CUDAExecutionProvider',
+        'NvTensorRTRTXExecutionProvider',
+        'QNNExecutionProvider',
+        'OpenVINOExecutionProvider',
+        'VitisAIExecutionProvider',
+        'MIGraphXExecutionProvider',
+        'WebGPUExecutionProvider',
+        'DmlExecutionProvider',
+        'CPUExecutionProvider'
+    )
+    $providerPattern = '(?i)(' + ($providerNames -join '|') + ')'
     $selectionMatches = @([regex]::Matches($ServerLogs, '(?im)Device:\s*([^,\r\n]+),\s*EPs:\s*([^\r\n]+)'))
     if ($selectionMatches.Count -gt 0) {
         $selection = $selectionMatches[$selectionMatches.Count - 1]
         $selectedDevice = $selection.Groups[1].Value.Trim()
         $providerText = $selection.Groups[2].Value
+    } elseif ($ServerLogs -match '(?im)Using\s+WebGPU\s+EP\s+for\s+model:') {
+        $selectedDevice = 'GPU'
+        $providerText = 'WebGPUExecutionProvider'
     } else {
-        $inVariantTable = $false
-        $deviceParts = [System.Collections.Generic.List[string]]::new()
-        $providerParts = [System.Collections.Generic.List[string]]::new()
-        foreach ($line in @($ModelInfo -split '\r?\n')) {
-            if ($line -match '^\|\s*Variant\s*\|') {
-                $inVariantTable = $true
-                continue
-            }
-            if (-not $inVariantTable) { continue }
-            if ($line -match '^\+') {
-                if ($deviceParts.Count -gt 0 -or $providerParts.Count -gt 0) { break }
-                continue
-            }
-            if ($line -notmatch '^\|') { continue }
-            $columns = @($line -split '\|')
-            if ($columns.Count -lt 6 -or $columns[1] -match '^-+$') { continue }
-            $devicePart = $columns[3].Trim()
-            $providerPart = $columns[4].Trim()
-            if ($devicePart -and $devicePart -ne 'Device') { [void]$deviceParts.Add($devicePart) }
-            if ($providerPart -and $providerPart -notin @('Execution', 'Provider')) { [void]$providerParts.Add($providerPart) }
-        }
-        $selectedDevice = ($deviceParts -join '').Trim()
-        $providerText = ($providerParts -join '').Trim()
-        if (-not $selectedDevice -or -not $providerText) {
+        $variant = Get-FoundryModelVariantEvidence -ModelInfo $ModelInfo -ServerLogs $ServerLogs
+        if ($null -eq $variant -or -not $variant.Device -or -not $variant.Provider) {
             throw 'Foundry inference succeeded, but neither the current inference logs nor the selected model variant identified its device and execution provider.'
         }
+        $selectedDevice = $variant.Device
+        $providerText = $variant.Provider
     }
     $providers = @([regex]::Matches($providerText, $providerPattern) |
-        ForEach-Object { $_.Groups[1].Value } |
+        ForEach-Object {
+            $matchedProvider = $_.Groups[1].Value
+            @($providerNames | Where-Object { $_ -ieq $matchedProvider })[0]
+        } |
         Select-Object -Unique)
     if ($providers.Count -eq 0) {
         throw "Foundry selection event for device '$selectedDevice' did not identify a supported execution provider."
@@ -577,6 +704,7 @@ function Resolve-LlamaCppInstallPlan {
         Vendor = $selectedAsset.Vendor
         DeviceName = $deviceName
         Maturity = $(if ($selectedAsset.ContainsKey('Maturity')) { $selectedAsset.Maturity } else { $catalog.Maturity })
+        VersionPolicy = $(if ($selectedAsset.ContainsKey('VersionPolicy')) { $selectedAsset.VersionPolicy } else { $catalog.VersionPolicy })
         AmdGfxTarget = $(if ($selectedBackend -eq 'ROCm') { $AmdGfxTarget } else { $null })
     }
 }

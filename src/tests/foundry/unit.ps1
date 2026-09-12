@@ -53,6 +53,19 @@ $gpuProviderEvidence = Get-FoundryExecutionProviderEvidence -ServerLogs '2026-09
 Assert-Equal $gpuProviderEvidence.SelectedProvider 'DmlExecutionProvider' 'Foundry should retain a conclusive accelerator provider'
 Assert-Equal $gpuProviderEvidence.SelectedDevice 'GPU' 'Foundry should retain the source-managed selected device'
 Assert-True (-not $gpuProviderEvidence.CpuFallback) 'Accelerator provider should not be marked as CPU fallback'
+$webGpuProviderEvidence = Get-FoundryExecutionProviderEvidence -ModelInfo @'
+| Variant         | Model ID       | Device | Execution      | Size   | Cached |
+|                 |                |        | Provider       |        |        |
+|-----------------+----------------+--------+----------------+--------+--------|
+| qwen3-0.6b-gene | qwen3-0.6b-gen | GPU    | WebGpuExecutio | 529 MB | yes    |
+| ric-gpu         | eric-gpu:2     |        | nProvider      |        |        |
+| qwen3-0.6b-gene | qwen3-0.6b-gen | CPU    | CPUExecutionPr | 593 MB | no     |
+| ric-cpu         | eric-cpu:4     |        | ovider         |        |        |
++-----------------+----------------+--------+----------------+--------+--------+
+'@ -ServerLogs "Model qwen3-0.6b-generic-gpu:2`nloaded successfully"
+Assert-Equal $webGpuProviderEvidence.SelectedProvider 'WebGPUExecutionProvider' 'Foundry should prefer the explicit WebGPU selection event over a multi-provider variant table'
+Assert-Equal $webGpuProviderEvidence.SelectedDevice 'GPU' 'Foundry WebGPU selection should report the GPU device'
+Assert-Equal $webGpuProviderEvidence.ObservedProviders.Count 1 'Foundry WebGPU selection should not concatenate fallback table providers'
 Assert-ThrowsLike {
     Get-FoundryExecutionProviderEvidence -ServerLogs 'Available providers: DmlExecutionProvider, CPUExecutionProvider'
 } '*neither the current inference logs nor the selected model variant*' 'Foundry readiness should reject provider availability lists without a selection event'
