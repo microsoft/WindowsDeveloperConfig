@@ -23,6 +23,8 @@ public class ScriptFetchService
         _config = LoadConfig();
     }
 
+    public bool CanRunPowerShellNativeFlows => _config.Source == "local";
+
     private static ExtensionConfig LoadConfig()
     {
         try
@@ -121,6 +123,7 @@ public class ScriptFetchService
                 return null;
             return File.Exists(fullPath) ? fullPath : null;
         }
+
         else
         {
             try

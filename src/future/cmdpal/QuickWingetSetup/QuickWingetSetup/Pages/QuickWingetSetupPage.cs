@@ -66,7 +66,8 @@ internal sealed partial class QuickWingetSetupPage : ListPage
                 // in a wt.exe tab). Hide flows that don't declare Windows
                 // support so users don't pick something the extension
                 // can't actually launch.
-                .Where(s => s.WindowsConfigurationPath is not null)
+                .Where(s => s.WindowsConfigurationPath is not null ||
+                    (_fetchService.CanRunPowerShellNativeFlows && s.WindowsInstallPath is not null))
                 .OrderBy(s => CategoryRank(s.Category))
                 .ThenBy(s => s.Category)
                 .ThenBy(s => s.Name)

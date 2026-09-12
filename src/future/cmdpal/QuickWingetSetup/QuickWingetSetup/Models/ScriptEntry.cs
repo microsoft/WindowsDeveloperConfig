@@ -61,8 +61,7 @@ public class ScriptEntry
 
     /// <summary>
     /// Path to the WinGet DSC configuration the extension applies via
-    /// <c>winget configure</c>. Falls back to a sibling
-    /// <c>configuration.winget</c> next to <c>install</c> when not set.
+    /// <c>winget configure</c>.
     /// </summary>
     public string? WindowsConfigurationPath
     {
@@ -76,17 +75,11 @@ public class ScriptEntry
             {
                 return Windows.Configuration;
             }
-            if (!string.IsNullOrEmpty(Windows.Install))
-            {
-                var dir = System.IO.Path.GetDirectoryName(Windows.Install)?.Replace('\\', '/');
-                if (!string.IsNullOrEmpty(dir))
-                {
-                    return $"{dir}/configuration.winget";
-                }
-            }
             return null;
         }
     }
+
+    public string? WindowsInstallPath => Windows?.Install;
 
     /// <summary>WSL/Linux install script path, e.g. <c>scripts/linux/php/install.sh</c>.</summary>
     public string? LinuxInstallPath => Linux?.Install;

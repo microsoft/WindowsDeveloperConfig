@@ -70,11 +70,14 @@ internal sealed partial class QuickSetupFallbackItem : FallbackCommandItem
                 return;
             }
 
-            var match = _allScripts.FirstOrDefault(s =>
-                s.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                s.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                s.Id.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                s.Tags.Any(t => t.Contains(query, StringComparison.OrdinalIgnoreCase)));
+            var match = _allScripts
+                .Where(s => s.WindowsConfigurationPath is not null ||
+                    (_fetchService.CanRunPowerShellNativeFlows && s.WindowsInstallPath is not null))
+                .FirstOrDefault(s =>
+                    s.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    s.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    s.Id.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                    s.Tags.Any(t => t.Contains(query, StringComparison.OrdinalIgnoreCase)));
 
             if (match != null)
             {
