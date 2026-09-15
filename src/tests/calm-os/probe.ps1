@@ -1,11 +1,10 @@
 # Smoke-test probe for the calm-os user-experience flow.
 #
-# After the master config has been applied, the apps module installs
-# git via winget. The simplest signal a human can use to confirm the
-# flow worked is: does `git --version` exit 0 after the run? If so,
-# the apps module reached completion (git is the first dep in the
-# chain). If not, something tripped during install and the user
-# should look at the install transcript.
+# After the flow has run, the packages phase has installed git via winget.
+# The simplest signal a human can use to confirm the flow worked is: does
+# `git --version` exit 0 afterwards? If so, the packages phase reached
+# completion. If not, something tripped during install and the user should
+# look at devconfig-log.txt next to dev-config.ps1.
 #
 # Output: `OK` if git is on PATH and `git --version` exits 0;
 #         throw otherwise (which the harness surfaces as a failure).

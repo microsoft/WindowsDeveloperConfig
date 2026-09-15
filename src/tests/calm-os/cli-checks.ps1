@@ -12,6 +12,12 @@ function Check($label, [scriptblock]$test) {
 # PowerShell 7
 Check "pwsh --version starts with 7."             { (pwsh --version 2>$null) -match '^PowerShell 7\.' }
 
+# File Explorer & taskbar
+$explorer = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer'
+Check "Explorer shows the full path in its title bar" { (Get-ItemPropertyValue -LiteralPath "$explorer\CabinetState" -Name FullPath -ErrorAction Stop) -eq 1 }
+Check "Quick Access hides frequent folders"           { (Get-ItemPropertyValue -LiteralPath $explorer -Name ShowFrequent -ErrorAction Stop) -eq 0 }
+Check "Taskbar End Task is enabled"                   { (Get-ItemPropertyValue -LiteralPath "$explorer\Advanced\TaskbarDeveloperSettings" -Name TaskbarEndTask -ErrorAction Stop) -eq 1 }
+
 # WSL & VM platform
 Check "wsl --version succeeds"                    { (wsl --version 2>$null) -ne $null }
 Check "vmcompute service registered"              { (Get-Service vmcompute -ErrorAction SilentlyContinue) -ne $null }

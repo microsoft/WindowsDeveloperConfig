@@ -62,6 +62,9 @@
 #     configuration:  (optional) path to winget DSC configuration.winget the
 #                     extension applies via `winget configure`. Defaults to
 #                     "<dir of install>/configuration.winget" when omitted.
+#                     PowerShell-native flows (calm-os, comfort-shell) have no
+#                     DSC document and omit this key; the extension needs a
+#                     script-launch path before it can offer them.
 #     build:          shell command to build the hello world (run from repo
 #                     root). "" to skip.
 #     run:            shell command whose stdout is compared to "expected"
@@ -279,21 +282,21 @@ flows:
 
   - id: calm-os
     name: Calm OS
-    description: Distraction-free dev workstation — apps + OS settings + WSL, all in one DSC
+    description: Distraction-free dev workstation — apps + OS settings + WSL, in one PowerShell run
     category: user-experience
     tags: [user-experience, calm-os, distraction-free, taskbar, wsl, ubuntu]
     icon: 🧘
     onboardingUrl: https://dev.windows.com
-    # Heavy machine-state changes (Sudo, Recall off, Click To Do off, WSL +
-    # Ubuntu install with a forced reboot, etc.) — keep out of the automated
-    # matrix. The probe under src/tests/calm-os/probe.ps1 is for a human running
-    # the flow locally; it asserts that `git` resolves on PATH after the
-    # install (the apps module's first dep) as a fast smoke signal.
+    # PowerShell-native flow: there is no configuration.winget, so the
+    # `configuration` key is omitted (same shape as comfort-shell).
+    # Heavy machine-state changes (Sudo, Developer Mode, WSL + Ubuntu with a
+    # forced reboot) keep it out of the automated matrix. The probe under
+    # src/tests/calm-os/probe.ps1 is for a human running the flow locally; it
+    # asserts that `git` resolves on PATH afterwards as a fast smoke signal.
     manual_test: true
     os: [windows]
     windows:
-      install: windows-dev-config/install.ps1
-      configuration: windows-dev-config/dev-config.winget
+      install: windows-dev-config/dev-config.ps1
       build: ""
       run: pwsh -NoProfile -File src/tests/calm-os/probe.ps1
       expected: src/tests/calm-os/expected.txt

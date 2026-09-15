@@ -99,6 +99,12 @@ If `windows.configuration` is omitted in `manifest.yml`, the extension falls
 back to `<dir of windows.install>/configuration.winget` — i.e. the
 WindowsDevSetupScripts convention.
 
+> **Known gap.** Two flows are PowerShell-native and have no configuration
+> file at all: Calm OS (`calm-os`) and Comfort Shell (`comfort-shell`). The
+> fallback above resolves them to a path that doesn't exist, so the extension
+> can't launch them today. Before this extension ships, teach it to run
+> `windows.install` directly when `windows.configuration` is absent.
+
 ## Confirmation dialog
 
 `winget configure` against a real DSC config can install packages, change
