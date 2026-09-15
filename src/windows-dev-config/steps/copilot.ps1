@@ -13,20 +13,29 @@ function Get-DevConfigCopilotFragmentDir {
 }
 
 function Test-DevConfigCopilotTerminalProfile {
-    $fragmentPath = Join-Path (Get-DevConfigCopilotFragmentDir) 'github-copilot.fragment.json'
-    return Test-Path -LiteralPath $fragmentPath
+    $fragmentsDir = Get-DevConfigCopilotFragmentDir
+    $fragmentPath = Join-Path $fragmentsDir 'github-copilot.fragment.json'
+    if (-not (Test-Path -LiteralPath $fragmentPath)) {
+        return $false
+    }
+    $fragment = (Read-DevConfigTextFile -Path $fragmentPath) | ConvertFrom-Json
+    $profiles = @($fragment.profiles | Where-Object { $_.guid -eq $Script:CopilotFragmentGuid })
+    if ($profiles.Count -ne 1) {
+        return $false
+    }
+    $icon = $profiles[0].PSObject.Properties['icon']
+    return (-not $icon) -or ($icon.Value -eq (Join-Path $fragmentsDir 'copilot.png'))
 }
 
 function Set-DevConfigCopilotTerminalProfile {
     $fragmentsDir = Get-DevConfigCopilotFragmentDir
     New-Item -ItemType Directory -Path $fragmentsDir -Force | Out-Null
 
-    # The icon is colocated with the fragment so the relative path resolves; download failure is non-fatal.
     $iconPath = Join-Path $fragmentsDir 'copilot.png'
-    $iconName = $null
+    $icon = $null
     try {
         Invoke-WebRequest -Uri 'https://github.githubassets.com/favicons/favicon-dark.png' -OutFile $iconPath -UseBasicParsing -TimeoutSec 60
-        $iconName = 'copilot.png'
+        $icon = $iconPath
     } catch {
         Write-Host "  (Couldn't download the Copilot icon -- the profile will use the default one.)"
     }
@@ -39,8 +48,8 @@ function Set-DevConfigCopilotTerminalProfile {
         hidden            = $false
         tabTitle          = 'Copilot'
     }
-    if ($iconName) {
-        $profileEntry['icon'] = $iconName
+    if ($icon) {
+        $profileEntry['icon'] = $icon
     }
     $fragment = @{ profiles = @($profileEntry) }
 
