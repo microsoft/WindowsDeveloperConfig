@@ -66,11 +66,11 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 & ([scriptblock]::Create((irm $url))) -AllowUnsigned
 ```
 
-You'll get one UAC prompt. Expect about 30 minutes on a clean machine.
+If you're not already elevated, setup requests UAC consent before starting. It requests consent again when resuming after a reboot. Expect about 30 minutes on a clean machine.
 
 > `-AllowUnsigned` runs the source copy under `src/` instead of the signed copy at the repository root.
 
-> ⚠️ **It will restart your machine, once.** Enabling WSL needs a Windows optional feature that requires a restart. You get a 10-second warning, and a scheduled task finishes the run automatically after you sign back in. **Save your work before you start.**
+> ⚠️ **It will restart your machine, once.** Enabling WSL needs a Windows optional feature that requires a restart. You get a 10-second warning, and a scheduled task resumes setup after you sign back in and accept the UAC prompt. **Save your work before you start.**
 
 <details>
 <summary><strong>What you get</strong></summary>
