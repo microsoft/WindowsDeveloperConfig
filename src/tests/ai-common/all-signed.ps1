@@ -77,7 +77,7 @@ function Invoke-AllSignedProcess {
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $sourceRoot = Join-Path $repositoryRoot 'src\Workloads'
 $releaseRoot = Join-Path $repositoryRoot 'Workloads'
-$flows = @('cuda', 'rocm', 'intel-ai', 'foundry', 'pytorch', 'llama.cpp', 'ollama')
+$flows = @('cuda', 'rocm', 'intel-ai', 'foundry', 'pytorch', 'local-ai', 'llama.cpp', 'ollama')
 $shells = @(Get-TestPowerShellHosts)
 $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
 

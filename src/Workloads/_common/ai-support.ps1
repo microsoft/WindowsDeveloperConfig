@@ -1537,6 +1537,18 @@ function Get-LlamaModelSmokePlan {
     }
 }
 
+function Get-LlamaCodingDemoPlan {
+    return [pscustomobject]@{
+        Repository = 'Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF'
+        Revision = 'f86cb2c1fa58255f8052cc32aeede1b7482d4361'
+        FileName = 'qwen2.5-coder-1.5b-instruct-q4_k_m.gguf'
+        Url = 'https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/f86cb2c1fa58255f8052cc32aeede1b7482d4361/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf?download=true'
+        Sha256 = 'cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046'
+        Size = 1117320768
+        License = 'Apache-2.0'
+    }
+}
+
 function New-OllamaGenerateRequest {
     [CmdletBinding()]
     param(

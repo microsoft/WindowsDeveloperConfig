@@ -127,6 +127,7 @@ Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
     expectedStableSource = $component.ExpectedStableSource
     migrationTrigger = $component.MigrationTrigger
     cleanupUpgrade = $component.CleanupUpgrade
+    promotionCandidate = Get-AiCatalogValue -Entry $component -Name 'PromotionCandidate'
     action = if ($PlanOnly) { 'planned' } else { 'pending' }
 })
 
@@ -209,13 +210,13 @@ if ($SkipWorkloadSmoke -or -not $readiness.GpuReady) {
     }
 }
 
-if ($plan.Preview) {
-    Write-Warning 'CUDA 13.4 for Windows ARM64 is an NVIDIA Developer Preview and is not intended for production certification or benchmarking.'
-}
 Add-AiReportPhase -Report $report -Name 'cuda-toolkit' -Status 'ready' -Evidence @{
     nvcc = $nvcc
     nvccVersion = $nvccVersionEvidence
     driver = $driver
+}
+if ($plan.Preview) {
+    Write-Warning 'CUDA 13.4 for Windows ARM64 is an NVIDIA Developer Preview and is not intended for production certification or benchmarking.'
 }
 Complete-AiWorkloadReport -Report $report -Ready $kernelReady -Path $ReportPath
 Write-Host 'INSTALL_OK: cuda'

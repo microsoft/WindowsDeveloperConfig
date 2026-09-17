@@ -339,6 +339,22 @@ flows:
       expected: src/tests/intel-ai/expected.txt
       version: "& \"$env:LOCALAPPDATA\\DevConfig\\intel-ai\\openvino\\.venv\\Scripts\\python.exe\" -c \"import openvino; print(openvino.__version__)\""
 
+  - id: local-ai
+    name: Local AI development
+    description: Scenario entry point for hardware detection, contained PyTorch/Triton, and an optional local model runtime
+    category: scenarios
+    tags: [ai, scenario, pytorch, triton, local-models, cuda, rocm, xpu]
+    icon: 🤖
+    onboardingUrl: https://learn.microsoft.com/windows/ai/
+    manual_test: true
+    os: [windows]
+    windows:
+      install: Workloads/local-ai/install.ps1
+      build: ""
+      run: pwsh -NoProfile -File src/tests/pytorch/probe.ps1
+      expected: src/tests/local-ai/expected.txt
+      version: "& \"$env:LOCALAPPDATA\\DevConfig\\pytorch\\.venv\\Scripts\\python.exe\" -c \"import torch; print(torch.__version__)\""
+
   - id: sql
     name: Lightweight SQL Developer
     description: SQL Server Developer + sqlcmd + VS Code SQL database projects extension

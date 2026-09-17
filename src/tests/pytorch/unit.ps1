@@ -29,6 +29,12 @@ Assert-Equal $n1x.Backend 'CUDA' 'RTX Spark N1X ARM64 should select CUDA'
 Assert-Equal $n1x.Runtime 'cu134' 'RTX Spark N1X should use CUDA 13.4 wheel'
 Assert-True ($n1x.TorchRequirement -like 'torch @ https://pypi.nvidia.com/*win_arm64.whl#sha256=*') 'N1X torch wheel should be direct, native, official, and hash pinned'
 Assert-True $n1x.InstallTriton 'Compatible ARM64 CUDA preview should run Triton verification'
+$nvidiaStableCandidate = (Get-AiCatalogData).Components.NvidiaPyTorchArm64.PromotionCandidate
+Assert-Equal $nvidiaStableCandidate.IndexUrl 'https://pypi.nvidia.com/nvtorch_oot/' 'ARM64 PyTorch should track the NVIDIA stable out-of-tree channel'
+Assert-Equal $nvidiaStableCandidate.TorchSha256 '4f781babc0e0e0722cc48d0b15107a28e6003fc2b6544f1578b6eb6f5177dcb5' 'Stable ARM64 torch candidate should retain its published hash'
+Assert-Equal $nvidiaStableCandidate.TorchvisionSha256 'e935037b6a97c32642d47f73da8cf62acf6453bfe15825314f774f62ec395d26' 'Stable ARM64 torchvision candidate should retain its published hash'
+Assert-Equal $nvidiaStableCandidate.TorchaudioSha256 'e4f18fa7359528416964d525ba620a0ca95ad231d6ab573b26c8b09c6ea8bf6b' 'Stable ARM64 torchaudio candidate should retain its published hash'
+Assert-True ($nvidiaStableCandidate.TrackingStatus -match 'awaiting N1X') 'Stable NVIDIA tuple should remain gated on N1X tensor/Triton qualification'
 
 $rocm = Resolve-PyTorchPlan -Architecture X64 -Backend Auto -PythonVersion 3.13 `
     -GpuVendor AMD -AmdGpuName 'AMD Radeon RX 9070 XT' -AmdGfxTarget gfx1201

@@ -60,6 +60,7 @@ Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
     expectedStableSource = $component.ExpectedStableSource
     migrationTrigger = $component.MigrationTrigger
     cleanupUpgrade = $component.CleanupUpgrade
+    promotionCandidate = $component.PromotionCandidate
     action = $package.Action
     packageEvidence = $(if ($PlanOnly) { $null } else { $package.Evidence })
 })

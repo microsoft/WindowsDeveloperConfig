@@ -34,6 +34,16 @@ array = (tensor * 2).cpu().numpy()
 if not numpy.array_equal(array, numpy.array([2.0, 4.0])):
     raise RuntimeError(f"Unexpected NumPy bridge result: {array}")
 
+model = torch.nn.Sequential(
+    torch.nn.Linear(2, 4),
+    torch.nn.ReLU(),
+    torch.nn.Linear(4, 1),
+).to(device)
+with torch.no_grad():
+    model_result = model(torch.tensor([[1.0, 2.0]], device=device)).cpu().item()
+if not numpy.isfinite(model_result):
+    raise RuntimeError(f"Minimal neural-network forward pass was not finite: {model_result}")
+
 details = {
     "backend": args.backend,
     "vendor": {
@@ -54,5 +64,6 @@ details = {
     "tensor_device_type": tensor.device.type,
     "device_index": args.device_index,
     "tensor_operation_verified": True,
+    "model_forward_verified": True,
 }
 print("PYTORCH_SMOKE=" + json.dumps(details, sort_keys=True))

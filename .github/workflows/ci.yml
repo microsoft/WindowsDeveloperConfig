@@ -46,7 +46,7 @@ jobs:
                 $_.FullName, [ref]$tokens, [ref]$errors)
               if ($errors) { throw "$($_.FullName): $($errors -join '; ')" }
             }
-          foreach ($id in 'ai-common','cuda','rocm','intel-ai','foundry','pytorch','llama.cpp','ollama') {
+          foreach ($id in 'ai-common','cuda','rocm','intel-ai','foundry','pytorch','local-ai','llama.cpp','ollama') {
             & "./src/tests/$id/unit.ps1"
           }
           & "./src/tests/ai-common/all-signed.ps1"
@@ -57,6 +57,14 @@ jobs:
           python -m pip install --disable-pip-version-check --quiet pyyaml jsonschema
           python -c "import json,yaml; json.load(open('src/docs/ai-workload-report.schema.json', encoding='utf-8')); yaml.safe_load(open('src/manifest.yml', encoding='utf-8-sig')); print('AI data files valid')"
 
+      - name: Run AI unit tests in Windows PowerShell
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($id in 'ai-common','cuda','rocm','intel-ai','foundry','pytorch','local-ai','llama.cpp','ollama') {
+            & "./src/tests/$id/unit.ps1"
+          }
+
       - name: Exercise non-mutating AI plans and validate reports
         shell: pwsh
         run: |
@@ -65,10 +73,11 @@ jobs:
           foreach ($id in 'cuda','rocm','intel-ai','foundry','pytorch','llama.cpp','ollama') {
             & "./src/Workloads/$id/install.ps1" -PlanOnly -ReportPath "./ai-reports/$id.json"
           }
+          & "./src/Workloads/local-ai/install.ps1" -PlanOnly -ReportRoot "./ai-reports/local-ai"
           @'
           import glob, json, jsonschema
           schema = json.load(open("src/docs/ai-workload-report.schema.json", encoding="utf-8"))
-          for path in glob.glob("ai-reports/*.json"):
+          for path in glob.glob("ai-reports/**/*.json", recursive=True):
               with open(path, encoding="utf-8-sig") as handle:
                   jsonschema.validate(json.load(handle), schema)
               print("OK:", path)

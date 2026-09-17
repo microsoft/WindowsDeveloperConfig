@@ -199,6 +199,7 @@ Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
     expectedStableSource = $component.ExpectedStableSource
     migrationTrigger = $component.MigrationTrigger
     cleanupUpgrade = $component.CleanupUpgrade
+    promotionCandidate = Get-AiCatalogValue -Entry $component -Name 'PromotionCandidate'
     nativeToolkitRequired = $component.NativeToolkitRequired
     nativeToolkitRelationship = $component.NativeToolkitRelationship
     action = $(if ($PlanOnly) { 'planned' } else { 'pending' })
@@ -341,9 +342,10 @@ if ($packageAction -eq 'VerifyOnly') {
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'check') -DisplayName 'PyTorch dependency check'
 }
 
-$tensorResult = Invoke-DevConfigNativeCommand -FilePath $venvPython -Arguments @(
+$tensorArguments = @(
     (Join-Path $PSScriptRoot 'smoke.py'), '--backend', $plan.Backend, '--device-index', $DeviceIndex
 )
+$tensorResult = Invoke-DevConfigNativeCommand -FilePath $venvPython -Arguments $tensorArguments
 $tensorEvidence = $tensorResult.Output.Trim()
 if ($tensorResult.ExitCode -ne 0) {
     throw "PyTorch $($plan.Backend) tensor smoke failed: $tensorEvidence"

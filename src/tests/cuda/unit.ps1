@@ -23,6 +23,11 @@ Assert-Equal $armPlan.Method 'NvidiaInstaller' 'CUDA ARM64 should use NVIDIA dev
 Assert-Equal $armPlan.ToolkitVersion '13.4' 'CUDA ARM64 should select toolkit 13.4'
 Assert-Equal $armPlan.InstallerSha256 'a1f68c81160b16d519c4087788b9c07de41306c3f1b872471ceee0996621374d' 'CUDA ARM64 installer should be checksum pinned'
 Assert-True ($armPlan.InstallerUrl -like 'https://packages.nvidia.com/prerelease/*windows_arm64.exe') 'CUDA ARM64 installer should use NVIDIA prerelease origin'
+$cudaCandidate = (Get-AiCatalogData).Components.CudaArm64.PromotionCandidate
+Assert-Equal $cudaCandidate.Version '13.4.1' 'CUDA ARM64 should track the official stable direct candidate'
+Assert-Equal $cudaCandidate.Sha256 '39af79e5e136c4e0de03bba816bda60fd7b70aad033e37ecaacf9f2e2c982442' 'CUDA 13.4.1 candidate should retain the verified installer hash'
+Assert-Equal $cudaCandidate.Size 3711598920 'CUDA 13.4.1 candidate should retain the verified installer size'
+Assert-True ($cudaCandidate.TrackingStatus -match 'awaiting N1X') 'CUDA stable candidate should remain gated on real workload qualification'
 
 $compile = Get-CudaKernelCompileCommand `
     -Architecture Arm64 `

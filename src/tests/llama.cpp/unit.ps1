@@ -178,6 +178,12 @@ $arguments = Get-LlamaInferenceArguments -ModelPath 'C:\models\qwen.gguf' -Marke
 Assert-True (($arguments -join ' ') -like '*--grammar*DEVCONFIG_LLAMA_READY*') 'llama.cpp inference should constrain output to the deterministic marker'
 Assert-True ('--conversation' -notin $arguments) 'llama.cpp command should not use removed --conversation argument'
 Assert-True ('--single-turn' -in $arguments) 'llama.cpp command should exit after the predefined prompt'
+$codingModel = Get-LlamaCodingDemoPlan
+Assert-Equal $codingModel.Revision 'f86cb2c1fa58255f8052cc32aeede1b7482d4361' 'Coding demo should use an immutable official Qwen revision'
+Assert-Equal $codingModel.Sha256 'cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046' 'Coding demo GGUF should be checksum pinned from the downloaded immutable artifact'
+Assert-Equal $codingModel.Size 1117320768 'Coding demo should record the exact optional model size'
+$codingScript = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\llama.cpp\coding-demo.ps1') -Raw
+Assert-True ($codingScript -match 'CODING_DEMO_READY') 'Optional coding demo should emit a clear readiness marker'
 $nativeProbePath = Join-Path $env:TEMP "devconfig-native-probe-$([guid]::NewGuid().ToString('N')).ps1"
 try {
     @(

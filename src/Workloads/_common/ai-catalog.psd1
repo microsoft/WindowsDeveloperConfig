@@ -21,56 +21,88 @@
             Component = 'NVIDIA CUDA Toolkit'
             Vendor = 'NVIDIA'
             Architectures = @('Arm64')
-            Maturity = 'developer-preview'
+            Maturity = 'qualified-interim-developer-preview'
             SourceType = 'direct'
             Version = '13.4.0'
             Artifact = 'cuda_13.4.0_windows_arm64.exe'
             Uri = 'https://packages.nvidia.com/prerelease/cuda/13.4.0/local_installers/cuda_13.4.0_windows_arm64.exe'
             Sha256 = 'a1f68c81160b16d519c4087788b9c07de41306c3f1b872471ceee0996621374d'
-            VersionPolicy = 'exact qualified preview'
-            Integrity = 'Pinned SHA-256 plus exact Microsoft-trusted NVIDIA Authenticode signer'
+            VersionPolicy = 'exact N1X-qualified interim release'
+            Integrity = 'Pinned SHA-256 plus valid NVIDIA Corporation Authenticode signature'
             CachePath = '%ProgramData%\WindowsDeveloperConfig\cache\nvidia-cuda\13.4.0'
             InstallPath = '%ProgramFiles%\NVIDIA GPU Computing Toolkit\CUDA\v13.4'
-            NormalChannelLimitation = 'Nvidia.CUDA does not currently publish a Windows ARM64 installer'
-            ExpectedStableSource = 'Nvidia.CUDA (ARM64 architecture support unconfirmed)'
-            MigrationTrigger = 'WinGet manifest for Nvidia.CUDA publishes ARM64 and passes the N1X kernel acceptance'
-            CleanupUpgrade = 'Install newer qualified version side-by-side, validate, then use NVIDIA uninstaller for old preview'
+            NormalChannelLimitation = 'Nvidia.CUDA WinGet has no ARM64 payload; stable 13.4.1 direct installer is discovered but not yet N1X workload-qualified'
+            ExpectedStableSource = 'NVIDIA stable CUDA direct download, then Nvidia.CUDA ARM64 if published'
+            MigrationTrigger = 'CUDA 13.4.1 passes N1X nvcc compile/kernel and PyTorch Triton JIT acceptance'
+            CleanupUpgrade = 'Qualify newer version side-by-side, then use NVIDIA uninstaller for the old interim release'
+            PromotionCandidate = @{
+                Version = '13.4.1'
+                Maturity = 'official-stable-direct-candidate'
+                Artifact = 'cuda_13.4.1_windows_arm64.exe'
+                Uri = 'https://developer.download.nvidia.com/compute/cuda/13.4.1/local_installers/cuda_13.4.1_windows_arm64.exe'
+                Sha256 = '39af79e5e136c4e0de03bba816bda60fd7b70aad033e37ecaacf9f2e2c982442'
+                Size = 3711598920
+                Authenticity = 'Valid NVIDIA Corporation Authenticode signature verified'
+                TrackingStatus = 'awaiting N1X kernel and Triton qualification'
+            }
         }
         FoundryLocal = @{
             Component = 'Foundry Local'
             Vendor = 'Microsoft'
             Architectures = @('X64', 'Arm64')
-            Maturity = 'preview'
+            Maturity = 'qualified-preview'
             SourceType = 'winget'
             PackageId = 'Microsoft.FoundryLocal'
-            VersionPolicy = 'latest applicable preview package'
+            VersionPolicy = 'latest applicable qualified preview package'
             Integrity = 'WinGet manifest SHA-256 and MSIX signature'
             CachePath = 'Foundry cache reported by foundry cache location'
             InstallPath = 'Per-user MSIX'
-            NormalChannelLimitation = 'The product is still public preview'
-            ExpectedStableSource = 'Microsoft.FoundryLocal'
-            MigrationTrigger = 'Microsoft marks the CLI/package GA and real inference acceptance passes'
-            CleanupUpgrade = 'WinGet upgrade; foundry cache remove for model cleanup'
+            NormalChannelLimitation = 'WinGet remains 0.10.3 preview; official v2.0.1 is a candidate with a new SDK/API and is not yet workload-qualified'
+            ExpectedStableSource = 'Official Foundry Local v2 release or a current stable Microsoft.FoundryLocal package'
+            MigrationTrigger = 'v2.0.1 passes x64/ARM64 installation, provider registration, cached rerun, and real model inference'
+            CleanupUpgrade = 'Preserve model cache while replacing the qualified runtime'
+            PromotionCandidate = @{
+                Version = '2.0.1'
+                Maturity = 'official-non-prerelease-candidate; Python package metadata remains alpha'
+                Repository = 'microsoft/Foundry-Local'
+                PythonRequirement = 'foundry-local-sdk==2.0.1'
+                X64Asset = 'foundry-local-win-x64.zip'
+                X64Sha256 = '0551db07d5cba6a523e4c1832f0d38e023301ab67b946378239f8cee156ba5a4'
+                Arm64Asset = 'foundry-local-win-arm64.zip'
+                Arm64Sha256 = '2fa8510281cfaa554e21ffae8de41366a08051bce92fd592b919bc4413b57b09'
+                TrackingStatus = 'awaiting v2 CLI/SDK migration and x64/ARM64 real inference qualification'
+            }
         }
         NvidiaPyTorchArm64 = @{
             Component = 'PyTorch CUDA for Windows ARM64'
             Vendor = 'NVIDIA/PyTorch'
             Architectures = @('Arm64')
-            Maturity = 'nightly-developer-preview'
+            Maturity = 'qualified-interim-nightly'
             SourceType = 'direct-python-wheel'
             Version = '2.15.0.dev20260904+cu134'
             Uri = 'https://pypi.nvidia.com/nvtorch_oot_nightly/torch/torch-2.15.0.dev20260904%2Bcu134-cp313-cp313-win_arm64.whl'
             Sha256 = 'af0872854d183cb6894dbd5b1e5e9291875ce139d138b5fc0b501498828265d3'
-            VersionPolicy = 'exact hardware-qualified nightly'
+            VersionPolicy = 'exact N1X-qualified interim nightly'
             Integrity = 'Pinned SHA-256; dependencies resolve from the configured primary Python index'
             CachePath = '%LOCALAPPDATA%\DevConfig\pytorch\wheel-cache'
             InstallPath = '%LOCALAPPDATA%\DevConfig\pytorch\.venv'
-            NormalChannelLimitation = 'Official stable PyTorch indexes do not publish win_arm64 CUDA wheels'
-            ExpectedStableSource = 'https://download.pytorch.org/whl/cu* (Windows ARM64 channel unconfirmed)'
-            MigrationTrigger = 'Stable PyTorch index publishes a win_arm64 CUDA wheel and N1X tensor/Triton acceptance passes'
+            NormalChannelLimitation = 'Stable NVIDIA nvtorch_oot tuple is published but has not yet passed the N1X tensor/Triton qualification'
+            ExpectedStableSource = 'NVIDIA stable nvtorch_oot index'
+            MigrationTrigger = 'Stable 2.14.0 cu134 trio passes imports, N1X CUDA tensor, and Triton vector-add'
             CleanupUpgrade = 'Replace contained venv; retain only qualified wheel cache entries'
             NativeToolkitRequired = $false
             NativeToolkitRelationship = 'The wheel carries the CUDA runtime. The standalone cuda flow is for native CUDA development; this setup acquires compiler/toolkit components only for supported Triton JIT.'
+            PromotionCandidate = @{
+                Maturity = 'official-out-of-tree-stable-candidate'
+                IndexUrl = 'https://pypi.nvidia.com/nvtorch_oot/'
+                Torch = 'torch==2.14.0+cu134'
+                TorchSha256 = '4f781babc0e0e0722cc48d0b15107a28e6003fc2b6544f1578b6eb6f5177dcb5'
+                Torchvision = 'torchvision==0.29.0+cu134'
+                TorchvisionSha256 = 'e935037b6a97c32642d47f73da8cf62acf6453bfe15825314f774f62ec395d26'
+                Torchaudio = 'torchaudio==2.11.0+cu134'
+                TorchaudioSha256 = 'e4f18fa7359528416964d525ba620a0ca95ad231d6ab573b26c8b09c6ea8bf6b'
+                TrackingStatus = 'awaiting N1X trio import, tensor, and Triton qualification'
+            }
         }
         PyTorchCpu = @{
             Component = 'PyTorch CPU'
@@ -377,7 +409,7 @@
         @{
             Id = 'cuda-nvidia-arm64'
             Workload = 'cuda'; Architecture = 'Arm64'; Vendor = 'NVIDIA'; DeviceFamily = 'RTX Spark-class CC12.x'; Backend = 'CUDA'
-            Status = 'implemented-supported'; Maturity = 'developer-preview'; Acquisition = @('component:CudaArm64', 'winget:Microsoft.VisualStudio.2022.BuildTools')
+            Status = 'implemented-supported'; Maturity = 'qualified-interim-developer-preview'; Acquisition = @('component:CudaArm64', 'winget:Microsoft.VisualStudio.2022.BuildTools')
             Prerequisites = 'Windows 11, driver 616+, RTX Spark-class NVIDIA GPU'
             Resolver = 'Resolve-CudaInstallPlan'; ResolverArguments = @{ Architecture = 'Arm64'; WindowsBuild = 28120 }; Expected = @{ Method = 'NvidiaInstaller'; ToolkitVersion = '13.4' }
             ProbePath = 'src/Workloads/cuda/smoke.cu'; ReportEvidence = 'pinned installer hash/signature, ARM64 compiler, nvcc, N1X driver/device, executed kernel'
@@ -467,7 +499,7 @@
         @{
             Id = 'pytorch-cuda-arm64'
             Workload = 'pytorch'; Architecture = 'Arm64'; Vendor = 'NVIDIA'; DeviceFamily = 'RTX Spark-class CC12.x'; Backend = 'CUDA'
-            Status = 'implemented-supported'; Maturity = 'nightly-developer-preview'; Acquisition = @('component:NvidiaPyTorchArm64', 'winget:Python.Python.3.13')
+            Status = 'implemented-supported'; Maturity = 'qualified-interim-nightly'; Acquisition = @('component:NvidiaPyTorchArm64', 'winget:Python.Python.3.13')
             Prerequisites = 'CPython 3.13, driver 616+, compute capability 12.x'
             Resolver = 'Resolve-PyTorchPlan'; ResolverArguments = @{ Architecture = 'Arm64'; Backend = 'CUDA'; PythonVersion = '3.13'; HasNvidia = $true; DriverMajor = 616; ComputeCapability = '12.1'; GpuName = 'NVIDIA RTX Spark N1X' }; Expected = @{ Backend = 'CUDA'; Runtime = 'cu134' }
             ProbePath = 'src/Workloads/pytorch/smoke.py'; ReportEvidence = 'pinned wheel hash, N1X device, torch CUDA 13.4 tensor'
@@ -503,7 +535,7 @@
         @{
             Id = 'triton-cuda-arm64'
             Workload = 'pytorch-triton'; Architecture = 'Arm64'; Vendor = 'NVIDIA'; DeviceFamily = 'RTX Spark CC12.x'; Backend = 'CUDA'
-            Status = 'implemented-supported'; Maturity = 'community-on-preview'; Acquisition = @('component:NvidiaPyTorchArm64', 'component:TritonWindows')
+            Status = 'implemented-supported'; Maturity = 'community-stable-on-qualified-interim'; Acquisition = @('component:NvidiaPyTorchArm64', 'component:TritonWindows')
             Prerequisites = 'Qualified ARM64 PyTorch CUDA preview, MSVC ARM64, CUDA 13.4'
             Resolver = 'Resolve-PyTorchPlan'; ResolverArguments = @{ Architecture = 'Arm64'; Backend = 'CUDA'; PythonVersion = '3.13'; HasNvidia = $true; DriverMajor = 616; ComputeCapability = '12.1'; GpuName = 'NVIDIA RTX Spark N1X' }; Expected = @{ InstallTriton = $true }
             ProbePath = 'src/Workloads/pytorch/triton-smoke.py'; ReportEvidence = 'triton-windows version and N1X vector-add JIT kernel'
@@ -602,7 +634,7 @@
         @{
             Id = 'foundry-source-managed-x64'
             Workload = 'foundry'; Architecture = 'X64'; Vendor = 'Source-managed'; DeviceFamily = 'WinML provider selected by Foundry'; Backend = 'WinML'
-            Status = 'source-managed'; Maturity = 'preview'; Acquisition = @('component:FoundryLocal')
+            Status = 'source-managed'; Maturity = 'qualified-preview'; Acquisition = @('component:FoundryLocal')
             Prerequisites = 'Windows 11 build 26100+'
             Resolver = 'Resolve-FoundryInstallPlan'; ResolverArguments = @{ Architecture = 'X64'; WindowsBuild = 26100 }; Expected = @{ PackageId = 'Microsoft.FoundryLocal'; RequiresCuda = $false }
             ProbePath = 'src/Workloads/foundry/install.ps1'; ReportEvidence = 'resolved package variant, model inference, actual execution provider/device, truthful CPU fallback'
@@ -611,7 +643,7 @@
         @{
             Id = 'foundry-source-managed-arm64'
             Workload = 'foundry'; Architecture = 'Arm64'; Vendor = 'Source-managed'; DeviceFamily = 'WinML provider selected by Foundry'; Backend = 'WinML'
-            Status = 'source-managed'; Maturity = 'preview'; Acquisition = @('component:FoundryLocal')
+            Status = 'source-managed'; Maturity = 'qualified-preview'; Acquisition = @('component:FoundryLocal')
             Prerequisites = 'Windows 11 build 26100+'
             Resolver = 'Resolve-FoundryInstallPlan'; ResolverArguments = @{ Architecture = 'Arm64'; WindowsBuild = 26100 }; Expected = @{ PackageId = 'Microsoft.FoundryLocal'; RequiresCuda = $false }
             ProbePath = 'src/Workloads/foundry/install.ps1'; ReportEvidence = 'resolved package variant, model inference, actual execution provider/device, truthful CPU fallback'

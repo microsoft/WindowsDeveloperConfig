@@ -18,6 +18,11 @@ Assert-ThrowsLike {
 $first = Resolve-FoundryInstallPlan -Architecture Arm64 -WindowsBuild 26100
 $repeat = Resolve-FoundryInstallPlan -Architecture Arm64 -WindowsBuild 26100
 Assert-Equal ($repeat | ConvertTo-Json -Compress) ($first | ConvertTo-Json -Compress) 'Foundry plan should be idempotent'
+$foundryCandidate = (Get-AiCatalogData).Components.FoundryLocal.PromotionCandidate
+Assert-Equal $foundryCandidate.Version '2.0.1' 'Foundry should track the latest official non-prerelease candidate'
+Assert-Equal $foundryCandidate.X64Sha256 '0551db07d5cba6a523e4c1832f0d38e023301ab67b946378239f8cee156ba5a4' 'Foundry v2 x64 candidate should retain its release hash'
+Assert-Equal $foundryCandidate.Arm64Sha256 '2fa8510281cfaa554e21ffae8de41366a08051bce92fd592b919bc4413b57b09' 'Foundry v2 ARM64 candidate should retain its release hash'
+Assert-True ($foundryCandidate.Maturity -match 'candidate') 'Foundry v2 should remain a tracked candidate until the migrated workload is qualified'
 
 $model = Get-FoundryModelSmokePlan
 Assert-Equal $model.Model 'qwen3-0.6b' 'Foundry should use the tested small catalog model'
