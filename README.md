@@ -77,7 +77,7 @@ If you're not already elevated, setup requests UAC consent before starting. It r
 
 - **Dev tools:** Windows Terminal, PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14 + uv, Node.js LTS + nvm, Coreutils for Windows, Windows App CLI, Oh My Posh, and PowerToys.
 - **Terminal:** PowerShell 7 as the default profile, Oh My Posh in your prompt, Cascadia Mono NF as the default font, and a GitHub Copilot profile in the dropdown.
-- **Windows settings:** Dark theme, Developer Mode, Sudo, long paths, File Explorer defaults, Start/Search cleanup, Do Not Disturb, widgets off, and Edge policies.
+- **Windows settings:** Dark theme, Developer Mode, Sudo, long paths, File Explorer defaults, Show Seconds In Time in the Taskbar, Start/Search cleanup, Do Not Disturb, widgets off, and Edge policies.
 - **WSL:** WSL platform + Ubuntu, including the restart and the automatic resume afterwards.
 
 </details>
