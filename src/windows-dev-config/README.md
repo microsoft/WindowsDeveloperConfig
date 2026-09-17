@@ -37,7 +37,7 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 You'll get one UAC prompt before setup and another after the restart.
 
-Bootstrap verifies Microsoft signatures without publisher-trust prompts. Organization-enforced execution policies may block setup.
+Bootstrap avoids publisher-trust prompts by default. Organization policy can require them (`AllSigned`) or block setup (`Restricted`).
 
 <details>
 <summary><strong>What the command does</strong></summary>
@@ -48,7 +48,7 @@ Bootstrap verifies Microsoft signatures without publisher-trust prompts. Organiz
 2. Verifies the downloaded security helper, then downloads the repository ZIP into an administrator-protected temporary directory.
 3. Verifies the Microsoft Corporation signature on every `.ps1` in the repository-root `windows-dev-config/` folder.
 4. Copies [`dev-config.ps1`](./dev-config.ps1) and [`steps/`](./steps) to `%ProgramData%\CalmOS`. Administrators/SYSTEM own and can modify the files; ordinary users have read/execute access.
-5. Rechecks permissions and signatures, unblocks files, removes temporary downloads, and launches with process-scoped `RemoteSigned`.
+5. Rechecks permissions and signatures, unblocks files, removes temporary downloads, and launches setup.
 
 Files stay on disk so setup can load its helpers and resume after reboot.
 
@@ -309,7 +309,7 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 **Protected files.** Administrators/SYSTEM own the setup and download directories and have write access. Ordinary users have read/execute access only. Unsafe permissions and reparse points are rejected, not repaired.
 
-**Execution policy.** Production uses process-scoped `RemoteSigned` for every launch, including PowerShell 7 relaunches and reboot resume. Verified files are unblocked to avoid publisher-trust prompts. Saved policies and Trusted Publishers are unchanged. Organization-enforced `AllSigned` or `Restricted` blocks bootstrap. `-AllowUnsigned` leaves execution policy to the environment.
+**Execution policy.** Production requests process-scoped `RemoteSigned` for all launches, including PowerShell 7 relaunches and reboot resume. Verified files are unblocked to avoid publisher-trust prompts. Organization policy takes precedence: `AllSigned` may still prompt; `Restricted` blocks setup. Setup does not change saved policies or add trusted publishers. `-AllowUnsigned` leaves execution policy unchanged.
 
 **What it does not do.** It doesn't collect or send telemetry, doesn't sign you in to anything, doesn't change credentials or Windows Defender settings, and doesn't touch files in your user profile beyond the PowerShell profile and Windows Terminal settings described above.
 

@@ -10,8 +10,8 @@
   Elevates, verifies Microsoft signatures, and installs the repository-root release
   under %ProgramData%\CalmOS with Administrator/SYSTEM write access.
   Files stay on disk for helper loading and reboot resume.
-  Production launches use process-scoped RemoteSigned. -AllowUnsigned selects src/,
-  skips signature verification, and leaves execution policy to the environment.
+  Production requests process-scoped RemoteSigned. -AllowUnsigned uses src/ without
+  signature checks or execution-policy changes.
 
   To select a branch or tag:
 
@@ -57,8 +57,8 @@ function Invoke-CalmOsBootstrap {
     foreach ($scope in @('MachinePolicy', 'UserPolicy')) {
         $policy = Get-ExecutionPolicy -Scope $scope
         if ($policy -ne 'Undefined') {
-            if ($policy -in @('AllSigned', 'Restricted')) {
-                throw "Organization policy ($scope) requires $policy. Prompt-free setup is unavailable; contact your administrator."
+            if ($policy -eq 'Restricted') {
+                throw "Organization policy ($scope) requires $policy. Script execution is disabled; contact your administrator."
             }
             break
         }
