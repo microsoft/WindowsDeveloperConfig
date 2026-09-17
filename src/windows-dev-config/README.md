@@ -28,30 +28,31 @@ It is **idempotent** — every change is checked before it's made, so re-running
 
 ## Quick start
 
-First [configure unsigned development](#running-it-other-ways), then run this in Windows PowerShell 5.1 or PowerShell 7. Elevation is optional:
+Run this in Windows PowerShell 5.1 or PowerShell 7. Bootstrap requests elevation when needed:
 
 ```powershell
 $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
-& ([scriptblock]::Create((irm $url))) -AllowUnsigned
+& ([scriptblock]::Create((irm $url)))
 ```
 
 You'll get one UAC prompt before setup and another after the restart.
 
-> `-AllowUnsigned` runs the source copy under `src/` instead of the signed copy at the repository root.
+Bootstrap verifies Microsoft signatures without publisher-trust prompts. Organization-enforced execution policies may block setup.
 
 <details>
-<summary><strong>What that command actually does</strong></summary>
+<summary><strong>What the command does</strong></summary>
 
-`irm` (`Invoke-RestMethod`) downloads [`bootstrap.ps1`](./bootstrap.ps1) as text, and running it as a script block lets you pass switches to it. The bootstrap then:
+`irm` (`Invoke-RestMethod`) downloads [`bootstrap.ps1`](./bootstrap.ps1). The script block runs it with any supplied switches. Bootstrap then:
 
-1. Downloads the repository as a ZIP from `github.com/microsoft/WindowsDeveloperConfig`.
-2. Selects the setup: the signed repository-root `windows-dev-config/` folder, or `src/windows-dev-config/` with `-AllowUnsigned`.
-3. Verifies that every PowerShell file has a valid Microsoft Corporation Authenticode signature — skipped under `-AllowUnsigned`.
-4. Copies [`dev-config.ps1`](./dev-config.ps1) and [`steps/`](./steps) to `%LOCALAPPDATA%\CalmOS`, rechecks signatures, removes temporary downloads, and starts setup.
+1. Requests UAC consent if needed, before loading helpers.
+2. Verifies the downloaded security helper, then downloads the repository ZIP into an administrator-protected temporary directory.
+3. Verifies the Microsoft Corporation signature on every `.ps1` in the repository-root `windows-dev-config/` folder.
+4. Copies [`dev-config.ps1`](./dev-config.ps1) and [`steps/`](./steps) to `%ProgramData%\CalmOS`. Administrators/SYSTEM own and can modify the files; ordinary users have read/execute access.
+5. Rechecks permissions and signatures, unblocks files, removes temporary downloads, and launches with process-scoped `RemoteSigned`.
 
-The setup is installed to disk rather than run from the pipe because it loads two dozen files from its own folder, relaunches itself elevated, and has to survive a reboot — none of which a piped-in string can do.
+Files stay on disk so setup can load its helpers and resume after reboot.
 
-The bootstrap never falls back to unsigned source automatically. Contributors testing a ref before its signed copy exists must explicitly pass `-AllowUnsigned`.
+`-AllowUnsigned` selects `src/windows-dev-config/` and skips signature checks. Bootstrap never selects unsigned source automatically.
 
 </details>
 
@@ -231,10 +232,10 @@ That's why the totals in the summary can add up to more than 50: the tally is sa
 
 ### Elevation and PowerShell 7
 
-The setup relaunches itself twice before doing any work:
+Before configuring the machine, setup:
 
-1. **Elevated**, via UAC, if it wasn't already. Declining the prompt stops the run cleanly without changing anything.
-2. **On PowerShell 7**, installing it first if necessary. The WinGet PowerShell module behaves more consistently there than on Windows PowerShell 5.1. If PowerShell 7 can't be installed the run continues on Windows PowerShell and says so.
+1. **Elevates** before downloading the payload. Declining UAC stops the run.
+2. **Uses PowerShell 7**, installing it if needed for more reliable WinGet support. If installation fails, setup reports it and continues on Windows PowerShell 5.1.
 
 A machine-wide lock (`Global\WindowsDevConfigSetup`) means a second copy won't start while one is running — it tells you to switch windows instead of letting two runs fight over the same installs.
 
@@ -252,7 +253,7 @@ Only one restart is ever performed. If WSL still isn't usable after it, the run 
 
 ### Logs
 
-A full transcript is written to **`devconfig-log.txt`** next to `dev-config.ps1` — so `%LOCALAPPDATA%\CalmOS\devconfig-log.txt` for the one-liner. The path is printed at the end of every run.
+The transcript is **`devconfig-log.txt`** next to `dev-config.ps1`, normally `%ProgramData%\CalmOS\devconfig-log.txt`. Setup prints the path when it finishes.
 
 The transcript is more verbose than the console on purpose: it records handled errors and raw command output that are deliberately kept off screen. Text in the log that isn't on your console is usually something the run recovered from.
 
@@ -287,14 +288,14 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 & ([scriptblock]::Create((irm $url))) -Ref 'my-branch' -AllowUnsigned
 ```
 
-**Download it but don't run it**, so you can read it first:
+**Install without running the configuration.** Protecting the files still requires Administrator rights:
 
 ```powershell
 $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
 & ([scriptblock]::Create((irm $url))) -NoLaunch
 ```
 
-**Install somewhere else:** `-InstallRoot 'D:\tools\devconfig'`. The location has to survive the reboot, so avoid `%TEMP%`.
+**Install somewhere else:** `-InstallRoot 'D:\tools\devconfig'`. Use an existing administrator-controlled parent and a location that survives reboot. User-owned paths, user-writable installations, and junctions are rejected.
 
 **Already elevated and want it to stay that way:** `dev-config.ps1 -NoElevate` fails fast instead of prompting.
 
@@ -304,13 +305,22 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 **What it downloads, and from where.** GitHub (this repository, the pinned Cascadia Code release, which is checked against a SHA-256, and the latest `microsoft/winget-cli` release), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error, and neither is failing to look up the latest winget version.
 
-**Code signing.** The release pipeline publishes Microsoft Authenticode-signed `.ps1` files at the repository root. The bootstrap checks every `.ps1` for a `Valid` Microsoft Corporation signature before and after copying, even with `-NoLaunch`. Failure stops setup but leaves copied files in place. Unsigned `src/windows-dev-config/` requires `-AllowUnsigned`, which skips both checks. Verification does not prevent later file replacement in the writable install directory.
+**Code signing.** Production requires valid Microsoft Corporation Authenticode signatures. Bootstrap verifies its security helper before loading it and every payload `.ps1` before and after copying, including with `-NoLaunch`. Each production launch rechecks permissions and signatures before loading other helpers. Failed checks stop setup. `-AllowUnsigned` skips signature verification for source development.
 
-**Execution policy.** Production launches use `AllSigned`, including elevation, PowerShell 7 relaunches, and reboot resume. `-AllowUnsigned` leaves execution policy to the environment. Setup never changes saved policies. Group Policy takes precedence and may block unsigned scripts. `AllSigned` may prompt you to trust a publisher.
+**Protected files.** Administrators/SYSTEM own the setup and download directories and have write access. Ordinary users have read/execute access only. Unsafe permissions and reparse points are rejected, not repaired.
+
+**Execution policy.** Production uses process-scoped `RemoteSigned` for every launch, including PowerShell 7 relaunches and reboot resume. Verified files are unblocked to avoid publisher-trust prompts. Saved policies and Trusted Publishers are unchanged. Organization-enforced `AllSigned` or `Restricted` blocks bootstrap. `-AllowUnsigned` leaves execution policy to the environment.
 
 **What it does not do.** It doesn't collect or send telemetry, doesn't sign you in to anything, doesn't change credentials or Windows Defender settings, and doesn't touch files in your user profile beyond the PowerShell profile and Windows Terminal settings described above.
 
 ## Troubleshooting
+
+<details>
+<summary><strong>Setup reports an unsafe installation directory</strong></summary>
+
+Choose a new directory under `%ProgramData%` with `-InstallRoot`. Review an existing folder before removing it from an elevated terminal; do not use a folder containing unrelated files.
+
+</details>
 
 <details>
 <summary><strong>The run stopped and said it needs Administrator</strong></summary>
@@ -404,7 +414,7 @@ Configure your proxy for both, then run the setup again.
 <details>
 <summary><strong>Where do I look when none of the above fits?</strong></summary>
 
-`devconfig-log.txt`, in the same folder as `dev-config.ps1` (`%LOCALAPPDATA%\CalmOS` when you used the one-liner). The path is printed at the end of every run.
+Read `devconfig-log.txt` next to `dev-config.ps1`, normally in `%ProgramData%\CalmOS`. Setup prints the path when it finishes.
 
 Then please [open an issue](https://github.com/microsoft/WindowsDeveloperConfig/issues) with your Windows build (`winver`), the command you ran, and the relevant part of that log. Setup that fails on a real machine is a bug worth fixing.
 
@@ -440,7 +450,7 @@ Everything else:
 - **The Copilot Terminal profile:** delete `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\DevConfig`.
 - **The Oh My Posh prompt:** remove the `oh-my-posh init` block from your PowerShell 7 `$PROFILE`.
 - **Ubuntu:** `wsl --unregister Ubuntu`. This permanently deletes the distro's file system.
-- **The setup itself:** delete `%LOCALAPPDATA%\CalmOS`.
+- **The setup itself:** delete `%ProgramData%\CalmOS` from an elevated terminal.
 
 ## Customizing it
 
@@ -470,7 +480,7 @@ A phase is just a file plus an entry in the `$phases` list. Files prefixed with 
 | **No package selection at run time** | It's the full set or a local edit. There's no `-Skip` switch and no prompt. |
 | **No dry run** | There's no `-WhatIf`. The `already OK` output tells you what a re-run *would* skip, but only after the fact. |
 | **Git and GitHub CLI are installed, not configured** | No `git config user.name`, no `gh auth login`. |
-| **`%LOCALAPPDATA%\CalmOS` stays behind** | The installed copy and its log are left in place so a resumed or repeated run works. Delete it when you're done. |
+| **`%ProgramData%\CalmOS` stays behind** | Setup and its log remain for resume and reruns. Deleting them requires Administrator rights. |
 | **Some changes need a sign-out** | Several Explorer and taskbar values are read by Explorer at logon. |
 
 ## For contributors
@@ -479,9 +489,10 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 
 | File | What it is |
 | ---- | ---------- |
-| `bootstrap.ps1` | The remote entry point. Downloads, requires signed files by default, optionally selects source with `-AllowUnsigned`, installs, launches. |
+| `bootstrap.ps1` | Remote entry point: elevation, verified downloads, protected installation, and launch. |
 | `dev-config.ps1` | The orchestrator. Elevation, PowerShell 7, run lock, logging, the phase list, the summary. |
 | `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
+| `steps/_security.ps1` | Signature and directory-permission checks. Its signature is verified before loading unless `-AllowUnsigned` is used. |
 | `steps/_*.ps1` | Shared helpers: elevation, reboot and resume, winget, registry, Terminal settings, retry, process execution, console. |
 | `steps/<phase>.ps1` | One file per phase, each exporting a single `Invoke-<Name>Phase` function. |
 

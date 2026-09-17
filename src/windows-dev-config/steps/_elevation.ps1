@@ -75,7 +75,7 @@ function Get-DevConfigRelaunchArguments {
     )
     $arguments = @('-NoProfile')
     if (-not $AllowUnsigned) {
-        $arguments += '-ExecutionPolicy', 'AllSigned'
+        $arguments += '-ExecutionPolicy', 'RemoteSigned'
     }
     $arguments += '-File', "`"$ScriptPath`""
     if (-not $RequestElevation) {

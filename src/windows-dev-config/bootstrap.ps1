@@ -3,19 +3,17 @@
   Fetches the Calm OS developer workstation setup and starts it.
 
 .DESCRIPTION
-  Meant to be run straight from the web:
+  Run from the web:
 
       irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1 | iex
 
-  The setup cannot run from a piped-in string: it loads two dozen files from its own folder,
-  relaunches itself elevated, and resumes after a reboot. This puts it somewhere real first.
+  Elevates, verifies Microsoft signatures, and installs the repository-root release
+  under %ProgramData%\CalmOS with Administrator/SYSTEM write access.
+  Files stay on disk for helper loading and reboot resume.
+  Production launches use process-scoped RemoteSigned. -AllowUnsigned selects src/,
+  skips signature verification, and leaves execution policy to the environment.
 
-  By default, the files it installs must come from the signed release copy at the repository
-  root, and every PowerShell file must have a valid Microsoft signature. Pass -AllowUnsigned
-  to explicitly use the source copy under src/ without signature validation instead.
-  Launches use AllSigned by default; -AllowUnsigned leaves execution policy to the environment.
-
-  To pick a branch or pin a tag, run it as a script block instead:
+  To select a branch or tag:
 
       & ([scriptblock]::Create((irm <url>))) -Ref 'v1.2.3'
 #>
@@ -28,201 +26,225 @@ param(
     [switch] $NoLaunch
 )
 
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
-
-$repo = 'microsoft/WindowsDeveloperConfig'
-$microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
-
-# The ref goes straight into the download URL, and '..' in it would redirect to another repository.
-if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
-    throw "'$Ref' is not a valid branch, tag or commit name. Use letters, digits, and . _ - / only."
-}
-
-# A UNC install root would put the files the elevated setup loads on a remote share.
-if ($InstallRoot -and ($InstallRoot.StartsWith('\\') -or $InstallRoot.StartsWith('//'))) {
-    throw '-InstallRoot must be a local path, not a network share.'
-}
-
-if (-not $InstallRoot) {
-    # Per-user and outside the roaming profile: it has to still be there after the reboot.
-    $base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
-    $InstallRoot = Join-Path $base 'CalmOS'
-}
-
-# Windows PowerShell 5.1 still defaults to protocols GitHub no longer accepts.
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-} catch {
-    Write-Verbose "Could not raise the TLS version: $($_.Exception.Message)"
-}
-
-function Save-CalmOsArchive {
+function Invoke-CalmOsBootstrap {
+    [CmdletBinding()]
     param(
-        [Parameter(Mandatory)] [string] $Destination
+        [string] $Ref = 'main',
+        [string] $InstallRoot,
+        [switch] $AllowUnsigned,
+        [switch] $NoLaunch
     )
 
-    # Branches need the refs/heads form, while tags and commit SHAs resolve under the short one.
-    $candidates = @(
-        "https://github.com/$repo/archive/refs/heads/$Ref.zip"
-        "https://github.com/$repo/archive/$Ref.zip"
-    )
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
 
-    $lastError = $null
-    $everyAttemptWas404 = $true
-    foreach ($url in $candidates) {
-        foreach ($attempt in 1..3) {
-            try {
-                # -UseBasicParsing: a freshly imaged machine may have no Internet Explorer engine.
-                Invoke-WebRequest -Uri $url -OutFile $Destination -UseBasicParsing -TimeoutSec 300
-                return
-            } catch {
-                $lastError = $_
-                $status = $null
-                try { $status = [int]$_.Exception.Response.StatusCode } catch { }
-                if ($status -eq 404) {
-                    # The ref simply isn't there under this form; retrying cannot change that.
-                    break
-                }
-                $everyAttemptWas404 = $false
-                if ($attempt -lt 3) {
-                    Write-Host "  Download attempt $attempt didn't work -- trying again..." -ForegroundColor DarkGray
-                    Start-Sleep -Seconds (5 * $attempt)
-                }
+    $repo = 'microsoft/WindowsDeveloperConfig'
+    $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+
+    # Reject refs that could escape the repository path.
+    if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
+        throw "'$Ref' is not a valid branch, tag or commit name. Use letters, digits, and . _ - / only."
+    }
+
+    if (-not $InstallRoot) {
+        $InstallRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'CalmOS'
+    }
+    $InstallRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallRoot)
+    if ($InstallRoot -notmatch '^[A-Za-z]:\\[^:]+$') {
+        throw '-InstallRoot must be a local directory, not a drive root or network path.'
+    }
+
+    foreach ($scope in @('MachinePolicy', 'UserPolicy')) {
+        $policy = Get-ExecutionPolicy -Scope $scope
+        if ($policy -ne 'Undefined') {
+            if ($policy -in @('AllSigned', 'Restricted')) {
+                throw "Organization policy ($scope) requires $policy. Prompt-free setup is unavailable; contact your administrator."
             }
+            break
         }
     }
 
-    if ($everyAttemptWas404) {
-        throw "$repo has no branch, tag or commit called '$Ref'. Check the name and run this again."
-    }
-    throw "Could not download '$Ref' from $repo ($($lastError.Exception.Message)). Check your internet connection or proxy settings, then run this again."
-}
-
-function Assert-CalmOsMicrosoftSigned {
-    param(
-        [Parameter(Mandatory)] [string] $Directory
-    )
-
-    $Directory = (Get-Item -LiteralPath $Directory -Force).FullName
-    $scripts = @(Get-ChildItem -LiteralPath $Directory -Recurse -File -Filter '*.ps1' -Force)
-    if ($scripts.Count -eq 0) {
-        throw "The Calm OS payload in '$Directory' contains no PowerShell files."
-    }
-
-    $failures = @()
-    foreach ($script in $scripts) {
-        $signature = Get-AuthenticodeSignature -LiteralPath $script.FullName
-        $relativePath = $script.FullName.Substring($Directory.Length).TrimStart([char]'\')
-
-        if ($signature.Status -ne 'Valid') {
-            $failures += "$relativePath [$($signature.Status)]"
-            continue
-        }
-
-        $subject = if ($signature.SignerCertificate) {
-            $signature.SignerCertificate.Subject
-        } else {
-            '<missing signer certificate>'
-        }
-        if ($subject -ne $microsoftSignerSubject) {
-            $failures += "$relativePath [unexpected signer: $subject]"
-        }
-    }
-
-    if ($failures.Count -gt 0) {
-        $details = ($failures | ForEach-Object { "    $_" }) -join [Environment]::NewLine
-        throw "The Calm OS payload in '$Directory' failed Microsoft signature verification:$([Environment]::NewLine)$details$([Environment]::NewLine)Setup was not started. Use -AllowUnsigned only when you intentionally want to run the source copy."
-    }
-
-    Write-Host "  Verified $($scripts.Count) Microsoft-signed PowerShell files." -ForegroundColor DarkGray
-}
-
-Write-Host ''
-Write-Host 'Calm OS setup' -ForegroundColor Cyan
-Write-Host "  Fetching '$Ref' from $repo..." -ForegroundColor DarkGray
-
-$work = Join-Path ([System.IO.Path]::GetTempPath()) ("calm-os-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $work -Force | Out-Null
-
-try {
-    $zip = Join-Path $work 'source.zip'
-    Save-CalmOsArchive -Destination $zip
-
-    $expanded = Join-Path $work 'expanded'
-    Expand-Archive -LiteralPath $zip -DestinationPath $expanded -Force
-
-    $top = Get-ChildItem -LiteralPath $expanded -Directory | Select-Object -First 1
-    if (-not $top) {
-        throw "The download from '$Ref' was empty. Check that the branch or tag name is right."
-    }
-
-    $signed = Join-Path $top.FullName 'windows-dev-config'
-    $source = Join-Path (Join-Path $top.FullName 'src') 'windows-dev-config'
-
-    $setupDir = if ($AllowUnsigned) { $source } else { $signed }
-    if (-not ((Test-Path (Join-Path $setupDir 'dev-config.ps1')) -and (Test-Path (Join-Path $setupDir 'steps')))) {
-        if ($AllowUnsigned) {
-            throw "The download from '$Ref' doesn't contain the unsigned setup under src/windows-dev-config. Check that the branch or tag name is right."
-        }
-        throw "'$Ref' doesn't contain a signed Calm OS setup under windows-dev-config. Pass -AllowUnsigned only if you intend to run the unsigned source copy."
-    }
-
-    if ($AllowUnsigned) {
-        Write-Host '  Using the unsigned source copy because -AllowUnsigned was passed.' -ForegroundColor Yellow
-    } else {
-        Write-Host '  Using the signed release copy.' -ForegroundColor DarkGray
-        Assert-CalmOsMicrosoftSigned -Directory $setupDir
-    }
-
-    New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-
-    # Copied over the top so a run waiting on its reboot keeps its log and its tally.
-    Copy-Item -LiteralPath (Join-Path $setupDir 'dev-config.ps1') -Destination $InstallRoot -Force
-    Copy-Item -LiteralPath (Join-Path $setupDir 'steps') -Destination $InstallRoot -Recurse -Force
-
-    if (-not $AllowUnsigned) {
-        Assert-CalmOsMicrosoftSigned -Directory $InstallRoot
-    }
-
-    # PowerShell refuses to load a file marked as downloaded, which is every file in this zip.
-    Get-ChildItem -LiteralPath $InstallRoot -Recurse -Filter '*.ps1' -File | Unblock-File
-
-    # Cleared here because the setup restarts the machine, so the finally block never runs.
-    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-
-    $target = Join-Path $InstallRoot 'dev-config.ps1'
-    Write-Host "  Ready in $InstallRoot" -ForegroundColor DarkGray
-
-    $shell = if (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue) { 'pwsh.exe' } else { 'powershell.exe' }
+    $shell = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
+    $pwsh = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'PowerShell\7\pwsh.exe'
+    if (Test-Path -LiteralPath $pwsh) { $shell = $pwsh }
+    $escapedShell = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($shell)
     $arguments = @('-NoProfile')
-    if (-not $AllowUnsigned) {
-        $arguments += '-ExecutionPolicy', 'AllSigned'
+    if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
+
+    function Get-CalmOsElevationCommand {
+        param(
+            [Parameter(Mandatory)] [scriptblock] $Bootstrap,
+            [Parameter(Mandatory)] [string] $Ref,
+            [Parameter(Mandatory)] [string] $InstallRoot,
+            [switch] $AllowUnsigned,
+            [switch] $NoLaunch
+        )
+
+        # PowerShell also recognizes smart quotes as string delimiters.
+        $escapedRef = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Ref)
+        $escapedRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($InstallRoot)
+        $invocation = "& {`n$Bootstrap`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot'"
+        if ($AllowUnsigned) { $invocation += ' -AllowUnsigned' }
+        if ($NoLaunch) { $invocation += ' -NoLaunch' }
+        $buffer = [IO.MemoryStream]::new()
+        $gzip = [IO.Compression.GZipStream]::new($buffer, [IO.Compression.CompressionMode]::Compress, $true)
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes($invocation)
+            $gzip.Write($bytes, 0, $bytes.Length)
+        } finally {
+            $gzip.Dispose()
+        }
+        $payload = [Convert]::ToBase64String($buffer.ToArray())
+        $buffer.Dispose()
+        $launcher = @"
+`$stream = [IO.Compression.GZipStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('$payload')), [IO.Compression.CompressionMode]::Decompress)
+`$reader = [IO.StreamReader]::new(`$stream)
+try { `$code = `$reader.ReadToEnd() } finally { `$reader.Dispose() }
+& ([scriptblock]::Create(`$code))
+"@
+        return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($launcher))
     }
 
-    if ($NoLaunch) {
-        $command = "& '$shell' $($arguments -join ' ') -File '$($target.Replace("'", "''"))'"
-        if ($AllowUnsigned) {
-            $command += ' -AllowUnsigned'
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        # Avoid elevating a script from a user-writable temporary file.
+        $encoded = Get-CalmOsElevationCommand -Bootstrap $MyInvocation.MyCommand.ScriptBlock -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch
+        Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
+        $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-EncodedCommand', $encoded)) -Verb RunAs -Wait -PassThru
+        if ($proc.ExitCode -ne 0) {
+            throw "Elevated setup exited with code $($proc.ExitCode). No further setup was started."
         }
-        Write-Host ''
-        Write-Host "Run it when you're ready:" -ForegroundColor Cyan
-        Write-Host "  $command" -ForegroundColor DarkGray
+        if ($NoLaunch) {
+            $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
+            Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget'$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+        }
         return
     }
 
-    $arguments += '-File', "`"$target`""
-    if ($AllowUnsigned) {
-        $arguments += '-AllowUnsigned'
+    # Windows PowerShell 5.1 still defaults to protocols GitHub no longer accepts.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch {
+        Write-Verbose "Could not raise the TLS version: $($_.Exception.Message)"
     }
 
-    $proc = Start-Process -FilePath $shell -ArgumentList $arguments -NoNewWindow -Wait -PassThru
+    function Save-CalmOsArchive {
+        param(
+            [Parameter(Mandatory)] [string] $Destination
+        )
 
-    # No 'exit': this usually runs in the user's own console and would close their window.
-    if ($proc.ExitCode -ne 0) {
-        Write-Host ''
-        Write-Host "Setup finished with exit code $($proc.ExitCode). The log is in $InstallRoot." -ForegroundColor Yellow
+        $candidates = @(
+            "https://github.com/$repo/archive/refs/heads/$Ref.zip"
+            "https://github.com/$repo/archive/$Ref.zip"
+        )
+
+        $lastError = $null
+        $everyAttemptWas404 = $true
+        foreach ($url in $candidates) {
+            foreach ($attempt in 1..3) {
+                try {
+                    Invoke-WebRequest -Uri $url -OutFile $Destination -UseBasicParsing -TimeoutSec 300
+                    return
+                } catch {
+                    $lastError = $_
+                    $status = $null
+                    try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+                    if ($status -eq 404) { break }
+                    $everyAttemptWas404 = $false
+                    if ($attempt -lt 3) {
+                        Write-Host "  Download attempt $attempt didn't work -- trying again..." -ForegroundColor DarkGray
+                        Start-Sleep -Seconds (5 * $attempt)
+                    }
+                }
+            }
+        }
+
+        if ($everyAttemptWas404) {
+            throw "$repo has no branch, tag or commit called '$Ref'. Check the name and run this again."
+        }
+        throw "Could not download '$Ref' from $repo ($($lastError.Exception.Message)). Check your internet connection or proxy settings, then run this again."
     }
-} finally {
-    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Host ''
+    Write-Host 'Calm OS setup' -ForegroundColor Cyan
+    Write-Host "  Fetching '$Ref' from $repo..." -ForegroundColor DarkGray
+
+    $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
+    $securityCode = (Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$repo/$Ref/$flow/steps/_security.ps1" -UseBasicParsing -TimeoutSec 60).TrimStart([char]0xFEFF)
+    if (-not $AllowUnsigned) {
+        # Windows PowerShell requires UTF-16LE for in-memory signature verification.
+        $signature = Get-AuthenticodeSignature -Content ([Text.Encoding]::Unicode.GetBytes($securityCode)) -SourcePathOrExtension '.ps1'
+        if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -ne $microsoftSignerSubject) {
+            throw "The setup security helper failed Microsoft signature verification ($($signature.Status)). Setup was not started."
+        }
+    }
+    . ([scriptblock]::Create($securityCode))
+
+    $work = New-DevConfigProtectedDirectory -Path (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ("CalmOS-download-" + [guid]::NewGuid().ToString('N')))
+    try {
+        $zip = Join-Path $work 'source.zip'
+        Save-CalmOsArchive -Destination $zip
+        $expanded = Join-Path $work 'expanded'
+        Expand-Archive -LiteralPath $zip -DestinationPath $expanded -Force
+
+        $top = Get-ChildItem -LiteralPath $expanded -Directory | Select-Object -First 1
+        if (-not $top) {
+            throw "The download from '$Ref' was empty. Check that the branch or tag name is right."
+        }
+
+        $signed = Join-Path $top.FullName 'windows-dev-config'
+        $source = Join-Path (Join-Path $top.FullName 'src') 'windows-dev-config'
+        $setupDir = if ($AllowUnsigned) { $source } else { $signed }
+        if (-not ((Test-Path (Join-Path $setupDir 'dev-config.ps1')) -and (Test-Path (Join-Path $setupDir 'steps\_security.ps1')))) {
+            throw "'$Ref' doesn't contain the requested setup under $flow. Use -AllowUnsigned only for the source copy."
+        }
+        Assert-DevConfigProtectedTree -Directory $setupDir
+        if ($AllowUnsigned) {
+            Write-Host '  Using the unsigned source copy because -AllowUnsigned was passed.' -ForegroundColor Yellow
+        } else {
+            Write-Host '  Using the signed release copy.' -ForegroundColor DarkGray
+            Assert-DevConfigMicrosoftSigned -Directory $setupDir
+        }
+
+        $InstallRoot = New-DevConfigProtectedDirectory -Path $InstallRoot
+
+        # Keep logs and progress when replacing setup scripts.
+        Copy-Item -LiteralPath (Join-Path $setupDir 'dev-config.ps1') -Destination $InstallRoot -Force
+        Copy-Item -LiteralPath (Join-Path $setupDir 'steps') -Destination $InstallRoot -Recurse -Force
+        Assert-DevConfigProtectedTree -Directory $InstallRoot
+        if (-not $AllowUnsigned) {
+            Assert-DevConfigMicrosoftSigned -Directory $InstallRoot
+        }
+        Get-ChildItem -LiteralPath $InstallRoot -Recurse -Filter '*.ps1' -File | Unblock-File
+
+        # Clean up before setup can reboot.
+        Remove-Item -LiteralPath $work -Recurse -Force
+        $target = Join-Path $InstallRoot 'dev-config.ps1'
+        Write-Host "  Ready in $InstallRoot" -ForegroundColor DarkGray
+
+        if ($NoLaunch) {
+            $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($target)
+            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget'"
+            if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
+            Write-Host "Run when ready: $command" -ForegroundColor Cyan
+            return
+        }
+
+        $arguments += '-File', "`"$target`""
+        if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
+        $proc = Start-Process -FilePath $shell -ArgumentList $arguments -NoNewWindow -Wait -PassThru
+
+        # Throw to avoid closing the caller's console.
+        if ($proc.ExitCode -ne 0) {
+            throw "Setup finished with exit code $($proc.ExitCode). The log is in $InstallRoot."
+        }
+    } finally {
+        if (Test-Path -LiteralPath $work) {
+            Remove-Item -LiteralPath $work -Recurse -Force
+        }
+    }
 }
+
+Invoke-CalmOsBootstrap @PSBoundParameters
