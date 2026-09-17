@@ -473,6 +473,13 @@ use the plan/apply harness from the README's **Partner validation commands**
 section. Each assigned flow must first write `<name>-plan.json`, stop on any
 blocker, then write `<name>-final.json` and satisfy `result.ready=true`.
 
+Because PR testing runs the unsigned source under `src/`, first use the
+repository's unsigned-development procedure: record the test user's current
+policy, set `CurrentUser` to `Bypass` in both Windows PowerShell and PowerShell
+7, and restore it after validation. Signed top-level release copies are tested
+under `AllSigned` in both hosts by `src/tests/ai-common/all-signed.ps1`; a
+first production run may prompt to trust the Microsoft publisher.
+
 Assigned flow coverage:
 
 | Partner device | Required flows |

@@ -49,6 +49,7 @@ jobs:
           foreach ($id in 'ai-common','cuda','rocm','intel-ai','foundry','pytorch','llama.cpp','ollama') {
             & "./src/tests/$id/unit.ps1"
           }
+          & "./src/tests/ai-common/all-signed.ps1"
 
       - name: Validate report schema and manifest
         shell: pwsh

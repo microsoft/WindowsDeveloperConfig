@@ -379,6 +379,15 @@ Open **elevated PowerShell** in the repository root, then use this harness. It
 always inventories first, runs a non-mutating plan, stops on blockers, applies
 the same arguments, and requires `result.ready=true`.
 
+PR/source validation uses unsigned files under `src/`. Before opening the
+elevated shell, follow the repository's
+[unsigned-development policy](./src/windows-dev-config/README.md#running-it-other-ways)
+and temporarily set the test user's `CurrentUser` execution policy to `Bypass`;
+restore the prior policy afterward. Release copies under top-level `Workloads/`
+are Authenticode-signed and are validated in CI under `AllSigned`; the first
+production run may prompt to trust the Microsoft publisher, matching Windows
+Dev Config's launch contract.
+
 ```powershell
 $ErrorActionPreference = 'Stop'
 $ReportRoot = Join-Path $env:TEMP "devconfig-ai-$env:COMPUTERNAME"
