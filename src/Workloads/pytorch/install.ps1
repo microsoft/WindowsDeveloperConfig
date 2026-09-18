@@ -1,0 +1,415 @@
+<#
+.SYNOPSIS
+  Install a self-contained Windows PyTorch backend and run device acceptance.
+
+.PARAMETER Backend
+  Auto deterministically selects supported NVIDIA CUDA, then AMD ROCm, then
+  Intel XPU, then CPU. Explicit selection can target a supported secondary GPU.
+  CUDA/ROCm/XPU runtime packages are installed inside the contained PyTorch
+  environment. The standalone CUDA, ROCm, and Intel AI flows are native
+  developer-toolkit/runtime flows, not prerequisites for ordinary tensor use.
+
+.PARAMETER SkipTriton
+  Do not install or verify Triton when supported. Native Windows Triton is
+  supported for qualified NVIDIA CUDA (`triton-windows`) and Intel XPU
+  (`triton-xpu`/`torch.compile`) paths, not AMD ROCm.
+
+.PARAMETER RequireTriton
+  Fail unless this host has a supported Triton combination. This is available
+  for qualified NVIDIA CUDA and Intel XPU paths; native Windows AMD ROCm has no
+  supported Triton package.
+
+.PARAMETER DeviceIndex
+  Zero-based device index for CUDA/ROCm/XPU acceptance. Use this to target a
+  same-vendor secondary adapter with an explicit backend. Auto requires index 0
+  so package resolution and execution cannot refer to different vendor devices.
+#>
+[CmdletBinding()]
+param(
+    [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $Backend = 'Auto',
+    [switch] $SkipTriton,
+    [switch] $RequireTriton,
+    [ValidateRange(0, 63)] [int] $DeviceIndex = 0,
+    [switch] $PlanOnly,
+    [string] $ReportPath = ''
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+. (Join-Path $PSScriptRoot '..\_common\direct-setup.ps1')
+. (Join-Path $PSScriptRoot '..\_common\ai-report.ps1')
+
+$architecture = Get-DevConfigArchitecture
+$gpuVendor = Get-AiDetectedVendor
+$amdGpuName = if ($Backend -in @('Auto', 'ROCm')) { Get-AmdGpuName -DeviceIndex $DeviceIndex } else { Get-AmdGpuName }
+$intelGpuName = if ($Backend -in @('Auto', 'XPU')) { Get-IntelGpuName -DeviceIndex $DeviceIndex } else { Get-IntelGpuName }
+$driver = $null
+$driverError = $null
+try {
+    $driver = Get-NvidiaDriverInfo -DeviceIndex $(if ($Backend -in @('Auto', 'CUDA')) { $DeviceIndex } else { 0 })
+} catch {
+    $driverError = $_.Exception.Message
+}
+$nvidiaGpu = if ($driver) { [pscustomobject]@{ Name = $driver.Name } } else { Get-NvidiaGpu }
+$gpuName = if ($Backend -eq 'ROCm') {
+    $amdGpuName
+} elseif ($Backend -eq 'XPU') {
+    $intelGpuName
+} elseif ($nvidiaGpu) {
+    $nvidiaGpu.Name
+} elseif ($amdGpuName) {
+    $amdGpuName
+} else {
+    $intelGpuName
+}
+$amdGfxTarget = if ($amdGpuName) { Get-AmdGfxTarget -GpuName $amdGpuName } else { $null }
+$report = New-AiWorkloadReport -Id 'pytorch' -Request @{
+    Backend = $Backend
+    SelectedBackend = $null
+    SkipTriton = [bool]$SkipTriton
+    RequireTriton = [bool]$RequireTriton
+    DeviceIndex = $DeviceIndex
+    PlanOnly = [bool]$PlanOnly
+    DetectedVendorPriority = $gpuVendor
+    DetectedNvidiaDevice = $(if ($nvidiaGpu) { $nvidiaGpu.Name } else { $null })
+    DetectedAmdDevice = $amdGpuName
+    DetectedIntelDevice = $intelGpuName
+    AmdGfxTarget = $amdGfxTarget
+}
+if (-not $ReportPath) { $ReportPath = Get-AiDefaultReportPath -Id 'pytorch' }
+trap {
+    Write-AiFailureReport -Report $report -Path $ReportPath -ErrorRecord $_
+    throw $_
+}
+if ($Backend -eq 'Auto' -and $DeviceIndex -ne 0) {
+    $message = 'PyTorch -Backend Auto supports only -DeviceIndex 0. Select CUDA, ROCm, or XPU explicitly to target a secondary same-vendor adapter.'
+    if ($PlanOnly) {
+        [void]$report.result.blockers.Add($message)
+        Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
+        Write-Host 'PLAN_UNSUPPORTED: pytorch'
+        return
+    }
+    throw $message
+}
+if ($driverError) {
+    if ($PlanOnly) {
+        [void]$report.result.blockers.Add($driverError)
+        Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
+        Write-Host 'PLAN_UNSUPPORTED: pytorch'
+        return
+    }
+    throw $driverError
+}
+if ($SkipTriton -and $RequireTriton) {
+    throw '-SkipTriton and -RequireTriton cannot be used together.'
+}
+if ($PlanOnly) {
+    $pythonPackage = Ensure-AiWingetPackage -Id 'Python.Python.3.13' -PlanOnly
+    $pythonVersion = [version]'3.13'
+} else {
+    Assert-AiAdministrator
+    $pythonPackage = Ensure-AiWingetPackage -Id 'Python.Python.3.13'
+    $pythonPath = Get-Python313Path -Architecture $architecture
+    $pythonVersionResult = Invoke-DevConfigNativeCommand -FilePath $pythonPath -Arguments @(
+        '-c', 'import platform; print(platform.python_version())'
+    )
+    $pythonVersionText = $pythonVersionResult.Output.Trim()
+    if ($pythonVersionResult.ExitCode -ne 0) { throw 'Python failed while reporting its version.' }
+    $pythonVersion = [version]$pythonVersionText
+    $pythonMachineResult = Invoke-DevConfigNativeCommand -FilePath $pythonPath -Arguments @(
+        '-c', 'import platform; print(platform.machine())'
+    )
+    $pythonMachine = $pythonMachineResult.Output.Trim()
+    if ($pythonMachineResult.ExitCode -ne 0) { throw 'Python failed while reporting its architecture.' }
+    Assert-PythonArchitecture -Architecture $architecture -PythonMachine $pythonMachine
+}
+$hasNvidia = [bool]$driver
+try {
+    $plan = Resolve-PyTorchPlan `
+        -Architecture $architecture `
+        -Backend $Backend `
+        -PythonVersion $pythonVersion `
+        -HasNvidia $hasNvidia `
+        -DriverMajor $(if ($driver) { $driver.DriverMajor } else { 0 }) `
+        -ComputeCapability $(if ($driver) { $driver.ComputeCapability } else { [version]'0.0' }) `
+        -GpuVendor $gpuVendor `
+        -GpuName $gpuName `
+        -AmdGpuName $amdGpuName `
+        -IntelGpuName $intelGpuName `
+        -AmdGfxTarget $amdGfxTarget `
+        -HasAmd ([bool]$amdGpuName) `
+        -HasIntel ([bool]$intelGpuName) `
+        -SkipTriton:$SkipTriton
+} catch {
+    if ($PlanOnly) {
+        [void]$report.result.blockers.Add($_.Exception.Message)
+        Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
+        Write-Host 'PLAN_UNSUPPORTED: pytorch'
+        return
+    }
+    throw
+}
+$report.request.SelectedBackend = $plan.Backend
+$report.request.SelectedVendor = $plan.Vendor
+$report.request.SelectedDevice = $plan.DeviceName
+if ($RequireTriton -and -not $plan.InstallTriton) {
+    throw "Triton Windows is required but unsupported: $($plan.TritonReason)"
+}
+$catalog = (Get-AiCatalog).Components
+$component = if ($plan.Backend -eq 'CUDA' -and $architecture -eq 'Arm64') {
+    $catalog.NvidiaPyTorchArm64
+} elseif ($plan.Backend -eq 'CUDA') {
+    $catalog.PyTorchCudaX64
+} elseif ($plan.Backend -eq 'ROCm') {
+    $catalog.PyTorchRocm
+} elseif ($plan.Backend -eq 'XPU') {
+    $catalog.PyTorchXpu
+} else {
+    $catalog.PyTorchCpu
+}
+Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
+    component = 'Python 3.13'
+    sourceType = 'winget'
+    packageId = 'Python.Python.3.13'
+    action = $pythonPackage.Action
+    packageEvidence = $(if ($PlanOnly) { $null } else { $pythonPackage.Evidence })
+})
+Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
+    component = "PyTorch $($plan.Backend)"
+    vendor = $component.Vendor
+    detectedVendorPriority = $gpuVendor
+    selectedDeviceName = $plan.DeviceName
+    selectedVendor = $plan.Vendor
+    selectedDevice = $plan.DeviceName
+    amdGfxTarget = $plan.AmdGfxTarget
+    architecture = $architecture
+    maturity = $component.Maturity
+    sourceType = $component.SourceType
+    requirement = $plan.TorchRequirement
+    additionalRequirements = $plan.AdditionalRequirements
+    runtimePackageTuple = @($plan.TorchRequirement) + @($plan.AdditionalRequirements)
+    index = $plan.IndexUrl
+    version = $plan.TorchVersion
+    versionPolicy = $component.VersionPolicy
+    integrity = $component.Integrity
+    cachePath = $component.CachePath
+    installPath = '%LOCALAPPDATA%\DevConfig\pytorch\.venv'
+    reasonNormalChannelInsufficient = $component.NormalChannelLimitation
+    expectedStableSource = $component.ExpectedStableSource
+    migrationTrigger = $component.MigrationTrigger
+    cleanupUpgrade = $component.CleanupUpgrade
+    promotionCandidate = Get-AiCatalogValue -Entry $component -Name 'PromotionCandidate'
+    nativeToolkitRequired = $component.NativeToolkitRequired
+    nativeToolkitRelationship = $component.NativeToolkitRelationship
+    action = $(if ($PlanOnly) { 'planned' } else { 'pending' })
+})
+if ($plan.InstallTriton) {
+    $tritonComponent = if ($plan.Backend -eq 'XPU') { $catalog.TritonXpu } else { $catalog.TritonWindows }
+    Add-AiReportAcquisition -Report $report -Entry ([ordered]@{
+        component = $tritonComponent.Component
+        vendor = $tritonComponent.Vendor
+        architecture = $architecture
+        maturity = $tritonComponent.Maturity
+        sourceType = $tritonComponent.SourceType
+        package = $tritonComponent.Package
+        versionPolicy = $tritonComponent.VersionPolicy
+        integrity = $tritonComponent.Integrity
+        cachePath = $tritonComponent.CachePath
+        installPath = $tritonComponent.InstallPath
+        reasonNormalChannelInsufficient = $tritonComponent.NormalChannelLimitation
+        expectedStableSource = $tritonComponent.ExpectedStableSource
+        migrationTrigger = $tritonComponent.MigrationTrigger
+        cleanupUpgrade = $tritonComponent.CleanupUpgrade
+        action = $(if ($PlanOnly) { 'planned' } else { 'pending' })
+    })
+}
+if ($PlanOnly) {
+    Add-AiReportPhase -Report $report -Name 'tensor' -Status 'planned' -Evidence @{
+        backend = $plan.Backend
+        vendor = $plan.Vendor
+        device = $plan.DeviceName
+        deviceIndex = $DeviceIndex
+        amdGfxTarget = $plan.AmdGfxTarget
+        selfContainedRuntime = $true
+        separateToolkitRequired = $false
+    }
+    Add-AiReportPhase -Report $report -Name 'triton' -Status $(if ($plan.InstallTriton) { 'planned' } elseif ($SkipTriton) { 'skipped' } else { 'unsupported' }) -Evidence @{ reason = $plan.TritonReason }
+    Complete-AiWorkloadReport -Report $report -Ready $false -Path $ReportPath
+    Write-Host $(if ($report.result.blockers.Count) { 'PLAN_UNSUPPORTED: pytorch' } else { 'PLAN_OK: pytorch' })
+    return
+}
+
+$root = Join-Path $env:LOCALAPPDATA 'DevConfig\pytorch'
+$venv = Join-Path $root '.venv'
+$statePath = Join-Path $root 'install-state.json'
+$desiredState = [ordered]@{
+    architecture = $plan.Architecture
+    backend = $plan.Backend
+    torch = $plan.TorchRequirement
+    torchVersion = $plan.TorchVersion
+    index = $plan.IndexUrl
+    triton = $plan.TritonRequirement
+    tritonVersion = $plan.TritonVersion
+    numpy = $plan.NumpyRequirement
+    numpyVersion = $plan.NumpyVersion
+    additionalRequirements = @($plan.AdditionalRequirements)
+    python = "$($pythonVersion.Major).$($pythonVersion.Minor)"
+    deviceIndex = $DeviceIndex
+    selectedDevice = $plan.DeviceName
+}
+$desiredJson = $desiredState | ConvertTo-Json -Compress
+
+$currentJson = $null
+if (Test-Path -LiteralPath $statePath) {
+    $currentJson = (Get-Content -LiteralPath $statePath -Raw).Trim()
+}
+$existingVenvPython = Join-Path $venv 'Scripts\python.exe'
+$existingVersions = Get-PythonEnvironmentVersions -PythonPath $existingVenvPython
+if ((Test-Path -LiteralPath $venv) -and
+    (Test-PyTorchEnvironmentRequiresRecreation `
+        -DesiredStateJson $desiredJson `
+        -CurrentStateJson $currentJson `
+        -InstalledVersions $existingVersions)) {
+    Write-Host 'The requested PyTorch plan changed; recreating the contained environment.'
+    Remove-Item -LiteralPath $venv -Recurse -Force
+    $currentJson = $null
+    $existingVersions = $null
+}
+
+New-Item -ItemType Directory -Path $root -Force | Out-Null
+if (-not (Test-Path -LiteralPath (Join-Path $venv 'Scripts\python.exe'))) {
+    Invoke-CheckedCommand -FilePath $pythonPath -ArgumentList @('-m', 'venv', $venv) -DisplayName 'PyTorch virtual environment creation'
+}
+
+$venvPython = Join-Path $venv 'Scripts\python.exe'
+$installedVersions = if ($existingVersions) {
+    $existingVersions
+} else {
+    Get-PythonEnvironmentVersions -PythonPath $venvPython
+}
+$packageAction = Get-PyTorchPackageAction `
+    -DesiredStateJson $desiredJson `
+    -CurrentStateJson $currentJson `
+    -InstalledVersions $installedVersions
+
+if ($plan.InstallTriton -and $plan.Backend -in @('CUDA', 'XPU')) {
+    $cppTools = Ensure-AiVisualCppTools -Architecture $architecture
+    if ($plan.Backend -eq 'CUDA') {
+        [void](Ensure-AiCudaToolkit -Architecture $architecture)
+    }
+    $compiler = Import-MsvcEnvironment -Architecture $architecture
+    Write-Host "Triton JIT compiler: $compiler"
+}
+
+if ($packageAction -eq 'VerifyOnly') {
+    Write-Host "PYTORCH_PACKAGES_CURRENT: torch=$($installedVersions.torch), numpy=$($installedVersions.numpy), triton=$($installedVersions.triton). Skipping package resolution and installation."
+} else {
+    Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'install', '--upgrade', 'pip') -DisplayName 'pip upgrade'
+    Invoke-CheckedCommand `
+        -FilePath $venvPython `
+        -ArgumentList (Get-PipInstallArguments -Requirement $plan.NumpyRequirement) `
+        -DisplayName 'NumPy installation from the configured Python index'
+
+    if ($plan.DirectWheelUrl) {
+        $wheelDirectory = Join-Path $root 'wheel-cache'
+        $wheelPath = Join-Path $wheelDirectory $plan.DirectWheelFileName
+        Install-VerifiedDownload `
+            -Uri $plan.DirectWheelUrl `
+            -Destination $wheelPath `
+            -Sha256 $plan.DirectWheelSha256
+        Invoke-CheckedCommand `
+            -FilePath $venvPython `
+            -ArgumentList (Get-PipLocalWheelInstallArguments -WheelPath $wheelPath) `
+            -DisplayName 'PyTorch installation from verified wheel cache'
+    } else {
+        $allRequirements = @($plan.TorchRequirement) + @($plan.AdditionalRequirements)
+        $binaryPolicy = if ($plan.Backend -eq 'ROCm') { @() } else { @('--only-binary=:all:') }
+        $torchDryRun = @('-m', 'pip', 'install', '--dry-run') + $binaryPolicy + $allRequirements
+        if ($plan.IndexUrl) { $torchDryRun += @('--index-url', $plan.IndexUrl) }
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $torchDryRun -DisplayName 'PyTorch compatible-wheel check'
+        $torchInstall = @('-m', 'pip', 'install') + $binaryPolicy + $allRequirements
+        if ($plan.IndexUrl) { $torchInstall += @('--index-url', $plan.IndexUrl) }
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $torchInstall -DisplayName 'PyTorch installation'
+    }
+
+    if ($plan.InstallTriton) {
+        $tritonDryRun = Get-PipInstallArguments -Requirement $plan.TritonRequirement -IndexUrl $(if ($plan.Backend -eq 'XPU') { $plan.IndexUrl } else { $null }) -DryRun
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $tritonDryRun -DisplayName 'Triton Windows compatible-wheel check'
+        $tritonInstall = Get-PipInstallArguments -Requirement $plan.TritonRequirement -IndexUrl $(if ($plan.Backend -eq 'XPU') { $plan.IndexUrl } else { $null })
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $tritonInstall -DisplayName 'Triton Windows installation'
+    }
+    Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @('-m', 'pip', 'check') -DisplayName 'PyTorch dependency check'
+}
+
+$tensorArguments = @(
+    (Join-Path $PSScriptRoot 'smoke.py'), '--backend', $plan.Backend, '--device-index', $DeviceIndex
+)
+$tensorResult = Invoke-DevConfigNativeCommand -FilePath $venvPython -Arguments $tensorArguments
+$tensorEvidence = $tensorResult.Output.Trim()
+if ($tensorResult.ExitCode -ne 0) {
+    throw "PyTorch $($plan.Backend) tensor smoke failed: $tensorEvidence"
+}
+$tensorRecord = ConvertFrom-AiKeyedJsonLine -Text $tensorEvidence -Prefix 'PYTORCH_SMOKE='
+if ($plan.Backend -ne 'CPU' -and $plan.DeviceName -and
+    -not (Test-AiDeviceNameMatch -Expected $plan.DeviceName -Actual $tensorRecord.device)) {
+    throw "PyTorch device index $DeviceIndex executed on '$($tensorRecord.device)', but the resolver selected '$($plan.DeviceName)'. Use the matching -DeviceIndex."
+}
+if ($plan.InstallTriton) {
+    $tritonSmoke = if ($plan.Backend -eq 'XPU') { 'xpu-smoke.py' } else { 'triton-smoke.py' }
+    $tritonResult = Invoke-DevConfigNativeCommand -FilePath $venvPython -Arguments @(
+        (Join-Path $PSScriptRoot $tritonSmoke), '--device-index', $DeviceIndex
+    )
+    $tritonEvidence = $tritonResult.Output.Trim()
+    if ($tritonResult.ExitCode -ne 0) {
+        throw "Triton $($plan.Backend) GPU kernel smoke failed: $tritonEvidence"
+    }
+    $tritonRecord = if ($plan.Backend -eq 'XPU') {
+        ConvertFrom-AiKeyedJsonLine -Text $tritonEvidence -Prefix 'TRITON_XPU_READY='
+    } else {
+        $null
+    }
+    Write-Host "TRITON_READY: $($plan.TritonRequirement)"
+} else {
+    $tritonEvidence = $plan.TritonReason
+    Write-Host "TRITON_SKIPPED: $($plan.TritonReason)"
+}
+
+Set-Content -LiteralPath $statePath -Value $desiredJson -Encoding ascii
+if ($plan.Preview) {
+    Write-Warning 'PyTorch CUDA on Windows ARM64 is an NVIDIA Developer Preview nightly, not a stable or production-supported release.'
+}
+Write-Host "PYTORCH_READY: backend=$($plan.Backend), runtime=$($plan.Runtime), environment=$venv"
+$versions = Get-PythonEnvironmentVersions -PythonPath $venvPython
+$report.acceptance.tensor = [ordered]@{
+    backend = $plan.Backend
+    vendor = $plan.Vendor
+    runtime = $plan.Runtime
+    device = $tensorRecord.device
+    deviceIndex = $DeviceIndex
+    amdGfxTarget = $plan.AmdGfxTarget
+    torch = $versions.torch
+    numpy = $versions.numpy
+    torchCudaRuntime = $tensorRecord.torch_cuda_runtime
+    torchHipRuntime = $tensorRecord.torch_hip_runtime
+    runtimePackageTuple = @($plan.TorchRequirement) + @($plan.AdditionalRequirements)
+    selfContainedRuntime = $true
+    separateNativeToolkitRequired = $false
+    deviceEvidence = $tensorEvidence
+}
+$report.acceptance.triton = [ordered]@{
+    supported = [bool]$plan.InstallTriton
+    version = $versions.triton
+    distribution = $versions.triton_distribution
+    reason = $plan.TritonReason
+    evidence = $tritonEvidence
+    device = $(if ($tritonRecord) { $tritonRecord.device } else { $tensorRecord.device })
+    torchCompileExecuted = $(if ($tritonRecord) { [bool]$tritonRecord.torch_compile_executed } else { $null })
+}
+$report.acquisitions[1].action = $packageAction.ToLowerInvariant()
+if ($plan.InstallTriton) {
+    $report.acquisitions[2].action = $(if ($packageAction -eq 'VerifyOnly') { 'already-current' } else { 'installed-or-upgraded' })
+}
+Complete-AiWorkloadReport -Report $report -Ready $true -Path $ReportPath
+Write-Host "Activate with: & '$venv\Scripts\Activate.ps1'"
+Write-Host 'INSTALL_OK: pytorch'

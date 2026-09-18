@@ -22,8 +22,24 @@ function Invoke-DevConfigNativeCommand {
     $ErrorActionPreference = 'Continue'
     $PSNativeCommandUseErrorActionPreference = $false
 
-    $output = & $FilePath @Arguments 2>&1 | Out-String
-    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    $previousExitCode = if (Test-Path Variable:global:LASTEXITCODE) { $global:LASTEXITCODE } else { $null }
+    Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+    try {
+        $output = & $FilePath @Arguments 2>&1 | Out-String
+        if (-not (Test-Path Variable:global:LASTEXITCODE)) {
+            throw "Native command '$FilePath' did not launch successfully."
+        }
+        $exitCode = $global:LASTEXITCODE
+    } catch {
+        throw "Native command '$FilePath' failed to launch: $($_.Exception.Message)"
+    } finally {
+        if ($null -ne $previousExitCode) {
+            $global:LASTEXITCODE = $previousExitCode
+        } else {
+            Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+    return [pscustomobject]@{ ExitCode = $exitCode; Output = $output }
 }
 
 # Some installers can wait indefinitely, so process waits are bounded and emit periodic progress.

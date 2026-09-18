@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/microsoft/WindowsDeveloperConfig/blob/main/src/docs/ai-workload-report.schema.json",
+  "title": "Windows Developer Config AI workload report",
+  "type": "object",
+  "required": ["schemaVersion", "workload", "startedAtUtc", "host", "request", "acquisitions", "phases", "acceptance", "result"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "workload": { "type": "string" },
+    "startedAtUtc": { "type": "string", "format": "date-time" },
+    "completedAtUtc": { "type": ["string", "null"], "format": "date-time" },
+    "host": {
+      "type": "object",
+      "required": ["osBuild", "architecture", "gpus"],
+      "properties": {
+        "os": { "type": ["string", "null"] },
+        "osVersion": { "type": ["string", "null"] },
+        "osBuild": { "type": ["string", "null"] },
+        "architecture": { "enum": ["X64", "Arm64"] },
+        "powershell": { "type": "string" },
+        "gpus": { "type": "array" }
+      }
+    },
+    "request": { "type": "object" },
+    "acquisitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["component", "sourceType", "action"]
+      }
+    },
+    "phases": { "type": "array" },
+    "acceptance": { "type": "object" },
+    "result": {
+      "type": "object",
+      "required": ["ready", "planOnly", "warnings", "blockers"],
+      "properties": {
+        "ready": { "type": "boolean" },
+        "planOnly": { "type": "boolean" },
+        "fallbackUsed": { "type": "boolean" },
+        "warnings": { "type": "array" },
+        "blockers": { "type": "array" }
+      }
+    }
+  }
+}
