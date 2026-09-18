@@ -44,13 +44,15 @@ Bootstrap avoids publisher-trust prompts by default. Organization policy can req
 
 `irm` (`Invoke-RestMethod`) downloads [`bootstrap.ps1`](./bootstrap.ps1). The script block runs it with any supplied switches. Bootstrap then:
 
-1. Requests UAC consent if needed, before loading helpers.
+1. Resolves the ref to a commit and requests UAC consent if needed.
 2. Verifies the downloaded security helper, then downloads the repository ZIP into an administrator-protected temporary directory.
 3. Verifies the Microsoft Corporation signature on every `.ps1` in the repository-root `windows-dev-config/` folder.
-4. Copies [`dev-config.ps1`](./dev-config.ps1) and [`steps/`](./steps) to `%ProgramData%\CalmOS`. Administrators/SYSTEM own and can modify the files; ordinary users have read/execute access.
+4. Copies [`bootstrap.ps1`](./bootstrap.ps1), [`dev-config.ps1`](./dev-config.ps1), and [`steps/`](./steps) to `%ProgramData%\CalmOS`. Administrators/SYSTEM own and can modify the files; ordinary users have read/execute access.
 5. Rechecks permissions and signatures, unblocks files, removes temporary downloads, and launches setup.
 
 Files stay on disk so setup can load its helpers and resume after reboot.
+
+For elevation, the launcher downloads and verifies the bootstrap, installs it in the protected directory, and runs it with `-File`.
 
 `-AllowUnsigned` selects `src/windows-dev-config/` and skips signature checks. Bootstrap never selects unsigned source automatically.
 
@@ -75,7 +77,7 @@ Afterwards, open **Ubuntu** from the Start menu once to create your Linux userna
 
 - **Windows 11.** Built and tested against current Windows 11 releases. A few of the settings only exist on newer builds; on older ones those steps are skipped rather than failing the run. Windows 10 is not supported.
 - **Administrator rights** on the machine, and the ability to accept both UAC prompts.
-- **Internet access** to `github.com`, `raw.githubusercontent.com`, the PowerShell Gallery, and the winget package sources. Behind a proxy, the run needs your proxy configured for WinHTTP and for `winget`.
+- **Internet access** to `github.com`, `api.github.com`, `raw.githubusercontent.com`, the PowerShell Gallery, and the winget package sources. Behind a proxy, the run needs your proxy configured for WinHTTP and for `winget`.
 - **Hardware virtualization available to the OS** — WSL cannot install without it. On a physical machine that means VT-x / AMD-V enabled in BIOS/UEFI. In a VM it means the host has exposed nested virtualization to the guest. Everything except WSL still works without it; see [Troubleshooting](#troubleshooting).
 - **About 15 GB of free disk space** for the full package set.
 
@@ -274,7 +276,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass
 powershell.exe -NoProfile -File .\src\windows-dev-config\dev-config.ps1 -AllowUnsigned
 ```
 
-**Pin a tag, or try a branch.** `-Ref` takes a branch, tag, or commit SHA. Passing arguments needs the script-block form rather than `| iex`:
+**Pin a tag, or try a branch.** `-Ref` accepts a branch, tag, or commit SHA. Bootstrap resolves it once so its downloads use the same commit. Pass arguments with a script block, not `| iex`:
 
 ```powershell
 $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
@@ -305,7 +307,7 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 **What it downloads, and from where.** GitHub (this repository, the pinned Cascadia Code release, which is checked against a SHA-256, and the latest `microsoft/winget-cli` release), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error, and neither is failing to look up the latest winget version.
 
-**Code signing.** Production requires valid Microsoft Corporation Authenticode signatures. Bootstrap verifies its security helper before loading it and every payload `.ps1` before and after copying, including with `-NoLaunch`. Each production launch rechecks permissions and signatures before loading other helpers. Failed checks stop setup. `-AllowUnsigned` skips signature verification for source development.
+**Code signing.** Production requires valid Microsoft Corporation Authenticode signatures. Before execution, the elevation launcher verifies the bootstrap's signature and confirms the installed copy has the same hash. Bootstrap verifies its security helper before loading it and every payload `.ps1` before and after copying, including with `-NoLaunch`. Each production launch rechecks permissions and signatures before loading other helpers. Failed checks stop setup. `-AllowUnsigned` skips signature verification for source development.
 
 **Protected files.** Administrators/SYSTEM own the setup and download directories and have write access. Ordinary users have read/execute access only. Unsafe permissions and reparse points are rejected, not repaired.
 

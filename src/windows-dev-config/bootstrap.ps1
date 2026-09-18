@@ -73,45 +73,95 @@ function Invoke-CalmOsBootstrap {
 
     function Get-CalmOsElevationCommand {
         param(
-            [Parameter(Mandatory)] [scriptblock] $Bootstrap,
             [Parameter(Mandatory)] [string] $Ref,
             [Parameter(Mandatory)] [string] $InstallRoot,
             [switch] $AllowUnsigned,
             [switch] $NoLaunch
         )
 
+        $launcher = {
+            param([string] $Ref, [string] $InstallRoot, [switch] $AllowUnsigned, [switch] $NoLaunch)
+
+            $ErrorActionPreference = 'Stop'
+            Set-StrictMode -Version Latest
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
+            $baseUri = "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$Ref/$flow"
+            $securityCode = (Invoke-RestMethod -Uri "$baseUri/steps/_security.ps1" -UseBasicParsing -TimeoutSec 60).TrimStart([char]0xFEFF)
+            if (-not $AllowUnsigned) {
+                $signature = Get-AuthenticodeSignature -Content ([Text.Encoding]::Unicode.GetBytes($securityCode)) -SourcePathOrExtension '.ps1'
+                if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
+                    $signature.SignerCertificate.Subject -ne 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') {
+                    throw 'The setup security helper failed Microsoft signature verification. Setup was not started.'
+                }
+            }
+            . ([scriptblock]::Create($securityCode))
+
+            $work = New-DevConfigProtectedDirectory -Path (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ("CalmOS-bootstrap-" + [guid]::NewGuid().ToString('N')))
+            try {
+                $bootstrap = Join-Path $work 'bootstrap.ps1'
+                Invoke-WebRequest -Uri "$baseUri/bootstrap.ps1" -OutFile $bootstrap -UseBasicParsing -TimeoutSec 60
+                Assert-DevConfigProtectedTree -Directory $work
+                if (-not $AllowUnsigned) {
+                    Assert-DevConfigMicrosoftSigned -Directory $work
+                }
+                $InstallRoot = New-DevConfigProtectedDirectory -Path $InstallRoot
+                $target = Join-Path $InstallRoot 'bootstrap.ps1'
+                Copy-Item -LiteralPath $bootstrap -Destination $target -Force
+                Assert-DevConfigProtectedTree -Directory $InstallRoot
+                if ((Get-FileHash -LiteralPath $bootstrap).Hash -ne (Get-FileHash -LiteralPath $target).Hash) {
+                    throw 'The installed bootstrap does not match the verified download. Setup was not started.'
+                }
+                Unblock-File -LiteralPath $target
+            } finally {
+                if (Test-Path -LiteralPath $work) {
+                    Remove-Item -LiteralPath $work -Recurse -Force
+                }
+            }
+
+            $shellName = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
+            $arguments = @('-NoProfile')
+            if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
+            $arguments += '-File', $target, '-Ref', $Ref, '-InstallRoot', $InstallRoot
+            if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
+            if ($NoLaunch) { $arguments += '-NoLaunch' }
+            & (Join-Path $PSHOME $shellName) @arguments
+            if ($LASTEXITCODE -ne 0) {
+                throw "Bootstrap finished with exit code $LASTEXITCODE."
+            }
+        }
+
         # PowerShell also recognizes smart quotes as string delimiters.
         $escapedRef = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Ref)
         $escapedRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($InstallRoot)
-        $invocation = "& {`n$Bootstrap`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot'"
-        if ($AllowUnsigned) { $invocation += ' -AllowUnsigned' }
-        if ($NoLaunch) { $invocation += ' -NoLaunch' }
-        $buffer = [IO.MemoryStream]::new()
-        $gzip = [IO.Compression.GZipStream]::new($buffer, [IO.Compression.CompressionMode]::Compress, $true)
-        try {
-            $bytes = [Text.Encoding]::UTF8.GetBytes($invocation)
-            $gzip.Write($bytes, 0, $bytes.Length)
-        } finally {
-            $gzip.Dispose()
+        $command = "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot'"
+        if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
+        if ($NoLaunch) { $command += ' -NoLaunch' }
+        # Start-Process joins arguments; Windows quoting keeps the command intact.
+        return '"' + [regex]::Replace($command, '(\\*)"', '$1$1\"') + '"'
+    }
+
+    # Windows PowerShell 5.1 still defaults to protocols GitHub no longer accepts.
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } catch {
+        Write-Verbose "Could not raise the TLS version: $($_.Exception.Message)"
+    }
+
+    if ($Ref -notmatch '^[a-fA-F0-9]{40}$') {
+        $resolvedRef = (Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/commits/$([Uri]::EscapeDataString($Ref))" -UseBasicParsing -TimeoutSec 60).sha
+        if ($resolvedRef -isnot [string] -or $resolvedRef -notmatch '^[a-fA-F0-9]{40}$') {
+            throw "GitHub did not return a commit SHA for '$Ref'. Setup was not started."
         }
-        $payload = [Convert]::ToBase64String($buffer.ToArray())
-        $buffer.Dispose()
-        $launcher = @"
-`$stream = [IO.Compression.GZipStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('$payload')), [IO.Compression.CompressionMode]::Decompress)
-`$reader = [IO.StreamReader]::new(`$stream)
-try { `$code = `$reader.ReadToEnd() } finally { `$reader.Dispose() }
-& ([scriptblock]::Create(`$code))
-"@
-        return [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($launcher))
+        $Ref = $resolvedRef
     }
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        # Avoid elevating a script from a user-writable temporary file.
-        $encoded = Get-CalmOsElevationCommand -Bootstrap $MyInvocation.MyCommand.ScriptBlock -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch
+        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
-        $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-EncodedCommand', $encoded)) -Verb RunAs -Wait -PassThru
+        $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait -PassThru
         if ($proc.ExitCode -ne 0) {
             throw "Elevated setup exited with code $($proc.ExitCode). No further setup was started."
         }
@@ -120,13 +170,6 @@ try { `$code = `$reader.ReadToEnd() } finally { `$reader.Dispose() }
             Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget'$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
         }
         return
-    }
-
-    # Windows PowerShell 5.1 still defaults to protocols GitHub no longer accepts.
-    try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    } catch {
-        Write-Verbose "Could not raise the TLS version: $($_.Exception.Message)"
     }
 
     function Save-CalmOsArchive {
@@ -197,7 +240,7 @@ try { `$code = `$reader.ReadToEnd() } finally { `$reader.Dispose() }
         $signed = Join-Path $top.FullName 'windows-dev-config'
         $source = Join-Path (Join-Path $top.FullName 'src') 'windows-dev-config'
         $setupDir = if ($AllowUnsigned) { $source } else { $signed }
-        if (-not ((Test-Path (Join-Path $setupDir 'dev-config.ps1')) -and (Test-Path (Join-Path $setupDir 'steps\_security.ps1')))) {
+        if (-not ((Test-Path (Join-Path $setupDir 'bootstrap.ps1')) -and (Test-Path (Join-Path $setupDir 'dev-config.ps1')) -and (Test-Path (Join-Path $setupDir 'steps\_security.ps1')))) {
             throw "'$Ref' doesn't contain the requested setup under $flow. Use -AllowUnsigned only for the source copy."
         }
         Assert-DevConfigProtectedTree -Directory $setupDir
@@ -211,7 +254,7 @@ try { `$code = `$reader.ReadToEnd() } finally { `$reader.Dispose() }
         $InstallRoot = New-DevConfigProtectedDirectory -Path $InstallRoot
 
         # Keep logs and progress when replacing setup scripts.
-        Copy-Item -LiteralPath (Join-Path $setupDir 'dev-config.ps1') -Destination $InstallRoot -Force
+        Copy-Item -LiteralPath (Join-Path $setupDir 'bootstrap.ps1'), (Join-Path $setupDir 'dev-config.ps1') -Destination $InstallRoot -Force
         Copy-Item -LiteralPath (Join-Path $setupDir 'steps') -Destination $InstallRoot -Recurse -Force
         Assert-DevConfigProtectedTree -Directory $InstallRoot
         if (-not $AllowUnsigned) {
