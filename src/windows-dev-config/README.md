@@ -11,6 +11,7 @@ It is **idempotent** — every change is checked before it's made, so re-running
 ## Table of contents
 
 - [Quick start](#quick-start)
+- [Local AI scenario](#local-ai-scenario)
 - [What to expect](#what-to-expect)
 - [Requirements](#requirements)
 - [Before you run this](#before-you-run-this)
@@ -55,6 +56,46 @@ Files stay on disk so setup can load its helpers and resume after reboot.
 `-AllowUnsigned` selects `src/windows-dev-config/` and skips signature checks. Bootstrap never selects unsigned source automatically.
 
 </details>
+
+## Local AI scenario
+
+Bootstrap can dispatch the local-AI scenario without running the full Calm OS
+workstation setup:
+
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Scenario local-ai
+```
+
+It uses the same protected download, signed-vs-source selection, signature
+verification, and elevation architecture. A Microsoft-signed content manifest
+also authenticates the catalog, Python, C++, CUDA, and configuration inputs that
+the signed scripts consume. Bootstrap copies and launches the complete
+`Workloads/local-ai` dependency tree instead of `dev-config.ps1`.
+
+```powershell
+# Non-mutating hardware/backend plan
+& ([scriptblock]::Create((irm $url))) `
+  -Scenario local-ai -PlanOnly `
+  -ReportRoot "$env:TEMP\local-ai-plan"
+
+# Core PyTorch path plus one optional local-model runtime
+& ([scriptblock]::Create((irm $url))) `
+  -Scenario local-ai -AiBackend CUDA -AiRequireTriton `
+  -AiRuntime LlamaCpp
+```
+
+Expected completion includes `PYTORCH_READY` and
+`LOCAL_AI_SCENARIO_READY`. The scenario installs the selected PyTorch runtime
+and only the requested optional model runtime; it does not run the workstation
+phases or install every AI package.
+
+For an unsigned branch before the signing cycle:
+
+```powershell
+& ([scriptblock]::Create((irm $url))) `
+  -Ref 'my-branch' -Scenario local-ai -AllowUnsigned
+```
 
 ## What to expect
 

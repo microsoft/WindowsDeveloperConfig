@@ -24,8 +24,41 @@ Assert-True ($coding -notmatch '\[string\]\s*\$Prompt') 'Coding demo should keep
 
 $readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\..\README.md') -Raw
 Assert-True ($readme -match 'Workloads\\local-ai\\install\.ps1') 'README should lead with the local AI scenario entry point'
+Assert-True ($readme -match 'bootstrap\.ps1''\s*\r?\n& \(\[scriptblock\]::Create\(\(irm \$url\)\)\) -Scenario local-ai') 'README should document the production product-level dispatcher'
+Assert-True ($readme -match '(?s)gh pr view 104.*?headRefOid') 'README should resolve the live PR head for unsigned dispatcher testing'
 Assert-True ($readme -match 'LOCAL_AI_SCENARIO_READY') 'README should document the scenario readiness marker'
 Assert-True ($readme -match 'CODING_DEMO_READY') 'README should document the optional coding-demo readiness marker'
 Assert-True ($readme -match 'replacement for PyPI/Conda') 'README should state the scenario non-goal'
+foreach ($entryPoint in @('local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')) {
+    Assert-True ($readme -match [regex]::Escape("| ``$entryPoint")) "README transitive-acquisition table should include $entryPoint"
+}
+
+$pytorch = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\pytorch\install.ps1') -Raw
+Assert-True ($pytorch -match '\$plan\.InstallTriton.*CUDA.*XPU') 'PyTorch should gate native toolchains on supported Triton backends'
+Assert-True ($pytorch -match 'Ensure-AiVisualCppTools') 'PyTorch Triton should ensure the native MSVC toolchain'
+Assert-True ($pytorch -match 'Ensure-AiCudaToolkit') 'PyTorch CUDA Triton should ensure the standalone CUDA toolkit'
+Assert-True ($pytorch -match 'Add-AiReportAcquisition') 'PyTorch should report its transitive acquisitions'
+
+$llama = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\llama.cpp\install.ps1') -Raw
+Assert-True ($llama -notmatch 'Ensure-AiCudaToolkit') 'llama.cpp CUDA assets should not independently install the full CUDA toolkit'
+Assert-True ($llama -match 'resolvedAssets') 'llama.cpp should report paired/runtime asset acquisition'
+
+$ollama = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\ollama\install.ps1') -Raw
+Assert-True ($ollama -match 'gpuFraction') 'Ollama should report its source-managed allocation'
+$foundry = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\foundry\install.ps1') -Raw
+Assert-True ($foundry -match 'selectedExecutionProvider') 'Foundry should report its source-managed EP'
+
+$bootstrap = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\windows-dev-config\bootstrap.ps1') -Raw
+Assert-True ($bootstrap -match "ValidateSet\('', 'local-ai'\)") 'Bootstrap should expose only the supported local-ai dispatcher'
+Assert-True ($bootstrap -match 'Workloads\\local-ai\\install\.ps1') 'Bootstrap should route to the scenario without running dev-config.ps1'
+Assert-True ($bootstrap -match 'Assert-DevConfigMicrosoftSigned -Directory \$workloadsDir') 'Signed scenario payload should be Microsoft-signature verified'
+Assert-True ($bootstrap -match 'Assert-DevConfigWorkloadContent -WorkloadsRoot \$workloadsDir') 'Signed scenario should verify non-PowerShell content before copy'
+Assert-True ($bootstrap -match 'Assert-DevConfigWorkloadContent -WorkloadsRoot \(Join-Path \$InstallRoot ''Workloads''\)') 'Installed scenario content should be reverified after protected copy'
+Assert-True ($bootstrap -match 'Assert-DevConfigProtectedTree -Directory \$workloadsDir') 'Scenario payload should be protected before copy'
+Assert-True ($bootstrap -match 'Copy-Item -LiteralPath \$workloadsDir') 'Bootstrap should copy the complete multi-file Workloads dependency tree'
+Assert-True ($bootstrap -match 'Join-Path \$setupDir ''steps''') 'Bootstrap should copy the shared Windows Dev Config helper steps'
+Assert-True ($bootstrap -match '-AiBackend.*-AiRuntime') 'Bootstrap elevation should forward scenario selection'
+Assert-True ($bootstrap -match '-PlanOnly:\$PlanOnly') 'Bootstrap elevation should forward non-mutating plan mode'
+Assert-True ($bootstrap -match "AI backend/runtime/report options require -Scenario local-ai") 'Bootstrap should reject scenario-only options without the dispatcher'
 
 Write-Host "UNIT_OK: local-ai ($script:AssertionCount assertions)"

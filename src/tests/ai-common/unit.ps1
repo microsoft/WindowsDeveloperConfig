@@ -17,6 +17,57 @@ foreach ($entry in $catalog.Components.GetEnumerator()) {
     }
 }
 
+. (Join-Path $PSScriptRoot '..\..\Workloads\_common\content-hashes.ps1')
+$workloadsRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\Workloads')).Path
+Assert-DevConfigWorkloadContent -WorkloadsRoot $workloadsRoot
+$trackedContent = @(git -C (Join-Path $PSScriptRoot '..\..\..') ls-files 'src/Workloads/**' |
+    Where-Object { [IO.Path]::GetExtension($_) -ne '.ps1' } |
+    ForEach-Object { $_.Substring('src/Workloads/'.Length).Replace('/', '\') })
+Assert-Equal @($Script:DevConfigWorkloadContentHashes.Keys | Sort-Object).Count $trackedContent.Count 'Signed content manifest should cover every tracked non-PowerShell Workloads file'
+foreach ($path in $trackedContent) {
+    Assert-True $Script:DevConfigWorkloadContentHashes.ContainsKey($path) "Signed content manifest should declare $path"
+}
+$blobHashScript = @'
+import hashlib
+import json
+import subprocess
+
+paths = subprocess.check_output(
+    ["git", "ls-files", "src/Workloads/**"], text=True
+).splitlines()
+print(json.dumps({
+    path[len("src/Workloads/"):].replace("/", "\\"):
+        hashlib.sha256(subprocess.check_output(["git", "show", f"HEAD:{path}"])).hexdigest()
+    for path in paths
+    if not path.lower().endswith(".ps1")
+}, sort_keys=True))
+'@
+$blobHashScriptPath = Join-Path $env:TEMP "devconfig-blob-hashes-$([guid]::NewGuid().ToString('N')).py"
+try {
+    [IO.File]::WriteAllText($blobHashScriptPath, $blobHashScript, [Text.UTF8Encoding]::new($false))
+    $blobHashResult = Invoke-DevConfigNativeCommand -FilePath 'python' -Arguments @($blobHashScriptPath)
+    if ($blobHashResult.ExitCode -ne 0) {
+        throw "Could not calculate canonical Git blob hashes: $($blobHashResult.Output)"
+    }
+    $blobHashes = $blobHashResult.Output.Trim() | ConvertFrom-Json
+} finally {
+    Remove-Item -LiteralPath $blobHashScriptPath -Force -ErrorAction SilentlyContinue
+}
+foreach ($path in $trackedContent) {
+    Assert-Equal $Script:DevConfigWorkloadContentHashes[$path] $blobHashes.$path "Signed content hash should match canonical Git blob bytes for $path"
+}
+$tamperedRoot = Join-Path $env:TEMP "devconfig-content-tamper-$([guid]::NewGuid().ToString('N'))"
+try {
+    Copy-Item -LiteralPath $workloadsRoot -Destination $tamperedRoot -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $tamperedRoot 'pytorch\__pycache__') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $tamperedRoot 'pytorch\__pycache__\torch.pyc') -Value 'untrusted bytecode'
+    Assert-ThrowsLike {
+        Assert-DevConfigWorkloadContent -WorkloadsRoot $tamperedRoot
+    } '*not declared by signed content manifest*' 'Signed content verification should reject unexpected Python bytecode'
+} finally {
+    Remove-Item -LiteralPath $tamperedRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $capabilities = @(Get-AiCapabilityMatrix)
 Assert-True ($capabilities.Count -ge 30) 'Capability matrix should enumerate every supported and explicitly unavailable Windows AI cell'
 Assert-Equal @($capabilities.Id | Sort-Object -Unique).Count $capabilities.Count 'Capability ids should be unique'

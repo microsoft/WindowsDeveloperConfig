@@ -315,6 +315,17 @@ tensor plus a minimal neural-network forward pass, and optionally invokes one
 runtime:
 
 ```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Scenario local-ai
+
+# PR/source validation before a sign cycle:
+# First apply the documented temporary CurrentUser Bypass policy, then restore it.
+$prHead = gh pr view 104 --repo microsoft/WindowsDeveloperConfig `
+  --json headRefOid --jq .headRefOid
+$prUrl = "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$prHead/src/windows-dev-config/bootstrap.ps1"
+& ([scriptblock]::Create((irm $prUrl))) `
+  -Ref $prHead -Scenario local-ai -AllowUnsigned
+
 .\Workloads\local-ai\install.ps1
 # PYTORCH_SMOKE=... "model_forward_verified": true ...
 # PYTORCH_READY: backend=<CPU|CUDA|ROCm|XPU>, ...
@@ -322,6 +333,27 @@ runtime:
 
 .\Workloads\local-ai\install.ps1 -Runtime LlamaCpp
 ```
+
+`bootstrap.ps1 -Scenario local-ai` is the product-level dispatcher. It selects
+signed top-level `Workloads/` by default (or explicit unsigned `src/Workloads/`
+for branch testing), verifies/copies the full dependency tree and Windows Dev
+Config helper steps into a protected scenario root, verifies non-PowerShell
+inputs against the Microsoft-signed `_common/content-hashes.ps1`, and launches
+only the local AI scenario. It does not run the full workstation installer.
+
+Transitive acquisition:
+
+| Entry point | Conditional dependencies |
+| --- | --- |
+| `local-ai` | Inventory → PyTorch Auto. NVIDIA torch runtime; MSVC + standalone CUDA only for Triton JIT. AMD device runtime tuple in the PyTorch venv, not native `hipcc`. Intel XPU + `triton-xpu`, not full oneAPI. CPU tuple only. |
+| `local-ai -Runtime LlamaCpp` | PyTorch stack + selected llama runtime + quick GGUF; NVIDIA llama assets include `cudart` and do not independently require full CUDA. |
+| `local-ai -Runtime Ollama` | PyTorch stack + source-managed Ollama backend/model; actual allocation reported. |
+| `local-ai -Runtime Foundry` | PyTorch stack + source-managed Foundry EP/model; actual EP/fallback reported. |
+| `pytorch` | Same exact backend rules as the scenario core. |
+| `cuda` / `rocm` / `intel-ai` | Native developer toolkit flows; do not install PyTorch or every model runtime. |
+| `llama.cpp` / `ollama` / `foundry` | Independent model runtime and quick model only; do not install the other runtimes. |
+
+Drivers are qualified prerequisites and are never replaced.
 
 This is not a general Python package manager or a request to install every AI
 SDK. Native `cuda`, `rocm`, and `intel-ai` remain independent developer-toolkit
@@ -510,9 +542,12 @@ blocker, then write `<name>-final.json` and satisfy `result.ready=true`.
 Because PR testing runs the unsigned source under `src/`, first use the
 repository's unsigned-development procedure: record the test user's current
 policy, set `CurrentUser` to `Bypass` in both Windows PowerShell and PowerShell
-7, and restore it after validation. Signed top-level release copies are tested
-under `AllSigned` in both hosts by `src/tests/ai-common/all-signed.ps1`; a
-first production run may prompt to trust the Microsoft publisher.
+7, and restore it after validation. Production bootstrap explicitly verifies
+Microsoft signatures and requests process-scoped `RemoteSigned`. Signed
+top-level release copies are also tested for compatibility with
+organization-enforced `AllSigned` in both hosts by
+`src/tests/ai-common/all-signed.ps1`; a first run may prompt to trust the
+Microsoft publisher.
 
 Assigned flow coverage:
 

@@ -156,7 +156,33 @@ Want the PATH refresh in your current shell? Use the matching shim instead of ca
 
 The primary deliverable is a runnable **local AI development scenario**, not a
 replacement for PyPI/Conda and not an instruction to install every vendor SDK
-or model runtime. The scenario detects hardware, installs a contained PyTorch
+or model runtime. The supported product-level dispatcher uses the same protected
+download/signature/elevation architecture as Windows Dev Config:
+
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Scenario local-ai
+```
+
+For this PR before its signed release copy exists:
+
+```powershell
+# Follow the unsigned-development instructions below first: temporarily set
+# the test user's CurrentUser policy to Bypass and restore it afterward.
+$prHead = gh pr view 104 --repo microsoft/WindowsDeveloperConfig `
+  --json headRefOid --jq .headRefOid
+$prUrl = "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$prHead/src/windows-dev-config/bootstrap.ps1"
+& ([scriptblock]::Create((irm $prUrl))) `
+  -Ref $prHead -Scenario local-ai -AllowUnsigned
+```
+
+The dispatcher downloads the full multi-file workload tree, verifies signed
+PowerShell files plus the signed hash manifest for catalog/Python/C++/CUDA
+content, copies them with shared helper steps to a protected scenario directory,
+reverifies after copy, elevates the apply run, and launches only `local-ai`—not
+the full Calm OS workstation setup.
+
+The repository-level equivalent detects hardware, installs a contained PyTorch
 backend, adds compatible Triton when published, and proves both a tensor
 operation and a minimal neural-network forward pass:
 
@@ -168,6 +194,17 @@ operation and a minimal neural-network forward pass:
 # LOCAL_AI_SCENARIO_READY: backend=Auto, runtime=None, ...
 ```
 
+Product-level plan and optional runtime examples:
+
+```powershell
+& ([scriptblock]::Create((irm $url))) `
+  -Scenario local-ai -PlanOnly `
+  -ReportRoot "$env:TEMP\local-ai-plan"
+
+& ([scriptblock]::Create((irm $url))) `
+  -Scenario local-ai -AiRuntime LlamaCpp
+```
+
 Choose one optional local-model runtime only when the scenario needs it:
 
 ```powershell
@@ -175,6 +212,24 @@ Choose one optional local-model runtime only when the scenario needs it:
 .\Workloads\local-ai\install.ps1 -Runtime Ollama
 .\Workloads\local-ai\install.ps1 -Runtime Foundry
 ```
+
+### What each entry point installs transitively
+
+GPU drivers are prerequisites and are never replaced.
+
+| Entry point | Transitive acquisition and explicit non-acquisition |
+| --- | --- |
+| `local-ai` | Hardware inventory → PyTorch `Auto`. NVIDIA installs CUDA-enabled torch; if Triton is selected, it also ensures architecture-native MSVC and standalone CUDA Toolkit for JIT. AMD installs the exact ROCm device runtime tuple inside the PyTorch venv, **not** native ROCm SDK/`hipcc`. Intel installs the XPU tuple + `triton-xpu`, **not** full oneAPI. CPU installs only the CPU tuple. |
+| `local-ai -Runtime LlamaCpp` | The PyTorch stack above + one backend-specific llama.cpp runtime + pinned quick validation GGUF. NVIDIA llama assets carry paired `cudart`; llama.cpp itself does not require the full standalone CUDA Toolkit. |
+| `local-ai -Runtime Ollama` | The PyTorch stack above + Ollama. Ollama selects/manages its own inference backend and model runtime; the report records actual CPU/GPU allocation. |
+| `local-ai -Runtime Foundry` | The PyTorch stack above + Foundry Local. Foundry controls EP discovery/acquisition; the report records the actual EP/device or truthful CPU fallback. |
+| `pytorch` | Exact backend behavior from the first row. CUDA/MSVC are conditional on supported Triton JIT, not ordinary tensor/model inference. ROCm and XPU runtimes remain contained in the venv. |
+| `cuda` | Native CUDA Toolkit + architecture-native MSVC; compiles/runs a CUDA kernel. Does not install PyTorch or a model runtime. |
+| `rocm` | Native ROCm Core SDK/`hipcc` in a contained environment; compiles/runs a HIP kernel. Does not install PyTorch or a model runtime. |
+| `intel-ai` | OpenVINO CPU/GPU/NPU inference; `SYCL`/`Full` conditionally adds full oneAPI for native GPU development. Does not install PyTorch XPU. |
+| `llama.cpp` | One selected backend runtime, paired runtime assets where required, and the quick validation model. Does not install PyTorch; NVIDIA assets include their required `cudart`. |
+| `ollama` | Ollama + verified quick model. Backend selection is source-managed and reported, not forced by Dev Config. |
+| `foundry` | Foundry Local + quick catalog model. EP acquisition/selection is source-managed and reported, not forced by Dev Config. |
 
 The standalone vendor flows remain available for native kernel/toolchain work.
 The AI flows are independent and install only the selected hardware stack.
@@ -234,7 +289,9 @@ The coding model is opt-in and does not enlarge the default setup. Its immutable
 Qwen revision, exact 1,117,320,768-byte size, SHA-256, and Apache-2.0 license
 are verified before execution.
 
-Run a flow from PowerShell:
+### Advanced component-level usage
+
+Run an individual flow from PowerShell:
 
 ```powershell
 .\Workloads\cuda\install.ps1
@@ -456,9 +513,10 @@ elevated shell, follow the repository's
 [unsigned-development policy](./src/windows-dev-config/README.md#running-it-other-ways)
 and temporarily set the test user's `CurrentUser` execution policy to `Bypass`;
 restore the prior policy afterward. Release copies under top-level `Workloads/`
-are Authenticode-signed and are validated in CI under `AllSigned`; the first
-production run may prompt to trust the Microsoft publisher, matching Windows
-Dev Config's launch contract.
+are Authenticode-signed. The protected bootstrap explicitly verifies Microsoft
+signatures and requests process-scoped `RemoteSigned`; CI additionally validates
+that the scripts remain compatible with organization-enforced `AllSigned`,
+where a first run may prompt to trust the Microsoft publisher.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
