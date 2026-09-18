@@ -1,210 +1,156 @@
 <#
 .SYNOPSIS
-  Installs Cascadia Code Nerd Fonts.
-  Sets Cascadia Mono NF as the Windows Terminal default font.
+  Verifies setup signatures and protects installed files from non-elevated writes.
 #>
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Script:CascadiaFontVersion     = '2407.24'
-$Script:CascadiaWantedFonts     = @('CascadiaCodeNF.ttf', 'CascadiaMonoNF.ttf')
-$Script:CascadiaZipSha256       = 'E67A68EE3386DB63F48B9054BD196EA752BC6A4EBB4DF35ADCE6733DA50C8474'
-$Script:CascadiaDefaultFontFace = 'Cascadia Mono NF'
-$Script:CascadiaFontRegPath     = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
-$Script:CascadiaUserFontRegPath = 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
-
-function Test-DevConfigCascadiaFontsInstalled {
-    $fontsDir  = Join-Path $env:SystemRoot 'Fonts'
-    $regValues = @(
-        (Get-ItemProperty $Script:CascadiaFontRegPath -ErrorAction SilentlyContinue).PSObject.Properties |
-            Where-Object Name -notin 'PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider' |
-            Select-Object -ExpandProperty Value
-    )
-    $filesOk = -not ($Script:CascadiaWantedFonts | Where-Object { -not (Test-Path (Join-Path $fontsDir $_)) })
-    $regOk   = -not ($Script:CascadiaWantedFonts | Where-Object { $fn = $_; -not ($regValues | Where-Object { $_ -eq $fn }) })
-    return ($filesOk -and $regOk)
-}
-
-function Remove-DevConfigStalePerUserFont {
+function Assert-DevConfigProtectedPath {
     param(
-        [Parameter(Mandatory)] [string] $FileName,
-        [Parameter(Mandatory)] [string] $RegName
+        [Parameter(Mandatory)] [string] $Path,
+        [switch] $Ancestor
     )
-    $userReg  = $Script:CascadiaUserFontRegPath
-    $userFile = Join-Path (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts') $FileName
-    try {
-        Remove-ItemProperty -Path $userReg -Name $RegName -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $userFile -Force -ErrorAction SilentlyContinue
-    } catch {
-        Write-Verbose "Could not remove the per-user copy of ${FileName}: $($_.Exception.Message)"
+
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Setup cannot use a junction or symbolic link: $Path"
     }
-}
 
-function Test-DevConfigFontFileInUseError {
-    param(
-        [Parameter(Mandatory)] [System.Exception] $Exception
-    )
-    while ($Exception) {
-        if ($Exception -is [System.IO.IOException] -and ($Exception.HResult -band 0xFFFF) -in 32, 33) {
-            return $true
+    $owners = @('S-1-5-18', 'S-1-5-32-544')
+    if ($Ancestor) {
+        # Windows drive roots can be owned by TrustedInstaller.
+        $owners += 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    }
+    $acl = Get-Acl -LiteralPath $item.FullName
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $owners) {
+        throw "Setup requires an Administrator/SYSTEM-owned directory tree: $Path"
+    }
+    $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(), 0)
+    if ($null -eq $descriptor.DiscretionaryAcl) {
+        throw "Setup cannot use a path without access restrictions: $Path"
+    }
+
+    $unsafeRights = [int][Security.AccessControl.FileSystemRights]'Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+    # Generic access masks are not named by FileSystemRights.
+    $unsafeRights = $unsafeRights -bor 0x10000000
+    if (-not $Ancestor) {
+        $unsafeRights = $unsafeRights -bor [int][Security.AccessControl.FileSystemRights]::Write -bor 0x40000000
+    }
+    foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+        if ($Ancestor -and ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)) { continue }
+        if ($rule.AccessControlType -eq 'Allow' -and
+            $rule.IdentityReference.Value -notin $owners -and
+            ($rule.FileSystemRights -band $unsafeRights)) {
+            throw "Setup cannot use a path writable or replaceable by non-administrators: $Path"
         }
-        $Exception = $Exception.InnerException
     }
-    return $false
 }
 
-function Test-DevConfigFontFileMatchesEntry {
+function Assert-DevConfigProtectedTree {
     param(
-        [Parameter(Mandatory)] $Entry,
+        [Parameter(Mandatory)] [string] $Directory
+    )
+
+    $root = Get-Item -LiteralPath $Directory -Force
+    if (-not $root.PSIsContainer) {
+        throw "Setup requires a directory: $Directory"
+    }
+    for ($parent = $root.Parent; $null -ne $parent; $parent = $parent.Parent) {
+        Assert-DevConfigProtectedPath -Path $parent.FullName -Ancestor
+    }
+
+    $pending = [Collections.Generic.Stack[string]]::new()
+    $pending.Push($root.FullName)
+    while ($pending.Count -gt 0) {
+        $path = $pending.Pop()
+        Assert-DevConfigProtectedPath -Path $path
+        $item = Get-Item -LiteralPath $path -Force
+        if ($item.PSIsContainer) {
+            foreach ($child in Get-ChildItem -LiteralPath $path -Force) {
+                $pending.Push($child.FullName)
+            }
+        }
+    }
+}
+
+function New-DevConfigProtectedDirectory {
+    param(
         [Parameter(Mandatory)] [string] $Path
     )
-    $entryStream = $null
-    $fileStream  = $null
-    try {
-        $entryStream = $Entry.Open()
-        $fileStream  = [System.IO.File]::Open(
-            $Path,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::Read,
-            [System.IO.FileShare]::ReadWrite
-        )
-        $entryHash = (Get-FileHash -InputStream $entryStream -Algorithm SHA256).Hash
-        $fileHash  = (Get-FileHash -InputStream $fileStream -Algorithm SHA256).Hash
-        return ($entryHash -eq $fileHash)
-    } finally {
-        if ($fileStream)  { $fileStream.Dispose() }
-        if ($entryStream) { $entryStream.Dispose() }
+
+    $Path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    if ($Path -notmatch '^[A-Za-z]:\\[^:]+$') {
+        throw 'Setup requires a local directory, not a drive root or network path.'
     }
+    $Path = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $parent = [IO.Directory]::GetParent($Path)
+    if (-not $parent -or -not $parent.Exists) {
+        throw "The parent directory must already exist: $Path"
+    }
+    for ($ancestor = $parent; $null -ne $ancestor; $ancestor = $ancestor.Parent) {
+        Assert-DevConfigProtectedPath -Path $ancestor.FullName -Ancestor
+    }
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        $acl = [Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545')) {
+            $rights = if ($sid -eq 'S-1-5-32-545') { 'ReadAndExecute' } else { 'FullControl' }
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                [Security.Principal.SecurityIdentifier]::new($sid), $rights,
+                'ContainerInherit, ObjectInherit', 'None', 'Allow'
+            ))
+        }
+        # Set ownership and permissions atomically to prevent unprivileged writes.
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            [IO.FileSystemAclExtensions]::Create([IO.DirectoryInfo]::new($Path), $acl)
+        } else {
+            [IO.Directory]::CreateDirectory($Path, $acl) | Out-Null
+        }
+    }
+
+    Assert-DevConfigProtectedTree -Directory $Path
+    return $Path
 }
 
-function Expand-DevConfigFontEntry {
+function Assert-DevConfigMicrosoftSigned {
     param(
-        [Parameter(Mandatory)] $Entry,
-        [Parameter(Mandatory)] [string] $Path
-    )
-    try {
-        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($Entry, $Path, $true)
-    } catch {
-        if (-not (Test-DevConfigFontFileInUseError -Exception $_.Exception)) {
-            throw
-        }
-        if (-not (Test-Path -LiteralPath $Path)) {
-            throw
-        }
-        if (-not (Test-DevConfigFontFileMatchesEntry -Entry $Entry -Path $Path)) {
-            throw "Couldn't replace $($Entry.Name) because the installed font is in use and doesn't match version $Script:CascadiaFontVersion."
-        }
-        Write-Host '  (keeping the matching copy already in place)' -ForegroundColor DarkGray
-    }
-}
-
-function Install-DevConfigCascadiaFonts {
-    $version = $Script:CascadiaFontVersion
-    $zipUrl  = "https://github.com/microsoft/cascadia-code/releases/download/v$version/CascadiaCode-$version.zip"
-    $workDir = Join-Path $env:TEMP "CascadiaCode-$version"
-    $zipPath = Join-Path $workDir 'CascadiaCode.zip'
-    New-Item -ItemType Directory -Path $workDir -Force | Out-Null
-
-    $fontsDir = Join-Path $env:SystemRoot 'Fonts'
-
-    Write-Host "Downloading $zipUrl ..."
-    Write-Host '  (About 10 MB from GitHub. This usually takes a few seconds.)' -ForegroundColor DarkGray
-    $ProgressPreference = 'SilentlyContinue'
-
-    # The retry covers timeout-bound download stalls and hash mismatches from incomplete downloads.
-    Invoke-DevConfigRetry -Name 'Cascadia fonts download' -ScriptBlock {
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 300
-        $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash
-        if ($actualHash -ne $Script:CascadiaZipSha256) {
-            Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
-            throw "the downloaded file didn't match the expected contents (expected hash $($Script:CascadiaZipSha256), got $actualHash)"
-        }
-    }
-
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    Add-Type -AssemblyName System.Drawing
-
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-    try {
-        foreach ($name in $Script:CascadiaWantedFonts) {
-            $entry = $zip.Entries | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-            if (-not $entry) {
-                Write-Host "  ! $name is not in the downloaded archive; skipping it." -ForegroundColor Yellow
-                continue
-            }
-
-            $dest = Join-Path $fontsDir $name
-            Write-Host "Installing $name -> $dest"
-            Expand-DevConfigFontEntry -Entry $entry -Path $dest
-
-            $pfc = New-Object System.Drawing.Text.PrivateFontCollection
-            try {
-                $pfc.AddFontFile($dest)
-                $family = $pfc.Families[0].Name
-            } finally {
-                $pfc.Dispose()
-            }
-
-            $regName = "$family (TrueType)"
-            # Machine-wide entries hold the file name; the system resolves it under the Fonts folder.
-            New-ItemProperty -Path $Script:CascadiaFontRegPath -Name $regName -Value $name -PropertyType String -Force | Out-Null
-            Remove-DevConfigStalePerUserFont -FileName $name -RegName $regName
-            Write-Host "  registered as '$regName'"
-        }
-    } finally {
-        $zip.Dispose()
-    }
-
-    Remove-Item $zipPath -Force
-    Write-Host "`nDone."
-}
-
-function Test-DevConfigCascadiaDefaultFont {
-    $path = Get-DevConfigTerminalSettingsPath
-    if (-not $path) {
-        # Terminal writes settings.json on first launch; no target path means no default font can be verified.
-        return (-not (Get-DevConfigTerminalSettingsTarget))
-    }
-    $settings = Read-DevConfigTerminalSettings -Path $path
-    return (Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face') -eq $Script:CascadiaDefaultFontFace
-}
-
-function Set-DevConfigCascadiaDefaultFont {
-    $path = Get-DevConfigTerminalSettingsTarget
-    if (-not $path) {
-        throw 'Windows Terminal is not installed, so its default font cannot be set.'
-    }
-
-    $settings = Read-DevConfigTerminalSettings -Path $path
-    $font     = Resolve-DevConfigJsonBranch -Object $settings -Path 'profiles', 'defaults', 'font'
-    Set-DevConfigJsonProperty -Object $font -Name 'face' -Value $Script:CascadiaDefaultFontFace
-
-    Save-DevConfigTerminalSettings -Path $path -Settings $settings
-    Write-Host "Set the Windows Terminal default font to '$($Script:CascadiaDefaultFontFace)' in $path"
-}
-
-function Invoke-FontsPhase {
-    # BestEffort keeps later setup phases running if the font download or settings update cannot complete.
-    $steps = @(
-        New-DevConfigStep -Name 'CascadiaFonts' -Description 'Install Cascadia Code Nerd Fonts' `
-            -Check { Test-DevConfigCascadiaFontsInstalled } `
-            -Apply { Install-DevConfigCascadiaFonts } `
-            -BestEffort
-        New-DevConfigStep -Name 'CascadiaDefaultFont' -Description 'Set Cascadia Mono NF as the Windows Terminal default font' `
-            -Check { Test-DevConfigCascadiaDefaultFont } `
-            -Apply { Set-DevConfigCascadiaDefaultFont } `
-            -BestEffort
+        [Parameter(Mandatory)] [string] $Directory
     )
 
-    Invoke-DevConfigSteps -Steps $steps
+    $Directory = (Get-Item -LiteralPath $Directory -Force).FullName
+    $scripts = @(Get-ChildItem -LiteralPath $Directory -Recurse -File -Filter '*.ps1' -Force)
+    if ($scripts.Count -eq 0) {
+        throw "The Calm OS payload in '$Directory' contains no PowerShell files."
+    }
+
+    $failures = @()
+    foreach ($script in $scripts) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $script.FullName
+        $relativePath = $script.FullName.Substring($Directory.Length).TrimStart([char]'\')
+        if ($signature.Status -ne 'Valid') {
+            $failures += "$relativePath [$($signature.Status)]"
+        } elseif (-not $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -ne 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') {
+            $failures += "$relativePath [unexpected signer]"
+        }
+    }
+
+    if ($failures.Count -gt 0) {
+        $details = ($failures | ForEach-Object { "    $_" }) -join [Environment]::NewLine
+        throw "The Calm OS payload in '$Directory' failed Microsoft signature verification:$([Environment]::NewLine)$details$([Environment]::NewLine)Setup was not started. Use -AllowUnsigned only for development."
+    }
+
+    Write-Host "  Verified $($scripts.Count) Microsoft-signed PowerShell files." -ForegroundColor DarkGray
 }
 
 # SIG # Begin signature block
 # MIInOgYJKoZIhvcNAQcCoIInKzCCJycCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDBHVpqmhFmax+9
-# o4HOcq8Ko1Ivs/kbIQhV3Qc7JJ+TiaCCDMkwggYEMIID7KADAgECAhMzAAACHPrN
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCJpZE9z1aUcDne
+# 8qm486fYBIHmo2n/tHOpKMgLT6k1haCCDMkwggYEMIID7KADAgECAhMzAAACHPrN
 # xZvoL37EAAAAAAIcMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQxWhcNMjcwNDE1MTg1
@@ -276,19 +222,19 @@ function Invoke-FontsPhase {
 # MFcxCzAJBgNVBAYTAlVTMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
 # KDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIc
 # +s3Fm+gvfsQAAAAAAhwwDQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwG
-# CisGAQQBgjcCAQQwLwYJKoZIhvcNAQkEMSIEIHjFdbJeJIbIUW0jw00k7M8x+PCz
-# oA2oHMJzJfDmBrg/MEIGCisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBv
+# CisGAQQBgjcCAQQwLwYJKoZIhvcNAQkEMSIEICzfBFlb9T/9Ak+weDjj8PObYGnz
+# YrPhBNjRj0hg0EpAMEIGCisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBv
 # AGYAdKEagBhodHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAE
-# ggEAqwkCBdjJo7yFqyxXdsN6gx5JF/3QLtWRU79z9kH73QaX3qpBIKnEoOC8NMRQ
-# 9CwqGQd2hKreIFQ5OzQuHPhNjblv0SC2pNU25/33t0I+pJF77qyFxk+gplvc6m6x
-# SXvhBc1x5TtnisfDXJaMsMVXG4Tb0Y1eZvt9HydGMIL3wsGgyJAYg784PdjFyBc+
-# 0i2Vr/b6MwFmxb764PlrjaD8HX9mFzx4Hv2lBeUQyeqt3AOiH5o5oZrcK865HaRX
-# 3ZsUlpiLITxdQ+ag8Hy3e08KXuU7lSmo5rLUir/wKtTWPoDAaue7LxS0M6h1N6T+
-# IhVYNHD2/sVSp5yT6y06x8DqFaGCF5cwgheTBgorBgEEAYI3AwMBMYIXgzCCF38G
+# ggEAH9p4UbHMUiThOTH9GPxW+FAGs1M9y89HytpOgNfd7shRnbWjD+NlW39S8Hv+
+# lja6KkA2GxE4+e3k8370f1gyHL1rQ53skDikUO6jWF9TApd43aIH1nKSrlA6LPMz
+# ir+PhONLPBwF4VJc6u98u6AQbNHnrOOMyr1iuztBIViRnlmLSVefkbN7iVkhIm6k
+# gDoq6NmcXsO34FUNiWa1tOheqeTWXSjPn4S35kk2BkjwZ/F016KyniGRjK6SEcqH
+# ZhaYohP3yFK7MwERBiGZciUbcbqKCm+fC7SS/Jdgrvny8MDJm27XG1cifZSLRu89
+# kp9TQ6kU7yE2Nzq3ib+F6hH0I6GCF5cwgheTBgorBgEEAYI3AwMBMYIXgzCCF38G
 # CSqGSIb3DQEHAqCCF3AwghdsAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG
 # 9w0BCRABBKCCAUEEggE9MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQC
-# AQUABCCKQMqij+nJuolJSmvz5IMj2ZGdc41Sa/xbvVADq89anwIGaqlR2G7tGBMy
-# MDI2MDkxODA1MjEyNi41MzdaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzET
+# AQUABCAD09wALhhQTuFRTLy5v/P1iRChfJxmAwZI7UWrBerGjwIGaqlR2G8EGBMy
+# MDI2MDkxODA1MjEyNy4zNzVaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzET
 # MBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMV
 # TWljcm9zb2Z0IENvcnBvcmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmlj
 # YSBPcGVyYXRpb25zMScwJQYDVQQLEx5uU2hpZWxkIFRTUyBFU046QTkzNS0wM0Uw
@@ -393,22 +339,22 @@ function Invoke-FontsPhase {
 # ZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNy
 # b3NvZnQgVGltZS1TdGFtcCBQQ0EgMjAxMAITMwAAAifVwIPDsS5XLQABAAACJzAN
 # BglghkgBZQMEAgEFAKCCAUowGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8G
-# CSqGSIb3DQEJBDEiBCC7QB7IHSR1IaSHPwA8dT/uGSZjvx+mG6oxFnjzkmplajCB
+# CSqGSIb3DQEJBDEiBCAIcMh7DjaS8cKov29GM1xZ5OMFFD2CpH5VLNVidq+ylDCB
 # +gYLKoZIhvcNAQkQAi8xgeowgecwgeQwgb0EIOXnARo1oVIcOLJKDqlE0adq/jZ9
 # TXdlnXWRcXGThBFyMIGYMIGApH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldh
 # c2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBD
 # b3Jwb3JhdGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIw
 # MTACEzMAAAIn1cCDw7EuVy0AAQAAAicwIgQgu7oSfVVbsOwjFwDiz0W5i2POmuVn
-# EhLmio5QRajbewwwDQYJKoZIhvcNAQELBQAEggIAjbKAU755r1mGrxPzl6jM787R
-# ukcyRW3StcevchZn2u4Z2V/CMOCMTb5klM/5R0VQn2Hk6QH2rucaX1gTcBJ3rcmu
-# 2/Q2kt/bBuam4IYhfbgtLvLAgAmGPOgoFQBz2c53cAb9heCPrHPkLACjq4BqBEIQ
-# DktLQBHDRb65PMgh9ExSgoEpSLV3kSSSMstEl0cmEGXtuDm8bFj6/M5I+kQoYDPC
-# MEILPui5CHgIK8ofZly0VwKGXEP8MhI/hciTmNfigkqG+np0qAi598cqnlw1NvzV
-# qkI+vCeatiPc1dVcKgYB7ND5nuS/ooMZYZHiOtIr3fQl6HuKhrVbT4PL/D+RLCer
-# XFy9brA4TlFEFcLvH9/6sX0Y0tYKx92hPWMm+0opvgePJDXxgUoP9s5p9xQQc70p
-# LUZP7eN1s8BQYX4U10EwzeDFklibCUsfLpQiCID9Nn5UQo+MGKliVbC5F23Zcy+j
-# SfrKdpWrJ1rwHAnFny/JmyPcwBAgHi3M2VX/XACtcfzou+W0aWZcKLsPB2IfEG+o
-# JlINN/ab94hKUidbs/OtaFAz/xbz96xB6oFEri7JYL2+kMeR96BDbw5dGF/B0W6p
-# /QGrFhFb8fHdVuRJzn4Lv9Y2IHrRRrBMM3DLANBqGpGnHAJxWOh6zAq1wR+6c0+i
-# ARVDxmrxVK4APic4cUQ=
+# EhLmio5QRajbewwwDQYJKoZIhvcNAQELBQAEggIALJCppaBF7Ja4u61tJHX4gMqi
+# +TzafGKPYqPl1ruI/Htv78wm4LRme50ZvEc5xHG1gHLtuIPmpWSEAFsiDpizfzBB
+# ce7HOtgdLK2NpDR4j8iQ6a0eQe7zY8utMeqjDILoKIbRFfCSkgYl5L5d2pnZ+0ES
+# dFzOhj7W+cHXPgHNpVwTJfaujo3wnMMbMtAn7/UGR3Cwafjcb1r9CkeRoW8RD91y
+# Im4LnCUkrAXz8jhDx5Kf0ql/faj8CplIX43H4EPBT+I5vsxNUJIFIZXsSUiV1M9J
+# Vrk38la+zbjqiPXgFiD3V1xH3ja/LO5rhtBH3TE3uIa5ucmUA4be5EBqDSddzRB5
+# RVmsl+VqcqwHHt4ULrjMrvi33zlEPhR1CzkvmETAR7pvObm/5iV5kEGEHFXmCNed
+# 5YjAWQ6U7UhR288LqkAbGyYI1dGReULGFirM8mQoQkB5QnhnVLLUCt6wusqm3E57
+# Ky+flUvKm5qWqvr3iwXt4f7k8H+9vUU6qZEt18k7bmDXBndQYZjGYKgxwE3zjdWM
+# P8foy51tpZhu4kiblkJ537uGr/53e8CRHrcZ+YbU7gH64DEC3xgsgGggZBzNPFMd
+# wtNNPHdBGNCjkfMZrk3CmB3uDWDm7CSf74WAxC8WM3ssCg6OETQVK+EUnPJa6Mdw
+# OnA3iiJMGiir7RXYm1M=
 # SIG # End signature block
