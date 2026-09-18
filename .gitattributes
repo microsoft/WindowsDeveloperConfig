@@ -1,2 +1,7 @@
 *.ps1  text eol=crlf
 *.psm1 text eol=crlf
+
+# Preserve signed release bytes; line-ending changes break Authenticode.
+windows-dev-config/**/*.ps1 -text
+Workloads/**/*.ps1 -text
+wsl-comfort/**/*.ps1 -text
