@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+#
+#     winget configure --file scripts/windows/ruby/configuration.winget `
+#         --accept-configuration-agreements `
+#         --disable-interactivity
+#
+$schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+metadata:
+  winget:
+    processor: dscv3
+resources:
+  - name: Ruby
+    type: Microsoft.WinGet/Package
+    properties:
+      id: RubyInstallerTeam.RubyWithDevKit.3.4
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install Ruby 3.4 with MSYS2 DevKit (provides ruby + gem + ridk)
+      winget:
+        securityContext: elevated
