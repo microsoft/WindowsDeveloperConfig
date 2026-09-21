@@ -12,14 +12,15 @@ function Invoke-RegistryExplorerPhase {
     $cabinet = "$explorer\CabinetState"
 
     $tweaks = @(
-        @{ Name = 'ShowFileExtensions'; KeyPath = $advanced; ValueName = 'HideFileExt';                  Value = 0; Description = 'Show file extensions in Explorer' }
-        @{ Name = 'ShowHiddenFiles';    KeyPath = $advanced; ValueName = 'Hidden';                        Value = 1; Description = 'Show hidden files in Explorer' }
-        @{ Name = 'FullPathTitlebar';   KeyPath = $cabinet;  ValueName = 'FullPath';                      Value = 1; Description = 'Show full path in Explorer titlebar' }
-        @{ Name = 'OpenThisPC';         KeyPath = $advanced; ValueName = 'LaunchTo';                      Value = 1; Description = 'Open File Explorer to This PC' }
-        @{ Name = 'FrequentFolders';    KeyPath = $explorer; ValueName = 'ShowFrequent';                  Value = 0; Description = 'Disable frequent folders in Quick Access' }
-        @{ Name = 'FrequentFiles';      KeyPath = $explorer; ValueName = 'ShowRecent';                    Value = 0; Description = 'Disable frequent files in Quick Access' }
-        @{ Name = 'RecommendedFiles';   KeyPath = $explorer; ValueName = 'ShowCloudFilesInQuickAccess';   Value = 0; Description = 'Disable recommended/cloud files in Quick Access' }
-        @{ Name = 'TipsOff';            KeyPath = $advanced; ValueName = 'ShowSyncProviderNotifications'; Value = 0; Description = 'Disable sync provider notifications (tips)' }
+        @{ Name = 'ShowFileExtensions';        KeyPath = $advanced; ValueName = 'HideFileExt';                  Value = 0; Description = 'Show file extensions in Explorer' }
+        @{ Name = 'ShowHiddenFiles';           KeyPath = $advanced; ValueName = 'Hidden';                        Value = 1; Description = 'Show hidden files in Explorer' }
+        @{ Name = 'FullPathTitlebar';          KeyPath = $cabinet;  ValueName = 'FullPath';                      Value = 1; Description = 'Show full path in Explorer titlebar' }
+        @{ Name = 'OpenThisPC';                KeyPath = $advanced; ValueName = 'LaunchTo';                      Value = 1; Description = 'Open File Explorer to This PC' }
+        @{ Name = 'FrequentFolders';           KeyPath = $explorer; ValueName = 'ShowFrequent';                  Value = 0; Description = 'Disable frequent folders in Quick Access' }
+        @{ Name = 'FrequentFiles';             KeyPath = $explorer; ValueName = 'ShowRecent';                    Value = 0; Description = 'Disable frequent files in Quick Access' }
+        @{ Name = 'RecommendedFiles';          KeyPath = $explorer; ValueName = 'ShowCloudFilesInQuickAccess';   Value = 0; Description = 'Disable recommended/cloud files in Quick Access' }
+        @{ Name = 'TipsOff';                   KeyPath = $advanced; ValueName = 'ShowSyncProviderNotifications'; Value = 0; Description = 'Disable sync provider notifications (tips)' }
+        @{ Name = 'ShowSecondsInSystemClock';  KeyPath = $advanced; ValueName = 'ShowSecondsInSystemClock     '; Value = 1; Description = 'Show Seconds in the System Clock)' }
     )
 
     # ArgumentList binds each tweak's values at call time instead of closure capture.
