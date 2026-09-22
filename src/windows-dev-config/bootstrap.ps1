@@ -23,7 +23,8 @@ param(
     [string] $Ref = 'main',
     [string] $InstallRoot,
     [switch] $AllowUnsigned,
-    [switch] $NoLaunch
+    [switch] $NoLaunch,
+    [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
 )
 
 function Invoke-CalmOsBootstrap {
@@ -32,11 +33,16 @@ function Invoke-CalmOsBootstrap {
         [string] $Ref = 'main',
         [string] $InstallRoot,
         [switch] $AllowUnsigned,
-        [switch] $NoLaunch
+        [switch] $NoLaunch,
+        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
     )
 
     $ErrorActionPreference = 'Stop'
     Set-StrictMode -Version Latest
+
+    if ($Action -eq 'Uninstall') {
+        throw 'Uninstall is not implemented. No changes were made.'
+    }
 
     $repo = 'microsoft/WindowsDeveloperConfig'
     $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
@@ -76,11 +82,18 @@ function Invoke-CalmOsBootstrap {
             [Parameter(Mandatory)] [string] $Ref,
             [Parameter(Mandatory)] [string] $InstallRoot,
             [switch] $AllowUnsigned,
-            [switch] $NoLaunch
+            [switch] $NoLaunch,
+            [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
         )
 
         $launcher = {
-            param([string] $Ref, [string] $InstallRoot, [switch] $AllowUnsigned, [switch] $NoLaunch)
+            param(
+                [string] $Ref,
+                [string] $InstallRoot,
+                [switch] $AllowUnsigned,
+                [switch] $NoLaunch,
+                [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+            )
 
             $ErrorActionPreference = 'Stop'
             Set-StrictMode -Version Latest
@@ -122,7 +135,7 @@ function Invoke-CalmOsBootstrap {
             $shellName = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
             $arguments = @('-NoProfile')
             if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
-            $arguments += '-File', $target, '-Ref', $Ref, '-InstallRoot', $InstallRoot
+            $arguments += '-File', $target, '-Ref', $Ref, '-InstallRoot', $InstallRoot, '-Action', $Action
             if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
             if ($NoLaunch) { $arguments += '-NoLaunch' }
             & (Join-Path $PSHOME $shellName) @arguments
@@ -134,7 +147,7 @@ function Invoke-CalmOsBootstrap {
         # PowerShell also recognizes smart quotes as string delimiters.
         $escapedRef = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Ref)
         $escapedRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($InstallRoot)
-        $command = "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot'"
+        $command = "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot' -Action '$Action'"
         if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
         if ($NoLaunch) { $command += ' -NoLaunch' }
         # Start-Process joins arguments; Windows quoting keeps the command intact.
@@ -159,7 +172,7 @@ function Invoke-CalmOsBootstrap {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch
+        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch -Action $Action
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
         $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait -PassThru
         if ($proc.ExitCode -ne 0) {
@@ -167,7 +180,7 @@ function Invoke-CalmOsBootstrap {
         }
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
-            Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget'$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+            Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
         }
         return
     }
@@ -269,13 +282,13 @@ function Invoke-CalmOsBootstrap {
 
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($target)
-            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget'"
+            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action"
             if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
             Write-Host "Run when ready: $command" -ForegroundColor Cyan
             return
         }
 
-        $arguments += '-File', "`"$target`""
+        $arguments += '-File', "`"$target`"", '-Action', $Action
         if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
         $proc = Start-Process -FilePath $shell -ArgumentList $arguments -NoNewWindow -Wait -PassThru
 

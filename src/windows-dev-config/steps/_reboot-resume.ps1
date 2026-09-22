@@ -20,7 +20,7 @@ function Suspend-DevConfigForReboot {
 
     $shell = Get-DevConfigTaskShellExe
     # The limited task requires fresh UAC consent before any resumed code runs elevated.
-    $arguments = (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed -AllowUnsigned:$Script:DevConfigAllowUnsigned -RequestElevation) -join ' '
+    $arguments = (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed -AllowUnsigned:$Script:DevConfigAllowUnsigned -RequestElevation -Action $Script:DevConfigAction) -join ' '
     $action = New-ScheduledTaskAction -Execute $shell -Argument $arguments
 
     # Scheduled task logon matching requires the DOMAIN\User or MACHINE\User account name.

@@ -55,7 +55,7 @@ Command Palette extension.
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinAppCLI         | ✅ automated   | Developer Mode + `Microsoft.DotNet.SDK.10` + `Microsoft.WinAppCli` |
 | WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCli` + WinUI/Universal/ManagedDesktop VS workloads |
-| Windows Dev Config | 🙋 manual     | A full distraction-free workstation, in PowerShell: 15 apps + 24 registry values + fonts + Windows Terminal + WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
+| Windows Dev Config | 🙋 manual     | PowerShell setup for developer tools, Windows settings, fonts, Terminal, and WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
 | Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative

@@ -26,6 +26,10 @@ function Test-DevConfigRegistryValue {
         return $false
     }
     $prop = $current.PSObject.Properties[$ValueName]
+    if ($Value -is [byte[]]) {
+        return ($prop) -and ($prop.Value -is [byte[]]) -and
+            ([BitConverter]::ToString($prop.Value) -eq [BitConverter]::ToString($Value))
+    }
     return ($prop) -and ($prop.Value -eq $Value)
 }
 

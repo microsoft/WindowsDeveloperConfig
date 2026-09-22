@@ -23,9 +23,11 @@ function Invoke-PackagesPhase {
 
     $packages = @(
         @{ Name = 'Terminal';      Id = 'Microsoft.WindowsTerminal' }
+        @{ Name = 'IntelligentTerminal'; Id = 'Microsoft.IntelligentTerminal' }
         @{ Name = 'PowerShell';    Id = 'Microsoft.PowerShell' }
         @{ Name = 'Git';           Id = 'Git.Git' }
         @{ Name = 'GitHubCLI';     Id = 'GitHub.cli' }
+        @{ Name = 'AzureCLI';      Id = 'Microsoft.AzureCLI' }
         @{ Name = 'GitHubCopilot'; Id = 'GitHub.Copilot' }
         @{ Name = 'VSCode';        Id = 'Microsoft.VisualStudioCode'; Large = $true }
         @{ Name = 'DotnetSdk';     Id = 'Microsoft.DotNet.SDK.10';    Large = $true }

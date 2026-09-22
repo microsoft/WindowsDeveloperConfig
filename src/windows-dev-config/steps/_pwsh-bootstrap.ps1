@@ -34,7 +34,8 @@ function Invoke-DevConfigEnsurePwsh {
     param(
         [Parameter(Mandatory)] [string] $ScriptPath,
         [switch] $Resumed,
-        [switch] $AllowUnsigned
+        [switch] $AllowUnsigned,
+        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
     )
 
     if ($PSVersionTable.PSEdition -eq 'Core') {
@@ -54,7 +55,7 @@ function Invoke-DevConfigEnsurePwsh {
     }
 
     Write-Host 'Switching this setup over to PowerShell 7...' -ForegroundColor DarkCyan
-    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action
     $proc = Start-Process -FilePath 'pwsh.exe' -ArgumentList $relaunchArgs -Wait -NoNewWindow -PassThru
 
     # The relaunch performs the setup work, so this Windows PowerShell process exits with its code.

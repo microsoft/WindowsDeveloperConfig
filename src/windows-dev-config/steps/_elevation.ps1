@@ -71,13 +71,14 @@ function Get-DevConfigRelaunchArguments {
         [Parameter(Mandatory)] [string] $ScriptPath,
         [switch] $Resumed,
         [switch] $AllowUnsigned,
-        [switch] $RequestElevation
+        [switch] $RequestElevation,
+        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
     )
     $arguments = @('-NoProfile')
     if (-not $AllowUnsigned) {
         $arguments += '-ExecutionPolicy', 'RemoteSigned'
     }
-    $arguments += '-File', "`"$ScriptPath`""
+    $arguments += '-File', "`"$ScriptPath`"", '-Action', $Action
     if (-not $RequestElevation) {
         $arguments += '-NoElevate'
     }
@@ -95,7 +96,8 @@ function Invoke-DevConfigElevate {
         [Parameter(Mandatory)] [string] $ScriptPath,
         [switch] $NoElevate,
         [switch] $Resumed,
-        [switch] $AllowUnsigned
+        [switch] $AllowUnsigned,
+        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
     )
 
     if (Test-DevConfigIsAdmin) {
@@ -110,7 +112,7 @@ function Invoke-DevConfigElevate {
 
     $shell = Get-DevConfigShellExe
     # Preserve -Resumed so the elevated process continues after the WSL reboot.
-    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action
     try {
         $proc = Start-Process -FilePath $shell -ArgumentList $relaunchArgs -Verb RunAs -Wait -PassThru
     } catch {

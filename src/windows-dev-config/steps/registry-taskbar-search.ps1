@@ -19,6 +19,10 @@ function Invoke-RegistryTaskbarSearchPhase {
         # Widgets are configured at OS policy level because the direct taskbar icon key is blocked on 24H2+.
         @{ Name = 'WidgetServiceOff';       KeyPath = 'HKLM\SOFTWARE\Policies\Microsoft\Dsh';                                 ValueName = 'AllowNewsAndInterests';               Value = 0; Description = 'Disable Widget service' }
     )
+    if ($Script:DevConfigAction -eq 'Partial') {
+        $tweaks = @($tweaks | Where-Object { $_.Name -in @('EndTask', 'StartRecommendations') })
+        $tweaks += @{ Name = 'StartAccountNotifications'; KeyPath = $advanced; ValueName = 'Start_AccountNotifications'; Value = 0; Description = 'Disable Start menu account notifications' }
+    }
 
     # ArgumentList binds each tweak's values at call time instead of closure capture.
     $steps = foreach ($tweak in $tweaks) {

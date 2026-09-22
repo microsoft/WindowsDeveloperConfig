@@ -146,6 +146,9 @@ function Invoke-CopilotPhase {
             -Apply { Install-DevConfigWinUIPlugin } `
             -BestEffort
     )
+    if ($Script:DevConfigAction -eq 'Partial') {
+        $steps = @($steps | Where-Object { $_.Name -ne 'WinUITemplates' })
+    }
 
     Invoke-DevConfigSteps -Steps $steps
 }

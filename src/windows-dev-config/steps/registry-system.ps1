@@ -13,6 +13,9 @@ function Invoke-RegistrySystemPhase {
         @{ Name = 'LongPaths';     KeyPath = 'HKLM\SYSTEM\CurrentControlSet\Control\FileSystem';              ValueName = 'LongPathsEnabled';               Value = 1; Description = 'Enable Win32 long path support' }
         @{ Name = 'RemoteDesktop'; KeyPath = 'HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server';         ValueName = 'fDenyTSConnections';             Value = 0; Description = 'Enable Remote Desktop (firewall rule still needs separate enable)' }
     )
+    if ($Script:DevConfigAction -eq 'Partial') {
+        $tweaks = @($tweaks | Where-Object { $_.Name -eq 'LongPaths' })
+    }
 
     # ArgumentList binds each tweak's values at call time instead of closure capture.
     $steps = foreach ($tweak in $tweaks) {

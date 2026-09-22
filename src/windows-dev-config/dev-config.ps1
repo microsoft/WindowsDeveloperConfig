@@ -7,11 +7,16 @@
 param(
     [switch] $NoElevate,
     [switch] $Resumed,
-    [switch] $AllowUnsigned
+    [switch] $AllowUnsigned,
+    [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ($Action -eq 'Uninstall') {
+    throw 'Uninstall is not implemented. No changes were made.'
+}
 
 $stepsDir = Join-Path $PSScriptRoot 'steps'
 $securityCode = [IO.File]::ReadAllText((Join-Path $stepsDir '_security.ps1'))
@@ -52,10 +57,10 @@ try {
 # TLS is configured before any download step runs.
 Enable-DevConfigModernTls
 
-Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned
+Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action
 
 # WinGet module behavior is more consistent in PowerShell 7 than in Windows PowerShell 5.1.
-Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned
+Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action
 
 # The lock starts after relaunches so the worker process owns the log file.
 if (-not (Enter-DevConfigSingleInstance)) {
@@ -73,17 +78,11 @@ Clear-DevConfigResume
 
 $Script:DevConfigResumed = [bool]$Resumed
 $Script:DevConfigAllowUnsigned = [bool]$AllowUnsigned
+$Script:DevConfigAction = $Action
 if ($Script:DevConfigResumed) {
     # Restore the pre-reboot tally so the final summary covers the whole run.
     Restore-DevConfigTally -Path (Join-Path $PSScriptRoot 'devconfig-tally.json')
 }
-Write-Host ''
-if ($Script:DevConfigResumed) {
-    Write-Host 'Welcome back. Resuming Calm OS setup after the reboot...' -ForegroundColor Cyan
-} else {
-    Write-Host 'Calm OS setup -- 11 phases, one reboot along the way (expected, not an error)' -ForegroundColor Cyan
-}
-
 # WSL stays last so its required reboot happens after other phases.
 $phases = @(
     @{ File = 'prerequisites.ps1';           Function = 'Invoke-PrerequisitesPhase';          Title = 'Getting ready' }
@@ -98,6 +97,17 @@ $phases = @(
     @{ File = 'copilot.ps1';                 Function = 'Invoke-CopilotPhase';                Title = 'GitHub Copilot' }
     @{ File = 'wsl.ps1';                     Function = 'Invoke-WslPhase';                    Title = 'WSL + Ubuntu' }
 )
+if ($Action -eq 'Partial') {
+    $phases = @($phases | Where-Object { $_.File -ne 'edge.ps1' })
+    ($phases | Where-Object { $_.File -eq 'registry-taskbar-search.ps1' }).Title = 'Taskbar & Start tweaks'
+}
+
+Write-Host ''
+if ($Script:DevConfigResumed) {
+    Write-Host "Welcome back. Resuming Calm OS setup ($Action) after the reboot..." -ForegroundColor Cyan
+} else {
+    Write-Host "Calm OS setup ($Action) -- $($phases.Count) phases, one reboot along the way (expected, not an error)" -ForegroundColor Cyan
+}
 
 $failure = $null
 try {

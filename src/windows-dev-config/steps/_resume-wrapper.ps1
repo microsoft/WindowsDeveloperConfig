@@ -5,11 +5,16 @@
 
 param(
     [Parameter(Mandatory)] [string] $ScriptPath,
-    [switch] $AllowUnsigned
+    [switch] $AllowUnsigned,
+    [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ($Action -eq 'Uninstall') {
+    throw 'Uninstall is not implemented. No changes were made.'
+}
 
 # This wrapper sets UTF-8 output so relayed characters render consistently.
 try {
@@ -31,7 +36,7 @@ Remove-Item $masterLog, $innerOut, $innerErr -ErrorAction SilentlyContinue
 
 $shell = Get-DevConfigTaskShellExe
 $proc = Start-Process -FilePath $shell `
-    -ArgumentList (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed -AllowUnsigned:$AllowUnsigned) `
+    -ArgumentList (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed -AllowUnsigned:$AllowUnsigned -Action $Action) `
     -RedirectStandardOutput $innerOut -RedirectStandardError $innerErr -NoNewWindow -PassThru
 
 # Mirroring new lines keeps resumed output visible while preserving one combined log.

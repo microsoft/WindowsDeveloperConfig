@@ -11,6 +11,7 @@ $Script:DevConfigCheckMark = [char]0x2713
 
 # Defaults allow the step runner to load before the orchestrator sets run state.
 $Script:DevConfigResumed     = $false
+$Script:DevConfigAction      = 'Full'
 $Script:DevConfigTally       = @{ Done = 0; AlreadyOk = 0; Warned = 0 }
 # Persist flagged names so a blocked step is counted once across the reboot.
 $Script:DevConfigWarnedSteps      = @()

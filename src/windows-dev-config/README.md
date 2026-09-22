@@ -11,6 +11,7 @@ It is **idempotent** — every change is checked before it's made, so re-running
 ## Table of contents
 
 - [Quick start](#quick-start)
+- [Setup actions](#setup-actions)
 - [What to expect](#what-to-expect)
 - [Requirements](#requirements)
 - [Before you run this](#before-you-run-this)
@@ -58,6 +59,33 @@ For elevation, the launcher downloads and verifies the bootstrap, installs it in
 
 </details>
 
+## Setup actions
+
+Both `bootstrap.ps1` and `dev-config.ps1` accept `-Action`:
+
+| Action | Behavior |
+| ------ | -------- |
+| `Full` | Default. Applies the complete setup. |
+| `Partial` | Full setup with the differences below. |
+| `Uninstall` | Stops with an error; makes no changes. |
+
+`Partial` skips changes to Sudo, Developer Mode, Remote Desktop, Edge policies, Explorer's
+recommended/cloud files, global notifications, the Bluetooth tray icon, web
+search, search highlights, Widgets, and WinUI templates. It still
+installs the WinUI Copilot plugin.
+
+`Partial` also disables Start menu account notifications by setting
+`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Start_AccountNotifications`
+to DWORD `0`.
+
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Action Partial
+```
+
+The action is preserved across elevation, PowerShell relaunch, and reboot.
+Skipped settings are not reverted.
+
 ## What to expect
 
 Roughly **30 minutes** on a clean machine with a good connection, most of it spent downloading Visual Studio Code, the .NET SDK, PowerToys, and Ubuntu.
@@ -66,7 +94,7 @@ Roughly **30 minutes** on a clean machine with a good connection, most of it spe
 | - | ------------ | ---------------- |
 | 1 | The first UAC prompt appears | **Accept it.** Most of the settings are machine-wide and need Administrator. |
 | 2 | PowerShell 7 is installed if it isn't already, and the setup restarts itself on it | None |
-| 3 | Ten of the eleven phases run: packages, Windows settings, fonts, Terminal, prompt, Copilot | None. Long silent stretches during big downloads are normal — a "still working" note prints every minute |
+| 3 | Packages, Windows settings, fonts, Terminal, prompt, and Copilot are configured | None. Long silent stretches during big downloads are normal — a "still working" note prints every minute |
 | 4 | WSL is installed. The machine warns you and **restarts after 10 seconds** | **Save your work before you start.** |
 | 5 | You sign back in; a window opens and the second UAC prompt appears | **Accept it** to finish the run |
 | 6 | A summary prints: how many things changed, how many were already fine | Press a key to close, or leave it — it closes itself after 15 minutes |
@@ -85,7 +113,7 @@ You do **not** need Git, a repository clone, `winget configure`, the Visual C++ 
 
 ## Before you run this
 
-This flow is opinionated, and a few of its choices are worth knowing about up front rather than discovering later.
+These changes apply to `Full`; see [Setup actions](#setup-actions) for `Partial` exclusions.
 
 | Change | Why it might matter to you |
 | ------ | -------------------------- |
@@ -100,7 +128,7 @@ Every one of these is listed in full detail in [What it changes](#what-it-change
 
 ## What it changes
 
-51 steps across 11 phases. Steps already in the desired state are skipped.
+`Full` applies the setup below, skipping steps already in the desired state.
 
 ### Packages
 
@@ -109,9 +137,11 @@ Installed with winget from the `winget` source, silently, with agreements accept
 | Package | winget id |
 | ------- | --------- |
 | Windows Terminal | `Microsoft.WindowsTerminal` |
+| Intelligent Terminal | `Microsoft.IntelligentTerminal` |
 | PowerShell 7 | `Microsoft.PowerShell` |
 | Git | `Git.Git` |
 | GitHub CLI | `GitHub.cli` |
+| Azure CLI | `Microsoft.AzureCLI` |
 | GitHub Copilot CLI | `GitHub.Copilot` |
 | Visual Studio Code | `Microsoft.VisualStudioCode` |
 | .NET SDK 10 | `Microsoft.DotNet.SDK.10` |
@@ -130,7 +160,7 @@ A package counts as done only when winget reports it installed **and** current, 
 The Visual C++ runtime is installed before uv, matching Windows' native architecture.
 
 <details>
-<summary><strong>Windows settings — all 24 registry values</strong></summary>
+<summary><strong>Windows registry settings</strong></summary>
 
 **System** (`HKLM`, requires Administrator)
 
@@ -153,6 +183,7 @@ The Visual C++ runtime is installed before uv, matching Windows' native architec
 | No recent files in Quick Access | `ShowRecent` | `0` |
 | No recommended or cloud files | `ShowCloudFilesInQuickAccess` | `0` |
 | No sync-provider tips | `Advanced\ShowSyncProviderNotifications` | `0` |
+| Details pane state | `Modules\GlobalSettings\DetailsContainer\DetailsContainer` | Binary `01 00 00 00 02 00 00 00` |
 
 **Taskbar, Start, search and notifications**
 
@@ -189,7 +220,7 @@ Widgets are turned off through the OS policy value because the per-user taskbar 
 
 - **Cascadia Code NF** and **Cascadia Mono NF** are downloaded from the pinned [`microsoft/cascadia-code`](https://github.com/microsoft/cascadia-code/releases) release `2407.24`, verified against a known SHA-256, and installed **for all users** under `%SystemRoot%\Fonts`. An earlier per-user copy left by a previous run is removed.
 - **Windows Terminal** gets Cascadia Mono NF as its default font face and PowerShell 7 as its default profile. `settings.json` is backed up to `settings.json.bak` before either change.
-- **Oh My Posh** is initialized from your PowerShell 7 `$PROFILE`. If an `oh-my-posh init` line is already there, nothing is added.
+- **Oh My Posh** runs only in Windows Terminal or non-elevated PowerShell 7 sessions, in both modes. Setup updates its block in `$PROFILE`. If other initialization is present, it leaves the profile unchanged and flags it for manual adjustment.
 - A **GitHub Copilot** profile is added to Windows Terminal as a settings fragment in `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\DevConfig`, so it appears in the dropdown without editing your settings file.
 
 ### Developer extras
@@ -210,6 +241,8 @@ Nothing *inside* the distro is configured by this flow. For that, see [WSL Comfo
 ## How it works
 
 ### The phases
+
+`Full` runs all phases below. `Partial` skips Edge and uses [fewer settings](#setup-actions).
 
 | # | Phase | Notes |
 | - | ----- | ----- |
@@ -278,6 +311,8 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass
 ```powershell
 powershell.exe -NoProfile -File .\src\windows-dev-config\dev-config.ps1 -AllowUnsigned
 ```
+
+Add [`-Action Partial`](#setup-actions) for the reduced setup.
 
 **Pin a tag, or try a branch.** `-Ref` accepts a branch, tag, or commit SHA. Bootstrap resolves it once so its downloads use the same commit. Pass arguments with a script block, not `| iex`:
 
@@ -482,7 +517,7 @@ A phase is just a file plus an entry in the `$phases` list. Files prefixed with 
 | **Package versions move** | Packages are installed at whatever winget currently publishes, so two machines set up on different days can differ. `Microsoft.DotNet.SDK.10` and `Python.Python.3.14` pin a major version and will need bumping as those age. |
 | **The font release is pinned** | Cascadia Code `2407.24`, verified by hash. Newer releases need both the version and the hash updated in `steps/fonts.ps1`. |
 | **Terminal settings lose their comments** | `settings.json` is round-tripped through JSON, so comments don't survive. A `.bak` is written first. |
-| **No package selection at run time** | It's the full set or a local edit. There's no `-Skip` switch and no prompt. |
+| **No package selection at run time** | `Full` and `Partial` install all packages. There's no `-Skip` switch or selection prompt. |
 | **No dry run** | There's no `-WhatIf`. The `already OK` output tells you what a re-run *would* skip, but only after the fact. |
 | **Git and GitHub CLI are installed, not configured** | No `git config user.name`, no `gh auth login`. |
 | **`%ProgramData%\CalmOS` stays behind** | Setup and its log remain for resume and reruns. Deleting them requires Administrator rights. |

@@ -1,14 +1,12 @@
 <#
 .SYNOPSIS
-  Adds the Oh My Posh init line to the PowerShell 7 profile.
+  Configures Oh My Posh initialization in the PowerShell 7 profile.
 #>
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# Any oh-my-posh init line that is not commented out means the profile is already configured.
-$Script:OhMyPoshInitLineRegex = 'oh-my-posh(?:\.exe)?\s+init'
-
+# Exact text is needed to recognize existing setup blocks.
 $Script:OhMyPoshInitCommand = @'
 $(if (Get-Command 'oh-my-posh' -ErrorAction SilentlyContinue) { 
   oh-my-posh init pwsh
@@ -19,6 +17,24 @@ $(if (Get-Command 'oh-my-posh' -ErrorAction SilentlyContinue) {
 })
 '@
 
+function Get-DevConfigOhMyPoshProfileBlock {
+    $block = "$Script:OhMyPoshInitCommand`n | Invoke-Expression`n" -replace "`r`n", "`n"
+    $gate = @'
+$usePosh = [bool]$env:WT_SESSION
+if (-not $usePosh) {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+        $usePosh = -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } finally {
+        $identity.Dispose()
+    }
+}
+if ($usePosh) {
+'@
+    return ($gate -replace "`r`n", "`n") + "`n" + $block + "}`n"
+}
+
 function Get-DevConfigPwshProfilePath {
     $pwsh = Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue
     if (-not $pwsh) {
@@ -28,25 +44,25 @@ function Get-DevConfigPwshProfilePath {
     return & $pwsh.Source -NoProfile -Command '$PROFILE'
 }
 
-function Test-DevConfigOhMyPoshInitLinePresent {
+function Test-DevConfigOhMyPoshInitPresent {
     param(
-        [Parameter(Mandatory)] [string] $ProfilePath
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Content
     )
-    if (-not (Test-Path -LiteralPath $ProfilePath)) {
-        return $false
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Content, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -gt 0) {
+        throw "The PowerShell profile could not be parsed and was left unchanged: $($parseErrors[0].Message)"
     }
 
-    # Scan from the end so the last non-comment matching line controls the result.
-    $lines = @((Read-DevConfigTextFile -Path $ProfilePath) -split "`r?`n")
-    for ($i = $lines.Count - 1; $i -ge 0; $i--) {
-        if ($lines[$i].TrimStart().StartsWith('#')) {
-            continue
-        }
-        if ($lines[$i] -cmatch $Script:OhMyPoshInitLineRegex) {
-            return $true
-        }
-    }
-    return $false
+    return $null -ne $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -match '(^|[\\/])oh-my-posh(?:\.exe)?$' -and
+            $node.CommandElements.Count -gt 1 -and
+            $node.CommandElements[1] -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+            $node.CommandElements[1].Value -eq 'init'
+    }, $true)
 }
 
 function Test-DevConfigOhMyPoshProfileConfigured {
@@ -54,7 +70,10 @@ function Test-DevConfigOhMyPoshProfileConfigured {
     if (-not $profilePath) {
         return $false
     }
-    return Test-DevConfigOhMyPoshInitLinePresent -ProfilePath $profilePath
+    $content = [string](Read-DevConfigTextFile -Path $profilePath) -replace "`r`n", "`n"
+    $desiredBlock = Get-DevConfigOhMyPoshProfileBlock
+    return $content.Contains($desiredBlock) -and
+        -not (Test-DevConfigOhMyPoshInitPresent -Content $content.Replace($desiredBlock, ''))
 }
 
 function Set-DevConfigOhMyPoshProfile {
@@ -63,22 +82,28 @@ function Set-DevConfigOhMyPoshProfile {
         throw 'pwsh.exe not found; install the PowerShell package first.'
     }
 
-    if (Test-DevConfigOhMyPoshInitLinePresent -ProfilePath $profilePath) {
-        return
+    $content = [string](Read-DevConfigTextFile -Path $profilePath) -replace "`r`n", "`n"
+    $legacyBlock = "$Script:OhMyPoshInitCommand`n | Invoke-Expression`n" -replace "`r`n", "`n"
+    $desiredBlock = Get-DevConfigOhMyPoshProfileBlock
+
+    $managedBlock = if ($content.Contains($desiredBlock)) { $desiredBlock } else { $legacyBlock }
+    if (Test-DevConfigOhMyPoshInitPresent -Content $content.Replace($managedBlock, '')) {
+        throw 'Oh My Posh initialization outside the setup block was left unchanged. Adjust it manually to run only in Windows Terminal or non-elevated shells.'
     }
 
-    # The whole block is piped to Invoke-Expression, which is the documented Oh My Posh init form.
-    $content = Read-DevConfigTextFile -Path $profilePath
-    if (-not $content) {
-        $content = ''
+    if ($content.Contains($desiredBlock)) {
+        return
+    } elseif ($content.Contains($legacyBlock)) {
+        $content = $content.Replace($legacyBlock, $desiredBlock)
+    } else {
+        if ($content -and -not $content.EndsWith("`n")) {
+            $content += "`n"
+        }
+        $content += $desiredBlock
     }
-    if ($content -and -not $content.EndsWith("`n")) {
-        $content += "`n"
-    }
-    $content += "$Script:OhMyPoshInitCommand`n | Invoke-Expression`n"
 
     Write-DevConfigTextFile -Path $profilePath -Content $content
-    Write-Host "Added Oh My Posh init to $profilePath"
+    Write-Host "Configured Oh My Posh init in $profilePath"
 }
 
 function Invoke-PowerShellProfilePhase {
