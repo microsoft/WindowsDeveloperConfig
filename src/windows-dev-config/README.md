@@ -66,17 +66,13 @@ Both `bootstrap.ps1` and `dev-config.ps1` accept `-Action`:
 | Action | Behavior |
 | ------ | -------- |
 | `Full` | Default. Applies the complete setup. |
-| `Partial` | Full setup with the differences below. |
+| `Partial` | A subset of `Full`, with the exclusions below. |
 | `Uninstall` | Stops with an error; makes no changes. |
 
 `Partial` skips changes to Sudo, Developer Mode, Remote Desktop, Edge policies, Explorer's
 recommended/cloud files, global notifications, the Bluetooth tray icon, web
 search, search highlights, Widgets, and WinUI templates. It still
 installs the WinUI Copilot plugin.
-
-`Partial` also disables Start menu account notifications by setting
-`HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced\Start_AccountNotifications`
-to DWORD `0`.
 
 ```powershell
 $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
@@ -195,6 +191,7 @@ The Visual C++ runtime is installed before uv, matching Windows' native architec
 | No web results in search | `HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer\DisableSearchBoxSuggestions` | `1` |
 | No search highlights | `HKCU\...\SearchSettings\IsDynamicSearchBoxEnabled` | `0` |
 | No Start menu recommendations | `HKCU\...\Explorer\Advanced\Start_IrisRecommendations` | `0` |
+| No Start menu account notifications | `HKCU\...\Explorer\Advanced\Start_AccountNotifications` | `0` |
 | Widgets off | `HKLM\SOFTWARE\Policies\Microsoft\Dsh\AllowNewsAndInterests` | `0` |
 | No PowerToys always-on-top toasts | `HKCU\...\Notifications\Settings\PowerToys\Enabled` | `0` |
 

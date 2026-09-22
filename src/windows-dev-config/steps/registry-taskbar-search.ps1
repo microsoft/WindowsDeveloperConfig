@@ -16,12 +16,12 @@ function Invoke-RegistryTaskbarSearchPhase {
         @{ Name = 'WebSearchOff';           KeyPath = 'HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer';                    ValueName = 'DisableSearchBoxSuggestions';         Value = 1; Description = 'Disable web search in Start/Search' }
         @{ Name = 'SearchHighlightOff';     KeyPath = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\SearchSettings';        ValueName = 'IsDynamicSearchBoxEnabled';           Value = 0; Description = 'Disable Show search highlights' }
         @{ Name = 'StartRecommendations';   KeyPath = $advanced;                                                              ValueName = 'Start_IrisRecommendations';           Value = 0; Description = 'Disable Start menu recommendations' }
+        @{ Name = 'StartAccountNotifications'; KeyPath = $advanced; ValueName = 'Start_AccountNotifications'; Value = 0; Description = 'Disable Start menu account notifications' }
         # Widgets are configured at OS policy level because the direct taskbar icon key is blocked on 24H2+.
         @{ Name = 'WidgetServiceOff';       KeyPath = 'HKLM\SOFTWARE\Policies\Microsoft\Dsh';                                 ValueName = 'AllowNewsAndInterests';               Value = 0; Description = 'Disable Widget service' }
     )
     if ($Script:DevConfigAction -eq 'Partial') {
-        $tweaks = @($tweaks | Where-Object { $_.Name -in @('EndTask', 'StartRecommendations') })
-        $tweaks += @{ Name = 'StartAccountNotifications'; KeyPath = $advanced; ValueName = 'Start_AccountNotifications'; Value = 0; Description = 'Disable Start menu account notifications' }
+        $tweaks = @($tweaks | Where-Object { $_.Name -in @('EndTask', 'StartRecommendations', 'StartAccountNotifications') })
     }
 
     # ArgumentList binds each tweak's values at call time instead of closure capture.
