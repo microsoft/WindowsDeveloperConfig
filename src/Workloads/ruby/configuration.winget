@@ -12,10 +12,10 @@ resources:
   - name: Ruby
     type: Microsoft.WinGet/Package
     properties:
-      id: RubyInstallerTeam.RubyWithDevKit.3.4
+      id: RubyInstallerTeam.RubyWithDevKit.4.0
       source: winget
       acceptAgreements: true
     metadata:
-      description: Install Ruby 3.4 with MSYS2 DevKit (provides ruby + gem + ridk)
+      description: Install Ruby 4.0 with MSYS2 DevKit (provides ruby + gem + ridk)
       winget:
         securityContext: elevated

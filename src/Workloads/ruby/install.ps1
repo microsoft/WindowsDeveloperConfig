@@ -5,7 +5,7 @@
 .DESCRIPTION
   This script is a thin CI/dev shim. The core artifact for the Ruby flow is
   `configuration.winget` in this directory — a winget DSC configuration that
-  declaratively installs Ruby 3.4 with MSYS2 DevKit via winget.
+  declaratively installs Ruby 4.0 with MSYS2 DevKit via winget.
 
   The shim exists only to:
     * apply the DSC config with retry (hosted-runner networks are flaky),

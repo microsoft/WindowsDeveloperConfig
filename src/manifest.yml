@@ -225,9 +225,9 @@ flows:
 
   - id: ruby
     name: Ruby
-    description: Ruby 3.4 + MSYS2 DevKit
+    description: Ruby 4.0 + MSYS2 DevKit
     category: languages
-    tags: [ruby, gem, scripting, rails]
+    tags: [ruby, gem, scripting, devkit]
     icon: 💎
     onboardingUrl: https://www.ruby-lang.org/en/documentation/quickstart/
     os: [windows]
