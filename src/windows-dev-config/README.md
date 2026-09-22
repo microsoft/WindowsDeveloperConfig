@@ -100,7 +100,7 @@ Every one of these is listed in full detail in [What it changes](#what-it-change
 
 ## What it changes
 
-50 individual steps across 11 phases. Each one is checked first and skipped if the machine is already in that state.
+51 steps across 11 phases. Steps already in the desired state are skipped.
 
 ### Packages
 
@@ -116,6 +116,7 @@ Installed with winget from the `winget` source, silently, with agreements accept
 | Visual Studio Code | `Microsoft.VisualStudioCode` |
 | .NET SDK 10 | `Microsoft.DotNet.SDK.10` |
 | Python 3.14 | `Python.Python.3.14` |
+| Visual C++ Redistributable | `Microsoft.VCRedist.2015+.x64` or `Microsoft.VCRedist.2015+.arm64` |
 | uv | `astral-sh.uv` |
 | Node.js LTS | `OpenJS.NodeJS.LTS` |
 | nvm for Windows | `CoreyButler.NVMforWindows` |
@@ -125,6 +126,8 @@ Installed with winget from the `winget` source, silently, with agreements accept
 | PowerToys | `Microsoft.PowerToys` |
 
 A package counts as done only when winget reports it installed **and** current, so a re-run also picks up available updates.
+
+The Visual C++ runtime is installed before uv, matching Windows' native architecture.
 
 <details>
 <summary><strong>Windows settings — all 24 registry values</strong></summary>
@@ -211,7 +214,7 @@ Nothing *inside* the distro is configured by this flow. For that, see [WSL Comfo
 | # | Phase | Notes |
 | - | ----- | ----- |
 | 1 | Getting ready | Confirms PowerShell 7, then updates winget to the latest public stable release |
-| 2 | Packages | The 15 packages above, plus the PowerToys notification setting |
+| 2 | Packages | The packages above, plus the PowerToys notification setting |
 | 3 | System settings | Sudo, Developer Mode, long paths, Remote Desktop |
 | 4 | File Explorer tweaks | |
 | 5 | Taskbar, search & start tweaks | |

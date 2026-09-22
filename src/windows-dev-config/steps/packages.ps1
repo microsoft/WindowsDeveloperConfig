@@ -13,6 +13,14 @@ function Invoke-PackagesPhase {
     }
     Initialize-DevConfigWinGet
 
+    # PowerShell's process architecture can differ from Windows' native architecture.
+    $architecture = Get-ItemPropertyValue -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name 'PROCESSOR_ARCHITECTURE'
+    $vcRedistId = switch ($architecture) {
+        'AMD64' { 'Microsoft.VCRedist.2015+.x64' }
+        'ARM64' { 'Microsoft.VCRedist.2015+.arm64' }
+        default { throw "Unsupported Windows architecture: $architecture" }
+    }
+
     $packages = @(
         @{ Name = 'Terminal';      Id = 'Microsoft.WindowsTerminal' }
         @{ Name = 'PowerShell';    Id = 'Microsoft.PowerShell' }
@@ -22,6 +30,7 @@ function Invoke-PackagesPhase {
         @{ Name = 'VSCode';        Id = 'Microsoft.VisualStudioCode'; Large = $true }
         @{ Name = 'DotnetSdk';     Id = 'Microsoft.DotNet.SDK.10';    Large = $true }
         @{ Name = 'Python';        Id = 'Python.Python.3.14' }
+        @{ Name = 'VCRedist';      Id = $vcRedistId }
         @{ Name = 'UV';            Id = 'astral-sh.uv' }
         @{ Name = 'NodeJS';        Id = 'OpenJS.NodeJS.LTS' }
         @{ Name = 'nvmForNode';    Id = 'CoreyButler.NVMforWindows' }
