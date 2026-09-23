@@ -93,6 +93,7 @@ function Invoke-PackagesPhase {
             Name           = 'Git'
             Id             = 'Git.Git'
             UninstallOrder = 6
+            InnoUninstall  = @{ DisplayName = 'Git'; Publisher = 'The Git Development Community' }
         }
         @{
             Name           = 'GitHubCLI'
@@ -115,6 +116,7 @@ function Invoke-PackagesPhase {
             Id             = 'Microsoft.VisualStudioCode'
             Large          = $true
             UninstallOrder = 14
+            InnoUninstall  = @{ DisplayName = 'Microsoft Visual Studio Code'; Publisher = 'Microsoft Corporation' }
         }
         @{
             Name           = 'DotnetSdk'
@@ -208,9 +210,9 @@ function Invoke-PackagesPhase {
                             $ids += $package.AdditionalUninstallIds
                         }
                         New-DevConfigStep -Name "$($package.Name)Cleanup" -Description "Uninstall $($package.Name) (user, machine, and MSIX)" -BestEffort `
-                            -Check { param($Ids) Invoke-DevConfigPackageCleanup -Ids $Ids -CheckOnly } `
-                            -Apply { param($Ids) Invoke-DevConfigPackageCleanup -Ids $Ids } `
-                            -ArgumentList @(, $ids)
+                            -Check { param($Ids, $InnoUninstall) Invoke-DevConfigPackageCleanup -Ids $Ids -InnoUninstall $InnoUninstall -CheckOnly } `
+                            -Apply { param($Ids, $InnoUninstall) Invoke-DevConfigPackageCleanup -Ids $Ids -InnoUninstall $InnoUninstall } `
+                            -ArgumentList @($ids, $package['InnoUninstall'])
                     }
                 }
             }

@@ -314,9 +314,44 @@ function Wait-DevConfigWingetPackageSettled {
     Set-DevConfigStepUnverified -Reason "WinGet reported $Id installed, but its catalog still doesn't list it as current 15s later. It's on the machine -- re-run to confirm."
 }
 
+function Invoke-DevConfigInnoCleanup {
+    param(
+        [Parameter(Mandatory)] [string] $DisplayName,
+        [Parameter(Mandatory)] [string] $Publisher,
+        [Parameter(Mandatory)] [ValidateSet('user', 'machine')] [string] $Scope
+    )
+    $hive = if ($Scope -eq 'user') { 'HKCU' } else { 'HKLM' }
+    foreach ($root in @("${hive}:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            "${hive}:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        $keys = Get-ChildItem -LiteralPath $root -ErrorAction Stop |
+            Where-Object { $_.PSChildName -like '*_is1' }
+        foreach ($key in $keys) {
+            $entry = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction Stop
+            if (-not $entry.PSObject.Properties['DisplayName'] -or
+                $entry.DisplayName -notin @($DisplayName, "$DisplayName (User)") -or
+                -not $entry.PSObject.Properties['Publisher'] -or $entry.Publisher -ne $Publisher) {
+                continue
+            }
+            $command = $entry.PSObject.Properties['UninstallString']
+            if (-not $command) {
+                throw "The registered $DisplayName uninstaller is missing. Repair its installation and retry."
+            }
+            $match = [regex]::Match([string]$command.Value, '(?i)^(?:"(?<Path>[^"]+\\unins[0-9]+\.exe)"|(?<Path>[^\s"]+\\unins[0-9]+\.exe))$')
+            $path = [Environment]::ExpandEnvironmentVariables($match.Groups['Path'].Value)
+            if (-not $match.Success -or $path -notmatch '^(?:[a-zA-Z]:\\|\\\\[^\\]+\\[^\\]+\\)') {
+                throw "The registered $DisplayName Inno uninstaller is not a supported executable path. Repair its installation and retry."
+            }
+            Invoke-DevConfigCleanupCommand -FilePath $path `
+                -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -Unelevated:($Scope -eq 'user') | Out-Null
+        }
+    }
+}
+
 function Invoke-DevConfigPackageCleanup {
     param(
         [Parameter(Mandatory)] [string[]] $Ids,
+        [hashtable] $InnoUninstall,
         [switch] $CheckOnly
     )
     $failures = @()
@@ -324,6 +359,9 @@ function Invoke-DevConfigPackageCleanup {
     foreach ($id in $Ids) {
         foreach ($scope in @('user', 'machine')) {
             try {
+                if (-not $CheckOnly -and $InnoUninstall) {
+                    Invoke-DevConfigInnoCleanup @InnoUninstall -Scope $scope
+                }
                 $arguments = @($operation, $id)
                 if (-not $CheckOnly) {
                     $arguments += '--silent'

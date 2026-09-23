@@ -468,7 +468,8 @@ Run in an elevated PowerShell window:
 From source: `.\src\windows-dev-config\dev-config.ps1 -AllowUnsigned -Action Uninstall`.
 `bootstrap.ps1` also accepts `-Action Uninstall`. Cleanup uses Windows PowerShell to remove PowerShell 7.
 Per-user tools are removed through temporary tasks in the same account's non-elevated, signed-in session.
-Some uninstallers may request Administrator approval.
+Git and Visual Studio Code use their registered Inno uninstallers without progress windows or automatic restarts;
+other installation types use WinGet. Some uninstallers may still request Administrator approval.
 
 **Cleanup runs without confirmation and permanently deletes the `Ubuntu` distro and its files.**
 It uninstalls WSL and the tools below, including pre-existing, machine-wide, and all-user MSIX installations.
@@ -528,7 +529,7 @@ Edit the files under `src\windows-dev-config` in your clone, then run the [unsig
 A phase is just a file plus an entry in the `$phases` list. Files prefixed with `_` are shared helpers, not phases.
 
 Setup and cleanup use the same phase files and definitions. Phases marked `Uninstall = $true` provide cleanup steps.
-Package entries use `KeepOnUninstall`, `AdditionalUninstallIds`, and `UninstallOrder` for cleanup differences;
+Package entries use `KeepOnUninstall`, `AdditionalUninstallIds`, `UninstallOrder`, and `InnoUninstall` for cleanup differences;
 registry entries marked `ResetOnUninstall` are reset.
 `New-DevConfigRegistryStep` builds registry steps; `-Reset` deletes only the named value.
 
