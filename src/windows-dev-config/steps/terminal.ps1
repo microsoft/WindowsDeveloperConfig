@@ -7,15 +7,24 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Script:DevConfigThemeKey = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+$Script:DevConfigThemeSettings = @(
+    @{ Name = 'AppsTheme'; KeyPath = $Script:DevConfigThemeKey; ValueName = 'AppsUseLightTheme'; Value = 0; ResetValue = 1 }
+    @{ Name = 'SystemTheme'; KeyPath = $Script:DevConfigThemeKey; ValueName = 'SystemUsesLightTheme'; Value = 0; ResetValue = 1 }
+)
 
 function Test-DevConfigDarkThemeSet {
-    return (Test-DevConfigRegistryValue -KeyPath $Script:DevConfigThemeKey -ValueName 'AppsUseLightTheme'    -Value 0) -and
-           (Test-DevConfigRegistryValue -KeyPath $Script:DevConfigThemeKey -ValueName 'SystemUsesLightTheme' -Value 0)
+    foreach ($setting in $Script:DevConfigThemeSettings) {
+        if (-not (Test-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value)) {
+            return $false
+        }
+    }
+    return $true
 }
 
 function Set-DevConfigDarkTheme {
-    Set-DevConfigRegistryValue -KeyPath $Script:DevConfigThemeKey -ValueName 'AppsUseLightTheme'    -Value 0
-    Set-DevConfigRegistryValue -KeyPath $Script:DevConfigThemeKey -ValueName 'SystemUsesLightTheme' -Value 0
+    foreach ($setting in $Script:DevConfigThemeSettings) {
+        Set-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value
+    }
 }
 
 function Test-DevConfigPs7DefaultProfile {
@@ -62,6 +71,9 @@ function Set-DevConfigPs7DefaultProfile {
 function Invoke-TerminalPhase {
     if ($Script:DevConfigAction -eq 'Uninstall') {
         $steps = @(
+            foreach ($setting in $Script:DevConfigThemeSettings) {
+                New-DevConfigRegistryStep -Setting $setting -Reset
+            }
             New-DevConfigStep -Name 'TerminalReset' -Description 'Remove Terminal defaults and PowerShell, Copilot, and Ubuntu profiles' -BestEffort `
                 -Check { param($DistributionName) Reset-DevConfigTerminal -DistributionName $DistributionName -CheckOnly } `
                 -Apply { param($DistributionName) Reset-DevConfigTerminal -DistributionName $DistributionName } `

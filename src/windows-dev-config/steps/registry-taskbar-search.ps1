@@ -11,12 +11,11 @@ function Invoke-RegistryTaskbarSearchPhase {
 
     $tweaks = @(
         @{
-            Name             = 'DoNotDisturb'
-            KeyPath          = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings'
-            ValueName        = 'NOC_GLOBAL_SETTING_TOASTS_ENABLED'
-            Value            = 0
-            Description      = 'Enable Do Not Disturb (disable all notifications)'
-            ResetOnUninstall = $true
+            Name        = 'DoNotDisturb'
+            KeyPath     = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings'
+            ValueName   = 'NOC_GLOBAL_SETTING_TOASTS_ENABLED'
+            Value       = 0
+            Description = 'Enable Do Not Disturb (disable all notifications)'
         }
         @{
             Name        = 'BluetoothOff'
@@ -26,12 +25,11 @@ function Invoke-RegistryTaskbarSearchPhase {
             Description = 'Hide Bluetooth icon in taskbar notification area'
         }
         @{
-            Name             = 'EndTask'
-            KeyPath          = "$advanced\TaskbarDeveloperSettings"
-            ValueName        = 'TaskbarEndTask'
-            Value            = 1
-            Description      = 'Enable "End Task" on right-click of taskbar icons'
-            ResetOnUninstall = $true
+            Name        = 'EndTask'
+            KeyPath     = "$advanced\TaskbarDeveloperSettings"
+            ValueName   = 'TaskbarEndTask'
+            Value       = 1
+            Description = 'Enable "End Task" on right-click of taskbar icons'
         }
         @{
             Name        = 'WebSearchOff'
@@ -48,20 +46,18 @@ function Invoke-RegistryTaskbarSearchPhase {
             Description = 'Disable Show search highlights'
         }
         @{
-            Name             = 'StartRecommendations'
-            KeyPath          = $advanced
-            ValueName        = 'Start_IrisRecommendations'
-            Value            = 0
-            Description      = 'Disable Start menu recommendations'
-            ResetOnUninstall = $true
+            Name        = 'StartRecommendations'
+            KeyPath     = $advanced
+            ValueName   = 'Start_IrisRecommendations'
+            Value       = 0
+            Description = 'Disable Start menu recommendations'
         }
         @{
-            Name             = 'StartAccountNotifications'
-            KeyPath          = $advanced
-            ValueName        = 'Start_AccountNotifications'
-            Value            = 0
-            Description      = 'Disable Start menu account notifications'
-            ResetOnUninstall = $true
+            Name        = 'StartAccountNotifications'
+            KeyPath     = $advanced
+            ValueName   = 'Start_AccountNotifications'
+            Value       = 0
+            Description = 'Disable Start menu account notifications'
         }
         # Windows may protect the Widgets policy even from an administrator.
         @{
@@ -74,25 +70,19 @@ function Invoke-RegistryTaskbarSearchPhase {
         }
     )
 
-    if ($Script:DevConfigAction -eq 'Uninstall') {
-        $steps = @($tweaks | Where-Object { $_['ResetOnUninstall'] } | ForEach-Object {
-            New-DevConfigRegistryStep -Setting $_ -Reset
-        })
-        $steps += New-DevConfigRegistryStep -Reset -Setting @{
-            Name      = 'QuietHoursProfile'
-            KeyPath   = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\QuietHours\Profiles'
-            ValueName = 'DefaultProfile'
-        }
-        Invoke-DevConfigSteps -Steps $steps
-        return
-    }
-
     if ($Script:DevConfigAction -eq 'Partial') {
         $tweaks = @($tweaks | Where-Object { $_.Name -in @('EndTask', 'StartRecommendations', 'StartAccountNotifications') })
     }
 
     $steps = foreach ($tweak in $tweaks) {
-        New-DevConfigRegistryStep -Setting $tweak
+        New-DevConfigRegistryStep -Setting $tweak -Reset:($Script:DevConfigAction -eq 'Uninstall')
+    }
+    if ($Script:DevConfigAction -eq 'Uninstall') {
+        $steps += New-DevConfigRegistryStep -Reset -Setting @{
+            Name      = 'QuietHoursProfile'
+            KeyPath   = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\QuietHours\Profiles'
+            ValueName = 'DefaultProfile'
+        }
     }
 
     Invoke-DevConfigSteps -Steps $steps

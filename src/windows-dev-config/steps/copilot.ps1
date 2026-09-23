@@ -6,7 +6,9 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Script:DevConfigWinUIPlugin = 'winui@win-dev-skills'
+$Script:DevConfigWinUITemplatePackage = 'Microsoft.WindowsAppSDK.WinUI.CSharp.Templates'
+$Script:DevConfigWinSkillsMarketplace = 'win-dev-skills'
+$Script:DevConfigWinUIPlugin = "winui@$Script:DevConfigWinSkillsMarketplace"
 
 function Test-DevConfigCopilotTerminalProfile {
     $fragmentsDir = Get-DevConfigCopilotFragmentDir
@@ -77,7 +79,7 @@ function Install-DevConfigWinUITemplates {
     if (-not (Get-Command 'dotnet' -ErrorAction SilentlyContinue)) {
         throw 'dotnet is not on PATH yet, so the WinUI templates cannot be installed. Re-run once the .NET SDK is in place.'
     }
-    $r = Invoke-DevConfigNativeCommand -FilePath 'dotnet' -Arguments @('new', 'install', 'Microsoft.WindowsAppSDK.WinUI.CSharp.Templates')
+    $r = Invoke-DevConfigNativeCommand -FilePath 'dotnet' -Arguments @('new', 'install', $Script:DevConfigWinUITemplatePackage)
     if ($r.ExitCode -ne 0) {
         Write-Host $r.Output
         throw "dotnet new install failed with exit code $($r.ExitCode)"
@@ -89,14 +91,14 @@ function Test-DevConfigWinSkillsMarketplaceAdded {
         return $false
     }
     $r = Invoke-DevConfigNativeCommand -FilePath 'copilot' -Arguments @('plugin', 'marketplace', 'list')
-    return $r.ExitCode -eq 0 -and $r.Output -match 'win-dev-skills'
+    return $r.ExitCode -eq 0 -and $r.Output -match [regex]::Escape($Script:DevConfigWinSkillsMarketplace)
 }
 
 function Add-DevConfigWinSkillsMarketplace {
     if (-not (Get-Command 'copilot' -ErrorAction SilentlyContinue)) {
         throw 'The copilot command is not on PATH yet, so its marketplace cannot be configured. Re-run once GitHub Copilot CLI is in place.'
     }
-    $r = Invoke-DevConfigNativeCommand -FilePath 'copilot' -Arguments @('plugin', 'marketplace', 'add', 'microsoft/win-dev-skills')
+    $r = Invoke-DevConfigNativeCommand -FilePath 'copilot' -Arguments @('plugin', 'marketplace', 'add', "microsoft/$Script:DevConfigWinSkillsMarketplace")
     if ($r.ExitCode -ne 0) {
         Write-Host $r.Output
         throw "copilot plugin marketplace add failed with exit code $($r.ExitCode)"
@@ -138,6 +140,33 @@ function Get-DevConfigInstalledWinUIPlugin {
     }
 }
 
+function Test-DevConfigWinUITemplatePackageInstalled {
+    if (Get-Command dotnet -CommandType Application -ErrorAction SilentlyContinue) {
+        $sdks = Invoke-DevConfigCleanupCommand -FilePath 'dotnet' -Arguments @('--list-sdks')
+        if (-not [string]::IsNullOrWhiteSpace($sdks.Output)) {
+            $result = Invoke-DevConfigCleanupCommand -FilePath 'dotnet' -Arguments @('new', 'uninstall')
+            return @($result.Output -split '\r?\n' | Where-Object { $_.Trim() -eq $Script:DevConfigWinUITemplatePackage }).Count -gt 0
+        }
+    }
+
+    $cliHome = if ($env:DOTNET_CLI_HOME) { $env:DOTNET_CLI_HOME } else { $env:USERPROFILE }
+    $packages = Join-Path $cliHome '.templateengine\packages'
+    if ((Test-Path -LiteralPath $packages) -and
+        @(Get-ChildItem -LiteralPath $packages -Filter "$Script:DevConfigWinUITemplatePackage.*.nupkg" -File).Count -gt 0) {
+        throw 'The WinUI template package remains, but no .NET SDK is available. Repair the SDK and retry cleanup.'
+    }
+    return $false
+}
+
+function Test-DevConfigWinSkillsMarketplaceRegistered {
+    if (-not (Get-Command copilot -CommandType Application -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+    $result = Invoke-DevConfigCleanupCommand -FilePath 'copilot' -Arguments @('plugin', 'marketplace', 'list', '--json')
+    $marketplaces = $result.Output | ConvertFrom-Json
+    return @($marketplaces | Where-Object { $_.name -eq $Script:DevConfigWinSkillsMarketplace }).Count -gt 0
+}
+
 function Invoke-CopilotPhase {
     if ($Script:DevConfigAction -eq 'Uninstall') {
         $fragmentsDir = Get-DevConfigCopilotFragmentDir
@@ -163,6 +192,16 @@ function Invoke-CopilotPhase {
                     foreach ($plugin in @(Get-DevConfigInstalledWinUIPlugin)) {
                         Invoke-DevConfigCleanupCommand -FilePath 'copilot' -Arguments @('plugin', 'uninstall', $plugin) | Out-Null
                     }
+                }
+            New-DevConfigStep -Name 'WinSkillsMarketplaceCleanup' -Description 'Remove the win-dev-skills Copilot marketplace' -BestEffort `
+                -Check { -not (Test-DevConfigWinSkillsMarketplaceRegistered) } `
+                -Apply {
+                    Invoke-DevConfigCleanupCommand -FilePath 'copilot' -Arguments @('plugin', 'marketplace', 'remove', $Script:DevConfigWinSkillsMarketplace) | Out-Null
+                }
+            New-DevConfigStep -Name 'WinUITemplatesCleanup' -Description 'Uninstall the WinUI dotnet-new template package' -BestEffort `
+                -Check { -not (Test-DevConfigWinUITemplatePackageInstalled) } `
+                -Apply {
+                    Invoke-DevConfigCleanupCommand -FilePath 'dotnet' -Arguments @('new', 'uninstall', $Script:DevConfigWinUITemplatePackage) | Out-Null
                 }
         )
         Invoke-DevConfigSteps -Steps $steps

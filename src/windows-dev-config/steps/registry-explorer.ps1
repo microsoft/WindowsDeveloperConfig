@@ -88,6 +88,7 @@ function Invoke-RegistryExplorerPhase {
             KeyPath     = $advanced
             ValueName   = 'HideFileExt'
             Value       = 0
+            ResetValue  = 1
             Description = 'Show file extensions in Explorer'
         }
         @{
@@ -95,6 +96,7 @@ function Invoke-RegistryExplorerPhase {
             KeyPath     = $advanced
             ValueName   = 'Hidden'
             Value       = 1
+            ResetValue  = 2
             Description = 'Show hidden files in Explorer'
         }
         @{
@@ -102,31 +104,29 @@ function Invoke-RegistryExplorerPhase {
             KeyPath     = $cabinet
             ValueName   = 'FullPath'
             Value       = 1
+            ResetValue  = 0
             Description = 'Show full path in Explorer titlebar'
         }
         @{
-            Name             = 'OpenThisPC'
-            KeyPath          = $advanced
-            ValueName        = 'LaunchTo'
-            Value            = 1
-            Description      = 'Open File Explorer to This PC'
-            ResetOnUninstall = $true
+            Name        = 'OpenThisPC'
+            KeyPath     = $advanced
+            ValueName   = 'LaunchTo'
+            Value       = 1
+            Description = 'Open File Explorer to This PC'
         }
         @{
-            Name             = 'FrequentFolders'
-            KeyPath          = $explorer
-            ValueName        = 'ShowFrequent'
-            Value            = 0
-            Description      = 'Disable frequent folders in Quick Access'
-            ResetOnUninstall = $true
+            Name        = 'FrequentFolders'
+            KeyPath     = $explorer
+            ValueName   = 'ShowFrequent'
+            Value       = 0
+            Description = 'Disable frequent folders in Quick Access'
         }
         @{
-            Name             = 'FrequentFiles'
-            KeyPath          = $explorer
-            ValueName        = 'ShowRecent'
-            Value            = 0
-            Description      = 'Disable frequent files in Quick Access'
-            ResetOnUninstall = $true
+            Name        = 'FrequentFiles'
+            KeyPath     = $explorer
+            ValueName   = 'ShowRecent'
+            Value       = 0
+            Description = 'Disable frequent files in Quick Access'
         }
         @{
             Name        = 'RecommendedFiles'
@@ -136,41 +136,33 @@ function Invoke-RegistryExplorerPhase {
             Description = 'Disable recommended/cloud files in Quick Access'
         }
         @{
-            Name             = 'TipsOff'
-            KeyPath          = $advanced
-            ValueName        = 'ShowSyncProviderNotifications'
-            Value            = 0
-            Description      = 'Disable sync provider notifications (tips)'
-            ResetOnUninstall = $true
+            Name        = 'TipsOff'
+            KeyPath     = $advanced
+            ValueName   = 'ShowSyncProviderNotifications'
+            Value       = 0
+            Description = 'Disable sync provider notifications (tips)'
         }
         @{
-            Name             = 'DetailsContainer'
-            KeyPath          = "$explorer\Modules\GlobalSettings\DetailsContainer"
-            ValueName        = 'DetailsContainer'
-            Value            = [byte[]](0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00)
-            Type             = 'Binary'
-            Description      = 'Configure Explorer Details pane state'
-            ResetOnUninstall = $true
+            Name        = 'DetailsContainer'
+            KeyPath     = "$explorer\Modules\GlobalSettings\DetailsContainer"
+            ValueName   = 'DetailsContainer'
+            Value       = [byte[]](0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00)
+            Type        = 'Binary'
+            Description = 'Configure Explorer Details pane state'
         }
     )
-
-    if ($Script:DevConfigAction -eq 'Uninstall') {
-        $steps = @($tweaks | Where-Object { $_['ResetOnUninstall'] } | ForEach-Object {
-            New-DevConfigRegistryStep -Setting $_ -Reset
-        })
-        $steps += New-DevConfigStep -Name 'ExplorerDisplayReset' -Description 'Reset hidden files, file extensions, and full-path titles' -BestEffort `
-            -Check { Reset-DevConfigExplorerDisplay -CheckOnly } `
-            -Apply { Reset-DevConfigExplorerDisplay }
-        Invoke-DevConfigSteps -Steps $steps
-        return
-    }
 
     if ($Script:DevConfigAction -eq 'Partial') {
         $tweaks = @($tweaks | Where-Object { $_.Name -ne 'RecommendedFiles' })
     }
 
     $steps = foreach ($tweak in $tweaks) {
-        New-DevConfigRegistryStep -Setting $tweak
+        New-DevConfigRegistryStep -Setting $tweak -Reset:($Script:DevConfigAction -eq 'Uninstall')
+    }
+    if ($Script:DevConfigAction -eq 'Uninstall') {
+        $steps += New-DevConfigStep -Name 'ExplorerDisplayReset' -Description 'Reset hidden files, file extensions, and full-path titles' -BestEffort `
+            -Check { Reset-DevConfigExplorerDisplay -CheckOnly } `
+            -Apply { Reset-DevConfigExplorerDisplay }
     }
 
     Invoke-DevConfigSteps -Steps $steps

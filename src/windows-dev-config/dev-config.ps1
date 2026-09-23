@@ -115,9 +115,10 @@ $phases = @(
         Uninstall = $true
     }
     @{
-        File     = 'edge.ps1'
-        Function = 'Invoke-EdgePhase'
-        Title    = 'Microsoft Edge tweaks'
+        File      = 'edge.ps1'
+        Function  = 'Invoke-EdgePhase'
+        Title     = 'Microsoft Edge tweaks'
+        Uninstall = $true
     }
     @{
         File     = 'fonts.ps1'
@@ -131,9 +132,10 @@ $phases = @(
         Uninstall = $true
     }
     @{
-        File     = 'powershell-profile.ps1'
-        Function = 'Invoke-PowerShellProfilePhase'
-        Title    = 'PowerShell profile'
+        File      = 'powershell-profile.ps1'
+        Function  = 'Invoke-PowerShellProfilePhase'
+        Title     = 'PowerShell profile'
+        Uninstall = $true
     }
     @{
         File      = 'copilot.ps1'

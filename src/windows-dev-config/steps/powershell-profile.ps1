@@ -44,7 +44,7 @@ function Get-DevConfigPwshProfilePath {
     return & $pwsh.Source -NoProfile -Command '$PROFILE'
 }
 
-function Test-DevConfigOhMyPoshInitPresent {
+function Get-DevConfigProfileAst {
     param(
         [Parameter(Mandatory)] [AllowEmptyString()] [string] $Content
     )
@@ -54,7 +54,14 @@ function Test-DevConfigOhMyPoshInitPresent {
     if ($parseErrors.Count -gt 0) {
         throw "The PowerShell profile could not be parsed and was left unchanged: $($parseErrors[0].Message)"
     }
+    return $ast
+}
 
+function Test-DevConfigOhMyPoshInitPresent {
+    param(
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Content
+    )
+    $ast = Get-DevConfigProfileAst -Content $Content
     return $null -ne $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.CommandAst] -and
@@ -106,7 +113,57 @@ function Set-DevConfigOhMyPoshProfile {
     Write-Host "Configured Oh My Posh init in $profilePath"
 }
 
+function Remove-DevConfigOhMyPoshProfile {
+    param(
+        [switch] $CheckOnly
+    )
+    $profilePath = Get-DevConfigPwshProfilePath
+    if (-not $profilePath) {
+        $profilePath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Microsoft.PowerShell_profile.ps1'
+    }
+    $original = [string](Read-DevConfigTextFile -Path $profilePath)
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($original, [ref]$tokens, [ref]$parseErrors)
+    $content = $original
+    $blocks = @(
+        Get-DevConfigOhMyPoshProfileBlock
+        "$Script:OhMyPoshInitCommand`n | Invoke-Expression`n" -replace "`r`n", "`n"
+    )
+    $blocks += @($blocks | ForEach-Object { $_.Replace("`n", "`r`n") })
+    if ($ast.EndBlock) {
+        # Match only top-level setup blocks, not examples in strings or custom functions.
+        foreach ($statement in @($ast.EndBlock.Statements | Sort-Object { $_.Extent.StartOffset } -Descending)) {
+            $start = $statement.Extent.StartOffset
+            foreach ($block in $blocks) {
+                if ($original.Substring($start).StartsWith($block, [StringComparison]::Ordinal)) {
+                    $content = $content.Remove($start, $block.Length)
+                    break
+                }
+            }
+        }
+    }
+    # Validate after removing setup blocks, whose leading-pipe syntax requires PowerShell 7.
+    [void](Get-DevConfigProfileAst -Content $content)
+    if ($CheckOnly) {
+        return $content -eq $original
+    }
+    if ($content -ne $original) {
+        Write-DevConfigTextFile -Path $profilePath -Content $content
+    }
+}
+
 function Invoke-PowerShellProfilePhase {
+    if ($Script:DevConfigAction -eq 'Uninstall') {
+        $steps = @(
+            New-DevConfigStep -Name 'OhMyPoshProfileCleanup' -Description 'Remove managed Oh My Posh profile initialization' -BestEffort `
+                -Check { Remove-DevConfigOhMyPoshProfile -CheckOnly } `
+                -Apply { Remove-DevConfigOhMyPoshProfile }
+        )
+        Invoke-DevConfigSteps -Steps $steps
+        return
+    }
+
     # BestEffort keeps prompt customization from blocking later phases.
     $steps = @(
         New-DevConfigStep -Name 'OhMyPoshProfile' -Description 'Add Oh My Posh init to the PowerShell 7 profile' -BestEffort `

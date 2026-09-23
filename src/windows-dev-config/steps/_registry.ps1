@@ -70,7 +70,7 @@ function New-DevConfigRegistryStep {
         [Parameter(Mandatory)] [hashtable] $Setting,
         [switch] $Reset
     )
-    if ($Reset) {
+    if ($Reset -and -not $Setting.ContainsKey('ResetValue')) {
         return New-DevConfigStep -Name "$($Setting.Name)Reset" -Description "Reset $($Setting.ValueName)" -BestEffort `
             -Check {
                 param($KeyPath, $ValueName)
@@ -82,6 +82,14 @@ function New-DevConfigRegistryStep {
                 Remove-ItemProperty -LiteralPath $path -Name $ValueName -ErrorAction Stop
             } `
             -ArgumentList @($Setting.KeyPath, $Setting.ValueName)
+    }
+
+    if ($Reset) {
+        $Setting = $Setting.Clone()
+        $Setting.Name = "$($Setting.Name)Reset"
+        $Setting.Description = "Reset $($Setting.ValueName)"
+        $Setting.Value = $Setting.ResetValue
+        $Setting.BestEffort = $true
     }
 
     $type = if ($Setting.ContainsKey('Type')) { $Setting.Type } else { 'DWord' }

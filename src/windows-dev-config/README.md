@@ -67,7 +67,7 @@ Both `bootstrap.ps1` and `dev-config.ps1` accept `-Action`:
 | ------ | -------- |
 | `Full` | Default. Applies the complete setup. |
 | `Partial` | A subset of `Full`, with the exclusions below. |
-| `Uninstall` | [Resets settings and removes tools and Ubuntu data](#uninstall-and-manual-cleanup). |
+| `Uninstall` | [Resets Full's settings and removes tools and Ubuntu data](#uninstall-and-manual-cleanup), even after Partial. |
 
 `Partial` skips changes to Sudo, Developer Mode, Remote Desktop, Edge policies, Explorer's
 recommended/cloud files, global notifications, the Bluetooth tray icon, web
@@ -492,34 +492,15 @@ other installation types use WinGet. Some uninstallers may still request Adminis
 
 **Cleanup runs without confirmation and permanently deletes the `Ubuntu` distro and its files.**
 It uninstalls WSL and the tools below, including pre-existing, machine-wide, and all-user MSIX installations.
-It does not restore previous settings.
+Cleanup covers Full's configuration regardless of which setup action ran. It does not restore previous settings.
 
-- **Settings:** reset targeted Explorer, Start, notification, taskbar End Task, long-path, and WSL first-run settings.
+- **Settings:** disable Sudo, Developer Mode, and Remote Desktop; reset Explorer, Start, search, notification, Bluetooth tray, taskbar End Task, Widgets, Edge policies, long-path, and WSL first-run settings; switch app/system themes to light.
 - **Terminal:** remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries, and the Copilot fragment.
+- **Integrations:** remove the managed Oh My Posh profile block, WinUI template package, and win-dev-skills marketplace. Custom profile code and unrelated plugins are preserved; a marketplace still used by other plugins is flagged rather than force-removed.
 - **Tools:** remove uv executables, caches, and local data; NVM; the WinUI Copilot plugin; Node.js; Copilot; Python 3.14 and its launcher/install manager; Git; GitHub CLI; Oh My Posh; Azure CLI; Coreutils; .NET SDK 10; Intelligent Terminal; PowerToys; Visual Studio Code; Windows App CLI; and PowerShell 7.
 
 Failed or timed-out steps are flagged; cleanup continues. Long-running commands show progress.
-Unlisted settings, fonts, the Windows Terminal app, the Visual C++ runtime, and setup files remain.
-
-Manual resets for other settings (`HKLM` requires elevation):
-
-```powershell
-# Remote Desktop off again
-Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 1
-
-# Drop the two Edge policies (removes "managed by your organization" for them)
-Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' NewTabPageLocation, HideFirstRunExperience
-
-# Notifications back on
-Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings' NOC_GLOBAL_SETTING_TOASTS_ENABLED 1
-
-# Widgets back on
-Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' AllowNewsAndInterests
-
-# Back to light mode
-Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' AppsUseLightTheme 1
-Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' SystemUsesLightTheme 1
-```
+Unlisted settings, fonts, Windows Terminal, the Visual C++ runtime, shared prerequisites (WinGet and Windows optional features), and setup files/logs remain.
 
 Additional manual cleanup:
 
@@ -527,7 +508,6 @@ Additional manual cleanup:
 - **Explorer, Start and search settings:** all of them are also in Settings and Explorer's Options dialog. Sign out and back in for them to take effect.
 - **Windows Terminal:** restore the `settings.json.bak` written next to `settings.json`.
 - **The Copilot Terminal profile:** delete `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\DevConfig`.
-- **The Oh My Posh prompt:** remove the `oh-my-posh init` block from your PowerShell 7 `$PROFILE`.
 - **Ubuntu:** `wsl --unregister Ubuntu`. This permanently deletes the distro's file system.
 - **The setup itself:** delete `%ProgramData%\CalmOS` from an elevated terminal.
 
@@ -549,8 +529,8 @@ A phase is just a file plus an entry in the `$phases` list. Files prefixed with 
 
 Setup and cleanup use the same phase files and definitions. Phases marked `Uninstall = $true` provide cleanup steps.
 Package entries use `KeepOnUninstall`, `AdditionalUninstallIds`, `UninstallOrder`, and `InnoUninstall` for cleanup differences;
-registry entries marked `ResetOnUninstall` are reset.
-`New-DevConfigRegistryStep` builds registry steps; `-Reset` deletes only the named value.
+registry entries are reset by default. `New-DevConfigRegistryStep -Reset` applies `ResetValue` when specified;
+otherwise it deletes only the named value.
 
 ## Known limitations
 

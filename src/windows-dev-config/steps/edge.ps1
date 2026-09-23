@@ -13,7 +13,7 @@ function Invoke-EdgePhase {
     )
 
     $steps = foreach ($tweak in $tweaks) {
-        New-DevConfigRegistryStep -Setting $tweak
+        New-DevConfigRegistryStep -Setting $tweak -Reset:($Script:DevConfigAction -eq 'Uninstall')
     }
 
     Invoke-DevConfigSteps -Steps $steps
