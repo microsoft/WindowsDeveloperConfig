@@ -82,6 +82,23 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 The action is preserved across elevation, PowerShell relaunch, and reboot.
 Skipped settings are not reverted.
 
+For a fixed-action one-liner, choose one of the signed release wrappers:
+
+| Wrapper | Action |
+| ------- | ------ |
+| `install-full.ps1` | `Full` |
+| `install-partial.ps1` | `Partial` |
+| `uninstall.ps1` | `Uninstall` (destructive cleanup) |
+
+```powershell
+irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/install-full.ps1 | iex
+```
+
+Replace `install-full.ps1` with the chosen wrapper. Short URLs should point to these
+repository-root release files, not `src/`. All three require `| iex` to execute.
+The wrappers accept no setup options and verify the Microsoft signature of the
+downloaded `bootstrap.ps1` before running it with the fixed action.
+
 ## What to expect
 
 Roughly **30 minutes** on a clean machine with a good connection, most of it spent downloading Visual Studio Code, the .NET SDK, PowerToys, and Ubuntu.
@@ -344,6 +361,8 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 **Code signing.** Production requires valid Microsoft Corporation Authenticode signatures. Before execution, the elevation launcher verifies the bootstrap's signature and confirms the installed copy has the same hash. Bootstrap verifies its security helper before loading it and every payload `.ps1` before and after copying, including with `-NoLaunch`. Each production launch rechecks permissions and signatures before loading other helpers. Failed checks stop setup. `-AllowUnsigned` skips signature verification for source development.
 
+**Web wrappers.** Each action wrapper verifies and executes the same downloaded bootstrap text, with no unsigned fallback. `irm | iex` does not verify the wrapper's own signature; it trusts the HTTPS endpoint. To verify the entry script too, download the wrapper to a file and check its Authenticode signature and Microsoft Corporation signer before running it.
+
 **Protected files.** Administrators/SYSTEM own the setup and download directories and have write access. Ordinary users have read/execute access only. Unsafe permissions and reparse points are rejected, not repaired.
 
 **Execution policy.** Production requests process-scoped `RemoteSigned` for all launches, including PowerShell 7 relaunches and reboot resume. Verified files are unblocked to avoid publisher-trust prompts. Organization policy takes precedence: `AllSigned` may still prompt; `Restricted` blocks setup. Setup does not change saved policies or add trusted publishers. `-AllowUnsigned` leaves execution policy unchanged.
@@ -555,6 +574,7 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 | File | What it is |
 | ---- | ---------- |
 | `bootstrap.ps1` | Remote entry point: elevation, verified downloads, protected installation, and launch. |
+| `install-full.ps1`, `install-partial.ps1`, `uninstall.ps1` | Fixed-action wrappers that verify and call the signed bootstrap. |
 | `dev-config.ps1` | The orchestrator: elevation, shell selection, run lock, logging, phases, and summary. |
 | `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
 | `steps/_security.ps1` | Signature and directory-permission checks. Its signature is verified before loading unless `-AllowUnsigned` is used. |
