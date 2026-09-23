@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Installs PowerShell 7 when needed and relaunches setup before WinGet module work starts.
+  Selects the PowerShell host for setup or cleanup.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -59,5 +59,22 @@ function Invoke-DevConfigEnsurePwsh {
     $proc = Start-Process -FilePath 'pwsh.exe' -ArgumentList $relaunchArgs -Wait -NoNewWindow -PassThru
 
     # The relaunch performs the setup work, so this Windows PowerShell process exits with its code.
+    exit $proc.ExitCode
+}
+
+function Invoke-DevConfigEnsureCleanupShell {
+    param(
+        [Parameter(Mandatory)] [string] $ScriptPath,
+        [switch] $AllowUnsigned
+    )
+    if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        return
+    }
+
+    # Cleanup needs the Appx cmdlets and removes PowerShell 7 itself.
+    Write-Host 'Switching cleanup to Windows PowerShell...' -ForegroundColor DarkCyan
+    $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -AllowUnsigned:$AllowUnsigned -Action Uninstall
+    $proc = Start-Process -FilePath $shell -ArgumentList $arguments -Wait -PassThru
     exit $proc.ExitCode
 }

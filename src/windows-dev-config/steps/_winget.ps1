@@ -313,3 +313,52 @@ function Wait-DevConfigWingetPackageSettled {
     }
     Set-DevConfigStepUnverified -Reason "WinGet reported $Id installed, but its catalog still doesn't list it as current 15s later. It's on the machine -- re-run to confirm."
 }
+
+function Invoke-DevConfigPackageCleanup {
+    param(
+        [Parameter(Mandatory)] [string[]] $Ids,
+        [switch] $CheckOnly
+    )
+    $failures = @()
+    $operation = if ($CheckOnly) { 'list' } else { 'uninstall' }
+    foreach ($id in $Ids) {
+        foreach ($scope in @('user', 'machine')) {
+            try {
+                $arguments = @($operation, $id)
+                if (-not $CheckOnly) {
+                    $arguments += '--silent'
+                }
+                $arguments += '--exact', '--scope', $scope, '--disable-interactivity', '--accept-source-agreements'
+                $result = Invoke-DevConfigCleanupCommand -FilePath 'winget.exe' -Arguments $arguments `
+                    -SuccessCodes @(0, $Script:DevConfigWingetNotFound)
+                if ($CheckOnly -and $result.ExitCode -eq 0) {
+                    return $false
+                }
+            } catch {
+                $failures += "$id ($scope): $($_.Exception.Message)"
+            }
+        }
+
+        try {
+            $packages = @(Get-AppxPackage -AllUsers -Name $id -ErrorAction Stop)
+            if ($CheckOnly) {
+                if ($packages.Count -gt 0) {
+                    return $false
+                }
+            } else {
+                foreach ($package in $packages) {
+                    Remove-AppxPackage -Package $package.PackageFullName -AllUsers -ErrorAction Stop
+                }
+            }
+        } catch {
+            $failures += "$id (MSIX): $($_.Exception.Message)"
+        }
+    }
+
+    if ($failures.Count -gt 0) {
+        throw ($failures -join "`n")
+    }
+    if ($CheckOnly) {
+        return $true
+    }
+}

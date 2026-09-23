@@ -1,10 +1,18 @@
 <#
 .SYNOPSIS
-  Installs WSL platform components, reboots once if needed, then installs Ubuntu.
+  Installs WSL and Ubuntu with reboot support, or removes them during cleanup.
 #>
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+$Script:DevConfigWslDistributionName = 'Ubuntu'
+$Script:DevConfigWslFirstRunSetting = @{
+    Name      = 'WslFirstRun'
+    KeyPath   = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss'
+    ValueName = 'OOBEComplete'
+    Value     = 1
+}
 
 # This CBS key signals component servicing pending restart; app installer restart flags are ignored.
 function Test-DevConfigServicingRebootPending {
@@ -129,7 +137,7 @@ function Test-DevConfigUbuntuInstalled {
             ForEach-Object { ($_ -replace "`0", '').Trim() } |
             Where-Object { $_ })
         # Match Ubuntu specifically, including versioned registrations such as Ubuntu-24.04.
-        return @($distros | Where-Object { $_ -like 'Ubuntu*' }).Count -gt 0
+        return @($distros | Where-Object { $_ -like "$($Script:DevConfigWslDistributionName)*" }).Count -gt 0
     } catch {
         Write-Verbose "Could not list WSL distros: $($_.Exception.Message)"
         return $false
@@ -174,17 +182,16 @@ function Install-DevConfigUbuntu {
     }
 
     # Suppresses the "Welcome to WSL" first-run GUI.
-    $lxssPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
-    New-Item -Path $lxssPath -Force | Out-Null
-    Set-ItemProperty -Path $lxssPath -Name 'OOBEComplete' -Value 1 -Type DWord -Force
+    $setting = $Script:DevConfigWslFirstRunSetting
+    Set-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value
 
-    if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', 'Ubuntu', '--no-launch') -MaxAttempts 2) {
+    if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', $Script:DevConfigWslDistributionName, '--no-launch') -MaxAttempts 2) {
         return
     }
 
     # The web-download path does not depend on Store access or Store registration timing.
     Write-Host '  The Store copy of Ubuntu did not take. Downloading Ubuntu from the web instead.' -ForegroundColor Yellow
-    if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', 'Ubuntu', '--no-launch', '--web-download')) {
+    if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', $Script:DevConfigWslDistributionName, '--no-launch', '--web-download')) {
         return
     }
 
@@ -237,10 +244,51 @@ function Install-DevConfigWslPlatform {
     Suspend-DevConfigForReboot -ScriptPath $OrchestratorPath
 }
 
+function Test-DevConfigWslDistributionRegistered {
+    $root = Convert-DevConfigRegistryPath -KeyPath $Script:DevConfigWslFirstRunSetting.KeyPath
+    if (-not (Test-Path -LiteralPath $root)) {
+        return $false
+    }
+    foreach ($key in Get-ChildItem -LiteralPath $root) {
+        $properties = Get-ItemProperty -LiteralPath $key.PSPath
+        $name = $properties.PSObject.Properties['DistributionName']
+        if ($name -and $name.Value -eq $Script:DevConfigWslDistributionName) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-DevConfigWslPackageInstalled {
+    $executable = Join-Path $env:ProgramFiles 'WSL\wsl.exe'
+    return (Test-Path -LiteralPath $executable) -or
+        @(Get-AppxPackage -AllUsers -Name 'MicrosoftCorporationII.WindowsSubsystemForLinux' -ErrorAction Stop).Count -gt 0
+}
+
+function Remove-DevConfigWsl {
+    if (Test-DevConfigWslDistributionRegistered) {
+        Invoke-DevConfigCleanupCommand -FilePath 'wsl.exe' -Arguments @('--unregister', $Script:DevConfigWslDistributionName) | Out-Null
+    }
+    if (Test-DevConfigWslPackageInstalled) {
+        Invoke-DevConfigCleanupCommand -FilePath 'wsl.exe' -Arguments @('--uninstall') | Out-Null
+    }
+}
+
 function Invoke-WslPhase {
     param(
         [Parameter(Mandatory)] [string] $OrchestratorPath
     )
+
+    if ($Script:DevConfigAction -eq 'Uninstall') {
+        $steps = @(
+            New-DevConfigRegistryStep -Setting $Script:DevConfigWslFirstRunSetting -Reset
+            New-DevConfigStep -Name 'WslCleanup' -Description "Delete $Script:DevConfigWslDistributionName and its data, then uninstall WSL" -BestEffort `
+                -Check { -not (Test-DevConfigWslDistributionRegistered) -and -not (Test-DevConfigWslPackageInstalled) } `
+                -Apply { Remove-DevConfigWsl }
+        )
+        Invoke-DevConfigSteps -Steps $steps
+        return
+    }
 
     # ArgumentList binds the path at call time; BestEffort preserves prior phases if WSL cannot start.
     $steps = @(

@@ -6,11 +6,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Script:CopilotFragmentGuid = '{b1a4d2c8-6f3e-4a7b-9e2d-1c8f5a3b7d91}'
-
-function Get-DevConfigCopilotFragmentDir {
-    Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\DevConfig'
-}
+$Script:DevConfigWinUIPlugin = 'winui@win-dev-skills'
 
 function Test-DevConfigCopilotTerminalProfile {
     $fragmentsDir = Get-DevConfigCopilotFragmentDir
@@ -119,14 +115,60 @@ function Install-DevConfigWinUIPlugin {
     if (-not (Get-Command 'copilot' -ErrorAction SilentlyContinue)) {
         throw 'The copilot command is not on PATH yet, so the WinUI plugin cannot be installed. Re-run once GitHub Copilot CLI is in place.'
     }
-    $r = Invoke-DevConfigNativeCommand -FilePath 'copilot' -Arguments @('plugin', 'install', 'winui@win-dev-skills')
+    $r = Invoke-DevConfigNativeCommand -FilePath 'copilot' -Arguments @('plugin', 'install', $Script:DevConfigWinUIPlugin)
     if ($r.ExitCode -ne 0) {
         Write-Host $r.Output
         throw "copilot plugin install winui failed with exit code $($r.ExitCode)"
     }
 }
 
+function Get-DevConfigInstalledWinUIPlugin {
+    if (-not (Get-Command copilot -CommandType Application -ErrorAction SilentlyContinue)) {
+        return
+    }
+
+    $result = Invoke-DevConfigCleanupCommand -FilePath 'copilot' -Arguments @('plugin', 'list', '--json')
+    # Assignment avoids nesting the JSON array in Windows PowerShell 5.1.
+    $plugins = $result.Output | ConvertFrom-Json
+    foreach ($plugin in $plugins) {
+        $id = "$($plugin.name)@$($plugin.marketplace)"
+        if ($id -in @($Script:DevConfigWinUIPlugin, 'winui@awesome-copilot')) {
+            $id
+        }
+    }
+}
+
 function Invoke-CopilotPhase {
+    if ($Script:DevConfigAction -eq 'Uninstall') {
+        $fragmentsDir = Get-DevConfigCopilotFragmentDir
+        $fragmentPaths = @(
+            (Join-Path $fragmentsDir 'github-copilot.fragment.json')
+            (Join-Path $fragmentsDir 'copilot.png')
+        )
+        $steps = @(
+            New-DevConfigStep -Name 'CopilotFragmentCleanup' -Description 'Remove the Copilot Terminal fragment and icon' -BestEffort `
+                -Check { param($Paths) @($Paths | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 0 } `
+                -Apply {
+                    param($Paths)
+                    foreach ($path in $Paths) {
+                        if (Test-Path -LiteralPath $path) {
+                            Remove-Item -LiteralPath $path -Force
+                        }
+                    }
+                } `
+                -ArgumentList @(, $fragmentPaths)
+            New-DevConfigStep -Name 'WinUIPluginCleanup' -Description 'Uninstall the WinUI Copilot plugin' -BestEffort `
+                -Check { @(Get-DevConfigInstalledWinUIPlugin).Count -eq 0 } `
+                -Apply {
+                    foreach ($plugin in @(Get-DevConfigInstalledWinUIPlugin)) {
+                        Invoke-DevConfigCleanupCommand -FilePath 'copilot' -Arguments @('plugin', 'uninstall', $plugin) | Out-Null
+                    }
+                }
+        )
+        Invoke-DevConfigSteps -Steps $steps
+        return
+    }
+
     # BestEffort keeps network-dependent integrations from blocking the WSL and reboot phase.
     $steps = @(
         New-DevConfigStep -Name 'GitHubCopilotProfile' -Description 'Add a GitHub Copilot profile to Windows Terminal' `

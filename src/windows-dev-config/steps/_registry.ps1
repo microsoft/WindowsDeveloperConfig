@@ -46,3 +46,47 @@ function Set-DevConfigRegistryValue {
     }
     New-ItemProperty -Path $psPath -Name $ValueName -Value $Value -PropertyType $Type -Force | Out-Null
 }
+
+function Test-DevConfigRegistryValueAbsent {
+    param(
+        [Parameter(Mandatory)] [string] $KeyPath,
+        [Parameter(Mandatory)] [string] $ValueName
+    )
+    $path = Convert-DevConfigRegistryPath -KeyPath $KeyPath
+    if (-not (Test-Path -LiteralPath $path)) {
+        return $true
+    }
+    return (Get-Item -LiteralPath $path).GetValueNames() -notcontains $ValueName
+}
+
+function New-DevConfigRegistryStep {
+    param(
+        [Parameter(Mandatory)] [hashtable] $Setting,
+        [switch] $Reset
+    )
+    if ($Reset) {
+        return New-DevConfigStep -Name "$($Setting.Name)Reset" -Description "Reset $($Setting.ValueName)" -BestEffort `
+            -Check {
+                param($KeyPath, $ValueName)
+                Test-DevConfigRegistryValueAbsent -KeyPath $KeyPath -ValueName $ValueName
+            } `
+            -Apply {
+                param($KeyPath, $ValueName)
+                $path = Convert-DevConfigRegistryPath -KeyPath $KeyPath
+                Remove-ItemProperty -LiteralPath $path -Name $ValueName -ErrorAction Stop
+            } `
+            -ArgumentList @($Setting.KeyPath, $Setting.ValueName)
+    }
+
+    $type = if ($Setting.ContainsKey('Type')) { $Setting.Type } else { 'DWord' }
+    New-DevConfigStep -Name $Setting.Name -Description $Setting.Description `
+        -Check {
+            param($KeyPath, $ValueName, $Value)
+            Test-DevConfigRegistryValue -KeyPath $KeyPath -ValueName $ValueName -Value $Value
+        } `
+        -Apply {
+            param($KeyPath, $ValueName, $Value, $Type)
+            Set-DevConfigRegistryValue -KeyPath $KeyPath -ValueName $ValueName -Value $Value -Type $Type
+        } `
+        -ArgumentList @($Setting.KeyPath, $Setting.ValueName, $Setting.Value, $type)
+}

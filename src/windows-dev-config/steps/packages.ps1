@@ -1,17 +1,51 @@
 <#
 .SYNOPSIS
-  Installs the Calm OS package set via winget.
+  Installs or removes the Calm OS package set via winget.
 #>
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-function Invoke-PackagesPhase {
-    # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
-    if (-not $Script:DevConfigResumed) {
-        Show-DevConfigPhaseHeader
+function Get-DevConfigUvCleanupPath {
+    foreach ($name in @('uv', 'uvx', 'uvw')) {
+        $command = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue
+        if ($command -and (Test-Path -LiteralPath $command.Source)) {
+            $command.Source
+        }
     }
-    Initialize-DevConfigWinGet
+    foreach ($root in @($env:LOCALAPPDATA, $env:APPDATA)) {
+        $path = Join-Path $root 'uv'
+        if (Test-Path -LiteralPath $path) {
+            $path
+        }
+    }
+}
+
+function Remove-DevConfigUv {
+    param(
+        [Parameter(Mandatory)] [string] $Id
+    )
+    $uv = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue
+    if ($uv) {
+        Invoke-DevConfigCleanupCommand -FilePath $uv.Source -Arguments @('cache', 'clean') | Out-Null
+    }
+    try {
+        Invoke-DevConfigPackageCleanup -Ids @($Id)
+    } finally {
+        foreach ($path in @(Get-DevConfigUvCleanupPath | Select-Object -Unique)) {
+            Remove-Item -LiteralPath $path -Recurse -Force
+        }
+    }
+}
+
+function Invoke-PackagesPhase {
+    if ($Script:DevConfigAction -ne 'Uninstall') {
+        # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
+        if (-not $Script:DevConfigResumed) {
+            Show-DevConfigPhaseHeader
+        }
+        Initialize-DevConfigWinGet
+    }
 
     # PowerShell's process architecture can differ from Windows' native architecture.
     $architecture = Get-ItemPropertyValue -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name 'PROCESSOR_ARCHITECTURE'
@@ -22,30 +56,158 @@ function Invoke-PackagesPhase {
     }
 
     $packages = @(
-        @{ Name = 'Terminal';      Id = 'Microsoft.WindowsTerminal' }
-        @{ Name = 'IntelligentTerminal'; Id = 'Microsoft.IntelligentTerminal' }
-        @{ Name = 'PowerShell';    Id = 'Microsoft.PowerShell' }
-        @{ Name = 'Git';           Id = 'Git.Git' }
-        @{ Name = 'GitHubCLI';     Id = 'GitHub.cli' }
-        @{ Name = 'AzureCLI';      Id = 'Microsoft.AzureCLI' }
-        @{ Name = 'GitHubCopilot'; Id = 'GitHub.Copilot' }
-        @{ Name = 'VSCode';        Id = 'Microsoft.VisualStudioCode'; Large = $true }
-        @{ Name = 'DotnetSdk';     Id = 'Microsoft.DotNet.SDK.10';    Large = $true }
-        @{ Name = 'Python';        Id = 'Python.Python.3.14' }
-        @{ Name = 'VCRedist';      Id = $vcRedistId }
-        @{ Name = 'UV';            Id = 'astral-sh.uv' }
-        @{ Name = 'NodeJS';        Id = 'OpenJS.NodeJS.LTS' }
-        @{ Name = 'nvmForNode';    Id = 'CoreyButler.NVMforWindows' }
-        @{ Name = 'Coreutils';     Id = 'Microsoft.Coreutils' }
-        @{ Name = 'OhMyPosh';      Id = 'JanDeDobbeleer.OhMyPosh' }
-        @{ Name = 'winappCli';     Id = 'Microsoft.WinAppCli' }
-        @{ Name = 'PowerToys';     Id = 'Microsoft.PowerToys';        Large = $true }
+        @{
+            Name            = 'Terminal'
+            Id              = 'Microsoft.WindowsTerminal'
+            KeepOnUninstall = $true
+        }
+        @{
+            Name           = 'IntelligentTerminal'
+            Id             = 'Microsoft.IntelligentTerminal'
+            UninstallOrder = 12
+        }
+        @{
+            Name           = 'PowerShell'
+            Id             = 'Microsoft.PowerShell'
+            UninstallOrder = 16
+        }
+        @{
+            Name           = 'Git'
+            Id             = 'Git.Git'
+            UninstallOrder = 6
+        }
+        @{
+            Name           = 'GitHubCLI'
+            Id             = 'GitHub.cli'
+            UninstallOrder = 7
+        }
+        @{
+            Name           = 'AzureCLI'
+            Id             = 'Microsoft.AzureCLI'
+            UninstallOrder = 9
+        }
+        @{
+            Name                   = 'GitHubCopilot'
+            Id                     = 'GitHub.Copilot'
+            UninstallOrder         = 4
+            AdditionalUninstallIds = @('XPDC8MMRVCF73P', 'GitHub Copilot CLI')
+        }
+        @{
+            Name           = 'VSCode'
+            Id             = 'Microsoft.VisualStudioCode'
+            Large          = $true
+            UninstallOrder = 14
+        }
+        @{
+            Name           = 'DotnetSdk'
+            Id             = 'Microsoft.DotNet.SDK.10'
+            Large          = $true
+            UninstallOrder = 11
+        }
+        @{
+            Name                   = 'Python'
+            Id                     = 'Python.Python.3.14'
+            UninstallOrder         = 5
+            AdditionalUninstallIds = @('Python.Launcher', 'Python.PythonInstallManager')
+        }
+        @{
+            Name            = 'VCRedist'
+            Id              = $vcRedistId
+            KeepOnUninstall = $true
+        }
+        @{
+            Name           = 'UV'
+            Id             = 'astral-sh.uv'
+            UninstallOrder = 1
+        }
+        @{
+            Name                   = 'NodeJS'
+            Id                     = 'OpenJS.NodeJS.LTS'
+            UninstallOrder         = 3
+            AdditionalUninstallIds = @('OpenJS.NodeJS')
+        }
+        @{
+            Name           = 'nvmForNode'
+            Id             = 'CoreyButler.NVMforWindows'
+            UninstallOrder = 2
+        }
+        @{
+            Name           = 'Coreutils'
+            Id             = 'Microsoft.Coreutils'
+            UninstallOrder = 10
+        }
+        @{
+            Name           = 'OhMyPosh'
+            Id             = 'JanDeDobbeleer.OhMyPosh'
+            UninstallOrder = 8
+        }
+        @{
+            Name           = 'winappCli'
+            Id             = 'Microsoft.WinAppCli'
+            UninstallOrder = 15
+        }
+        @{
+            Name           = 'PowerToys'
+            Id             = 'Microsoft.PowerToys'
+            Large          = $true
+            UninstallOrder = 13
+        }
     )
+    $powerToysNotifications = @{
+        Name        = 'PowerToysAOT'
+        KeyPath     = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Microsoft.PowerToysWin32'
+        ValueName   = 'Enabled'
+        Value       = 0
+        Description = 'Turn off PowerToys always-on-top notifications'
+    }
+
+    if ($Script:DevConfigAction -eq 'Uninstall') {
+        $cleanupPackages = $packages | Where-Object { -not $_['KeepOnUninstall'] } |
+            Sort-Object { [int]$_['UninstallOrder'] }
+        $steps = @(
+            New-DevConfigRegistryStep -Setting $powerToysNotifications -Reset
+            foreach ($package in $cleanupPackages) {
+                switch ($package.Name) {
+                    'UV' {
+                        New-DevConfigStep -Name 'UvCleanup' -Description 'Remove uv executables, caches, and local data' -BestEffort `
+                            -Check {
+                                param($Id)
+                                @(Get-DevConfigUvCleanupPath).Count -eq 0 -and
+                                    (Invoke-DevConfigPackageCleanup -Ids @($Id) -CheckOnly)
+                            } `
+                            -Apply { param($Id) Remove-DevConfigUv -Id $Id } `
+                            -ArgumentList @($package.Id)
+                    }
+                    'nvmForNode' {
+                        New-DevConfigStep -Name 'NvmCleanup' -Description 'Uninstall NVM for Windows' -BestEffort `
+                            -Check { param($Path) -not (Test-Path -LiteralPath $Path) } `
+                            -Apply {
+                                param($Path)
+                                Invoke-DevConfigCleanupCommand -FilePath $Path -Arguments @('/VERYSILENT', '/SP-', '/SUPPRESSMSGBOXES') | Out-Null
+                            } `
+                            -ArgumentList @((Join-Path $env:ProgramFiles 'nvm\unins000.exe'))
+                    }
+                    default {
+                        $ids = @($package.Id)
+                        if ($package['AdditionalUninstallIds']) {
+                            $ids += $package.AdditionalUninstallIds
+                        }
+                        New-DevConfigStep -Name "$($package.Name)Cleanup" -Description "Uninstall $($package.Name) (user, machine, and MSIX)" -BestEffort `
+                            -Check { param($Ids) Invoke-DevConfigPackageCleanup -Ids $Ids -CheckOnly } `
+                            -Apply { param($Ids) Invoke-DevConfigPackageCleanup -Ids $Ids } `
+                            -ArgumentList @(, $ids)
+                    }
+                }
+            }
+        )
+        Invoke-DevConfigSteps -Steps $steps
+        return
+    }
 
     # ArgumentList binds each package's Id at call time instead of relying on closure capture.
     # BestEffort lets independent packages continue; dependent phases verify packages before use.
-    $steps = foreach ($pkg in $packages) {
-        New-DevConfigStep -Name $pkg.Name -Description "winget install $($pkg.Id)" -BestEffort `
+    $steps = foreach ($package in $packages) {
+        New-DevConfigStep -Name $package.Name -Description "winget install $($package.Id)" -BestEffort `
             -Check { param($Id, $Large) Test-DevConfigWingetPackageInstalled -Id $Id } `
             -Apply {
                 param($Id, $Large)
@@ -54,14 +216,10 @@ function Invoke-PackagesPhase {
                 Install-DevConfigWingetPackage -Id $Id
                 Wait-DevConfigWingetPackageSettled -Id $Id
             } `
-            -ArgumentList @($pkg.Id, $pkg.ContainsKey('Large'))
+            -ArgumentList @($package.Id, $package.ContainsKey('Large'))
     }
 
-    $powerToysToastKey = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Microsoft.PowerToysWin32'
-    $steps += New-DevConfigStep -Name 'PowerToysAOT' -Description 'Turn off PowerToys always-on-top notifications' `
-        -Check { param($KeyPath) Test-DevConfigRegistryValue -KeyPath $KeyPath -ValueName 'Enabled' -Value 0 } `
-        -Apply { param($KeyPath) Set-DevConfigRegistryValue -KeyPath $KeyPath -ValueName 'Enabled' -Value 0 } `
-        -ArgumentList @($powerToysToastKey)
+    $steps += New-DevConfigRegistryStep -Setting $powerToysNotifications
 
     Invoke-DevConfigSteps -Steps $steps
 }

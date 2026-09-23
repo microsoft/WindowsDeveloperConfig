@@ -40,10 +40,6 @@ function Invoke-CalmOsBootstrap {
     $ErrorActionPreference = 'Stop'
     Set-StrictMode -Version Latest
 
-    if ($Action -eq 'Uninstall') {
-        throw 'Uninstall is not implemented. No changes were made.'
-    }
-
     $repo = 'microsoft/WindowsDeveloperConfig'
     $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
 
@@ -72,7 +68,7 @@ function Invoke-CalmOsBootstrap {
 
     $shell = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
     $pwsh = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'PowerShell\7\pwsh.exe'
-    if (Test-Path -LiteralPath $pwsh) { $shell = $pwsh }
+    if ($Action -ne 'Uninstall' -and (Test-Path -LiteralPath $pwsh)) { $shell = $pwsh }
     $escapedShell = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($shell)
     $arguments = @('-NoProfile')
     if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
@@ -290,7 +286,9 @@ function Invoke-CalmOsBootstrap {
 
         $arguments += '-File', "`"$target`"", '-Action', $Action
         if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
-        $proc = Start-Process -FilePath $shell -ArgumentList $arguments -NoNewWindow -Wait -PassThru
+        $start = @{ FilePath = $shell; ArgumentList = $arguments; Wait = $true; PassThru = $true }
+        if ($Action -ne 'Uninstall') { $start.NoNewWindow = $true }
+        $proc = Start-Process @start
 
         # Throw to avoid closing the caller's console.
         if ($proc.ExitCode -ne 0) {

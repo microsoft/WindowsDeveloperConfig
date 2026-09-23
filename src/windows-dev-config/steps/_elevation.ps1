@@ -110,7 +110,11 @@ function Invoke-DevConfigElevate {
 
     Write-Host 'This needs to run elevated once (a UAC prompt will appear)...' -ForegroundColor Yellow
 
-    $shell = Get-DevConfigShellExe
+    $shell = if ($Action -eq 'Uninstall') {
+        Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    } else {
+        Get-DevConfigShellExe
+    }
     # Preserve -Resumed so the elevated process continues after the WSL reboot.
     $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action
     try {

@@ -26,6 +26,20 @@ function Invoke-DevConfigNativeCommand {
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
 }
 
+function Invoke-DevConfigCleanupCommand {
+    param(
+        [Parameter(Mandatory)] [string] $FilePath,
+        [string[]] $Arguments = @(),
+        [int[]] $SuccessCodes = @(0)
+    )
+    $command = Get-Command $FilePath -CommandType Application -ErrorAction Stop
+    $result = Invoke-DevConfigNativeCommand -FilePath $command.Source -Arguments $Arguments
+    if ($null -eq $result.ExitCode -or $result.ExitCode -notin $SuccessCodes) {
+        throw "$FilePath $($Arguments -join ' ') failed ($($result.ExitCode)): $($result.Output.Trim())"
+    }
+    return $result
+}
+
 # Some installers can wait indefinitely, so process waits are bounded and emit periodic progress.
 function Invoke-DevConfigProcess {
     param(

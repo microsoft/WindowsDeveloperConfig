@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Configures a Windows developer workstation and resumes after the WSL reboot.
+  Configures or cleans up a Windows developer workstation.
 #>
 
 [CmdletBinding()]
@@ -13,10 +13,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-
-if ($Action -eq 'Uninstall') {
-    throw 'Uninstall is not implemented. No changes were made.'
-}
 
 $stepsDir = Join-Path $PSScriptRoot 'steps'
 $securityCode = [IO.File]::ReadAllText((Join-Path $stepsDir '_security.ps1'))
@@ -59,8 +55,12 @@ Enable-DevConfigModernTls
 
 Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action
 
-# WinGet module behavior is more consistent in PowerShell 7 than in Windows PowerShell 5.1.
-Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action
+if ($Action -eq 'Uninstall') {
+    Invoke-DevConfigEnsureCleanupShell -ScriptPath $PSCommandPath -AllowUnsigned:$AllowUnsigned
+} else {
+    # WinGet module behavior is more consistent in PowerShell 7 than in Windows PowerShell 5.1.
+    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action
+}
 
 # The lock starts after relaunches so the worker process owns the log file.
 if (-not (Enter-DevConfigSingleInstance)) {
@@ -76,7 +76,7 @@ Start-DevConfigLog -Path (Join-Path $PSScriptRoot 'devconfig-log.txt') -Append:$
 # Any prior resume task is stale once this run starts.
 Clear-DevConfigResume
 
-$Script:DevConfigResumed = [bool]$Resumed
+$Script:DevConfigResumed = [bool]$Resumed -and $Action -ne 'Uninstall'
 $Script:DevConfigAllowUnsigned = [bool]$AllowUnsigned
 $Script:DevConfigAction = $Action
 if ($Script:DevConfigResumed) {
@@ -85,25 +85,85 @@ if ($Script:DevConfigResumed) {
 }
 # WSL stays last so its required reboot happens after other phases.
 $phases = @(
-    @{ File = 'prerequisites.ps1';           Function = 'Invoke-PrerequisitesPhase';          Title = 'Getting ready' }
-    @{ File = 'packages.ps1';               Function = 'Invoke-PackagesPhase';               Title = 'Packages' }
-    @{ File = 'registry-system.ps1';         Function = 'Invoke-RegistrySystemPhase';         Title = 'System settings' }
-    @{ File = 'registry-explorer.ps1';       Function = 'Invoke-RegistryExplorerPhase';       Title = 'File Explorer tweaks' }
-    @{ File = 'registry-taskbar-search.ps1'; Function = 'Invoke-RegistryTaskbarSearchPhase';  Title = 'Taskbar, search & start tweaks' }
-    @{ File = 'edge.ps1';                    Function = 'Invoke-EdgePhase';                   Title = 'Microsoft Edge tweaks' }
-    @{ File = 'fonts.ps1';                   Function = 'Invoke-FontsPhase';                  Title = 'Fonts' }
-    @{ File = 'terminal.ps1';                Function = 'Invoke-TerminalPhase';               Title = 'Windows Terminal' }
-    @{ File = 'powershell-profile.ps1';      Function = 'Invoke-PowerShellProfilePhase';      Title = 'PowerShell profile' }
-    @{ File = 'copilot.ps1';                 Function = 'Invoke-CopilotPhase';                Title = 'GitHub Copilot' }
-    @{ File = 'wsl.ps1';                     Function = 'Invoke-WslPhase';                    Title = 'WSL + Ubuntu' }
+    @{
+        File     = 'prerequisites.ps1'
+        Function = 'Invoke-PrerequisitesPhase'
+        Title    = 'Getting ready'
+    }
+    @{
+        File      = 'packages.ps1'
+        Function  = 'Invoke-PackagesPhase'
+        Title     = 'Packages'
+        Uninstall = $true
+    }
+    @{
+        File      = 'registry-system.ps1'
+        Function  = 'Invoke-RegistrySystemPhase'
+        Title     = 'System settings'
+        Uninstall = $true
+    }
+    @{
+        File      = 'registry-explorer.ps1'
+        Function  = 'Invoke-RegistryExplorerPhase'
+        Title     = 'File Explorer tweaks'
+        Uninstall = $true
+    }
+    @{
+        File      = 'registry-taskbar-search.ps1'
+        Function  = 'Invoke-RegistryTaskbarSearchPhase'
+        Title     = 'Taskbar, search & start tweaks'
+        Uninstall = $true
+    }
+    @{
+        File     = 'edge.ps1'
+        Function = 'Invoke-EdgePhase'
+        Title    = 'Microsoft Edge tweaks'
+    }
+    @{
+        File     = 'fonts.ps1'
+        Function = 'Invoke-FontsPhase'
+        Title    = 'Fonts'
+    }
+    @{
+        File      = 'terminal.ps1'
+        Function  = 'Invoke-TerminalPhase'
+        Title     = 'Windows Terminal'
+        Uninstall = $true
+    }
+    @{
+        File     = 'powershell-profile.ps1'
+        Function = 'Invoke-PowerShellProfilePhase'
+        Title    = 'PowerShell profile'
+    }
+    @{
+        File      = 'copilot.ps1'
+        Function  = 'Invoke-CopilotPhase'
+        Title     = 'GitHub Copilot'
+        Uninstall = $true
+    }
+    @{
+        File      = 'wsl.ps1'
+        Function  = 'Invoke-WslPhase'
+        Title     = 'WSL + Ubuntu'
+        Uninstall = $true
+    }
 )
 if ($Action -eq 'Partial') {
     $phases = @($phases | Where-Object { $_.File -ne 'edge.ps1' })
     ($phases | Where-Object { $_.File -eq 'registry-taskbar-search.ps1' }).Title = 'Taskbar & Start tweaks'
+} elseif ($Action -eq 'Uninstall') {
+    $phases = @($phases | Where-Object { $_['Uninstall'] })
+    # Remove tools after the cleanup steps that need them.
+    $phases = @($phases | Where-Object { $_.File -ne 'packages.ps1' }) +
+        @($phases | Where-Object { $_.File -eq 'packages.ps1' })
 }
 
+$operation = if ($Action -eq 'Uninstall') { 'cleanup' } else { 'setup' }
 Write-Host ''
-if ($Script:DevConfigResumed) {
+if ($Action -eq 'Uninstall') {
+    Write-Host 'Calm OS cleanup -- resetting settings and removing developer tools' -ForegroundColor Cyan
+    Write-Host 'Ubuntu and its files will be deleted. Targeted tools are removed even if they predate setup.' -ForegroundColor Yellow
+} elseif ($Script:DevConfigResumed) {
     Write-Host "Welcome back. Resuming Calm OS setup ($Action) after the reboot..." -ForegroundColor Cyan
 } else {
     Write-Host "Calm OS setup ($Action) -- $($phases.Count) phases, one reboot along the way (expected, not an error)" -ForegroundColor Cyan
@@ -116,6 +176,9 @@ try {
     foreach ($phase in $phases) {
         $path = Join-Path $stepsDir $phase.File
         if (-not (Test-Path -LiteralPath $path)) {
+            if ($Action -eq 'Uninstall') {
+                throw "The cleanup script is missing: $path. Run bootstrap.ps1 -Action Uninstall to reinstall it."
+            }
             Write-Host "-- $($phase.File) not written yet, skipping" -ForegroundColor DarkGray
             continue
         }
@@ -148,7 +211,7 @@ try {
 
     Show-DevConfigSilentSkipSummary
     Write-Host ''
-    Write-Host 'Calm OS setup complete.' -ForegroundColor Green
+    Write-Host "Calm OS $operation complete." -ForegroundColor Green
     $tally = $Script:DevConfigTally
     $summaryParts = @("$($tally.Done) changed", "$($tally.AlreadyOk) already up to date")
     if ($tally.Warned -gt 0) {
@@ -167,7 +230,7 @@ try {
 
 if ($failure) {
     Write-Host ''
-    Write-Host 'Calm OS setup stopped early.' -ForegroundColor Red
+    Write-Host "Calm OS $operation stopped early." -ForegroundColor Red
     Write-Host "  $($failure.Exception.Message)" -ForegroundColor Red
     $origin = $failure.InvocationInfo
     if ($origin -and $origin.ScriptName) {

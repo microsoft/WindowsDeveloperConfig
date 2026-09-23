@@ -60,6 +60,17 @@ function Set-DevConfigPs7DefaultProfile {
 }
 
 function Invoke-TerminalPhase {
+    if ($Script:DevConfigAction -eq 'Uninstall') {
+        $steps = @(
+            New-DevConfigStep -Name 'TerminalReset' -Description 'Remove Terminal defaults and PowerShell, Copilot, and Ubuntu profiles' -BestEffort `
+                -Check { param($DistributionName) Reset-DevConfigTerminal -DistributionName $DistributionName -CheckOnly } `
+                -Apply { param($DistributionName) Reset-DevConfigTerminal -DistributionName $DistributionName } `
+                -ArgumentList @($Script:DevConfigWslDistributionName)
+        )
+        Invoke-DevConfigSteps -Steps $steps
+        return
+    }
+
     # These user preferences are best-effort so later setup phases can continue.
     $steps = @(
         New-DevConfigStep -Name 'DarkTheme' -Description 'Force dark app/system theme' -BestEffort `

@@ -11,9 +11,14 @@ $Script:DevConfigTerminalJsonDepth = 32
 
 # The settings schema accepts a profile name for defaultProfile when a GUID is not available.
 $Script:DevConfigPs7ProfileName = 'PowerShell'
+$Script:CopilotFragmentGuid = '{b1a4d2c8-6f3e-4a7b-9e2d-1c8f5a3b7d91}'
 
 # Paths already backed up in this run, so a later phase cannot overwrite the pre-run original.
 $Script:DevConfigTerminalBackedUp = @()
+
+function Get-DevConfigCopilotFragmentDir {
+    Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\DevConfig'
+}
 
 # Stable Terminal is preferred over Preview because it is the profile users launch by default.
 function Get-DevConfigTerminalPackagedSettingsPath {
@@ -155,4 +160,55 @@ function Find-DevConfigPs7Profile {
         (Get-DevConfigJsonValue -Object $_ -Path 'source') -eq 'Windows.Terminal.PowershellCore' -or
         (Get-DevConfigJsonValue -Object $_ -Path 'name')   -eq $Script:DevConfigPs7ProfileName
     } | Select-Object -First 1
+}
+
+function Reset-DevConfigTerminal {
+    param(
+        [Parameter(Mandatory)] [string] $DistributionName,
+        [switch] $CheckOnly
+    )
+    $path = Get-DevConfigTerminalSettingsPath
+    if (-not $path) {
+        return $true
+    }
+
+    $settings = Read-DevConfigTerminalSettings -Path $path
+    $changed = $false
+    if ($settings.PSObject.Properties['defaultProfile']) {
+        $settings.PSObject.Properties.Remove('defaultProfile')
+        $changed = $true
+    }
+
+    $profiles = Get-DevConfigJsonValue -Object $settings -Path 'profiles'
+    if ($null -ne $profiles -and $profiles.PSObject.Properties['defaults']) {
+        $profiles.PSObject.Properties.Remove('defaults')
+        $changed = $true
+    }
+
+    $list = Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'list'
+    if ($null -ne $list) {
+        $profileGuids = @(
+            '{574e775e-4f2a-5b96-ac1e-a2962a402336}'
+            '{463c642a-294e-5f7d-87c0-3061fde7adfd}'
+            $Script:CopilotFragmentGuid
+            '{2c4de342-38b7-51cf-b940-2309a097f518}'
+            '{08c3a759-e9c2-5cd9-a652-37191c8995ca}'
+        )
+        $remaining = @($list | Where-Object {
+            $guid = Get-DevConfigJsonValue -Object $_ -Path 'guid'
+            $name = Get-DevConfigJsonValue -Object $_ -Path 'name'
+            $guid -notin $profileGuids -and $name -ne $DistributionName
+        })
+        if ($remaining.Count -ne @($list).Count) {
+            $profiles.PSObject.Properties['list'].Value = $remaining
+            $changed = $true
+        }
+    }
+
+    if ($CheckOnly) {
+        return -not $changed
+    }
+    if ($changed) {
+        Save-DevConfigTerminalSettings -Path $path -Settings $settings
+    }
 }

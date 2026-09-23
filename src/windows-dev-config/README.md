@@ -20,7 +20,7 @@ It is **idempotent** — every change is checked before it's made, so re-running
 - [Running it other ways](#running-it-other-ways)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
-- [Undoing it](#undoing-it)
+- [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)
 - [Customizing it](#customizing-it)
 - [Known limitations](#known-limitations)
 - [For contributors](#for-contributors)
@@ -67,7 +67,7 @@ Both `bootstrap.ps1` and `dev-config.ps1` accept `-Action`:
 | ------ | -------- |
 | `Full` | Default. Applies the complete setup. |
 | `Partial` | A subset of `Full`, with the exclusions below. |
-| `Uninstall` | Stops with an error; makes no changes. |
+| `Uninstall` | [Resets settings and removes tools and Ubuntu data](#uninstall-and-manual-cleanup). |
 
 `Partial` skips changes to Sudo, Developer Mode, Remote Desktop, Edge policies, Explorer's
 recommended/cloud files, global notifications, the Bluetooth tray icon, web
@@ -109,7 +109,7 @@ You do **not** need Git, a repository clone, `winget configure`, the Visual C++ 
 
 ## Before you run this
 
-These changes apply to `Full`; see [Setup actions](#setup-actions) for `Partial` exclusions.
+See [Setup actions](#setup-actions) for what each action changes.
 
 | Change | Why it might matter to you |
 | ------ | -------------------------- |
@@ -118,7 +118,7 @@ These changes apply to `Full`; see [Setup actions](#setup-actions) for `Partial`
 | **All notifications are turned off** | Do Not Disturb is enabled globally, not just for a quiet-hours window. Teams, Outlook, and everything else stop raising toasts until you turn it back on. |
 | **Both Node.js LTS and nvm-windows are installed** | They are two different ways to manage Node. If you plan to use nvm, uninstall Node.js first so nvm owns the PATH entry. |
 | **Windows Terminal's `settings.json` is rewritten** | A `settings.json.bak` is written next to it first, but any comments in your settings file are lost, because the file is round-tripped through JSON. If the file can't be parsed, the Terminal change is flagged and skipped, the file is left untouched, and the remaining phases continue. |
-| **There's no uninstall** | Nothing that gets applied is reverted automatically. [Undoing it](#undoing-it) lists the manual reversals. |
+| **Uninstall is destructive cleanup** | Deletes `Ubuntu` and its files and removes targeted tools, including pre-existing installations. Previous settings are not restored. |
 
 Every one of these is listed in full detail in [What it changes](#what-it-changes).
 
@@ -457,9 +457,28 @@ Then please [open an issue](https://github.com/microsoft/WindowsDeveloperConfig/
 
 </details>
 
-## Undoing it
+## Uninstall and manual cleanup
 
-There is no automatic undo, and the setup never removes anything on its own. The reversals below are the ones most people ask about. Registry changes under `HKLM` need an elevated prompt.
+Run in an elevated PowerShell window:
+
+```powershell
+& "$env:ProgramData\CalmOS\dev-config.ps1" -Action Uninstall
+```
+
+From source: `.\src\windows-dev-config\dev-config.ps1 -AllowUnsigned -Action Uninstall`.
+`bootstrap.ps1` also accepts `-Action Uninstall`. Cleanup uses Windows PowerShell to remove PowerShell 7.
+
+**Cleanup runs without confirmation and permanently deletes the `Ubuntu` distro and its files.**
+It uninstalls WSL and the tools below, including pre-existing, machine-wide, and all-user MSIX installations.
+It does not restore previous settings.
+
+- **Settings:** reset targeted Explorer, Start, notification, taskbar End Task, long-path, and WSL first-run settings.
+- **Terminal:** remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries, and the Copilot fragment.
+- **Tools:** remove uv executables, caches, and local data; NVM; the WinUI Copilot plugin; Node.js; Copilot; Python 3.14 and its launcher/install manager; Git; GitHub CLI; Oh My Posh; Azure CLI; Coreutils; .NET SDK 10; Intelligent Terminal; PowerToys; Visual Studio Code; Windows App CLI; and PowerShell 7.
+
+Failures are flagged; cleanup continues. Unlisted settings, fonts, the Windows Terminal app, the Visual C++ runtime, and setup files remain.
+
+Manual resets for other settings (`HKLM` requires elevation):
 
 ```powershell
 # Remote Desktop off again
@@ -479,7 +498,7 @@ Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Persona
 Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' SystemUsesLightTheme 1
 ```
 
-Everything else:
+Additional manual cleanup:
 
 - **Packages:** `winget uninstall --id <id>` using the ids in [Packages](#packages).
 - **Explorer, Start and search settings:** all of them are also in Settings and Explorer's Options dialog. Sign out and back in for them to take effect.
@@ -495,15 +514,20 @@ Edit the files under `src\windows-dev-config` in your clone, then run the [unsig
 
 | To... | Edit |
 | ----- | ---- |
-| Add or remove a package | The `$packages` list in [`steps/packages.ps1`](./steps/packages.ps1) |
-| Change or drop a Windows setting | The `$tweaks` list in the matching `steps/registry-*.ps1` |
+| Add or remove a package | The shared `$packages` list in [`steps/packages.ps1`](./steps/packages.ps1) |
+| Change or drop a Windows setting | The shared `$tweaks` list in the matching `steps/registry-*.ps1` |
 | Skip the Edge policies entirely | Remove `edge.ps1` from the `$phases` list in [`dev-config.ps1`](./dev-config.ps1) |
 | Keep Remote Desktop off | Delete the `RemoteDesktop` entry in [`steps/registry-system.ps1`](./steps/registry-system.ps1) |
 | Change the terminal font | `$Script:CascadiaDefaultFontFace` in [`steps/fonts.ps1`](./steps/fonts.ps1) |
-| Install a different distro | The `wsl --install -d Ubuntu` arguments in [`steps/wsl.ps1`](./steps/wsl.ps1) |
+| Install a different distro | `$Script:DevConfigWslDistributionName` in [`steps/wsl.ps1`](./steps/wsl.ps1) |
 | Add something new | Copy the shape of any phase file: build steps with `New-DevConfigStep` and pass them to `Invoke-DevConfigSteps` |
 
 A phase is just a file plus an entry in the `$phases` list. Files prefixed with `_` are shared helpers, not phases.
+
+Setup and cleanup use the same phase files and definitions. Phases marked `Uninstall = $true` provide cleanup steps.
+Package entries use `KeepOnUninstall`, `AdditionalUninstallIds`, and `UninstallOrder` for cleanup differences;
+registry entries marked `ResetOnUninstall` are reset.
+`New-DevConfigRegistryStep` builds registry steps; `-Reset` deletes only the named value.
 
 ## Known limitations
 
@@ -527,7 +551,7 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 | File | What it is |
 | ---- | ---------- |
 | `bootstrap.ps1` | Remote entry point: elevation, verified downloads, protected installation, and launch. |
-| `dev-config.ps1` | The orchestrator. Elevation, PowerShell 7, run lock, logging, the phase list, the summary. |
+| `dev-config.ps1` | The orchestrator: elevation, shell selection, run lock, logging, phases, and summary. |
 | `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
 | `steps/_security.ps1` | Signature and directory-permission checks. Its signature is verified before loading unless `-AllowUnsigned` is used. |
 | `steps/_*.ps1` | Shared helpers: elevation, reboot and resume, winget, registry, Terminal settings, retry, process execution, console. |

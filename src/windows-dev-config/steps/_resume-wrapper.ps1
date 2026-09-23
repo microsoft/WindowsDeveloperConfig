@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 if ($Action -eq 'Uninstall') {
-    throw 'Uninstall is not implemented. No changes were made.'
+    throw 'Uninstall does not use reboot resume. Run dev-config.ps1 -Action Uninstall directly.'
 }
 
 # This wrapper sets UTF-8 output so relayed characters render consistently.
