@@ -65,7 +65,7 @@ if ($Action -eq 'Uninstall') {
 # The lock starts after relaunches so the worker process owns the log file.
 if (-not (Enter-DevConfigSingleInstance)) {
     Write-Host ''
-    Write-Host 'Calm OS setup is already running in another window.' -ForegroundColor Yellow
+    Write-Host 'Calm OS is already running in another window.' -ForegroundColor Yellow
     Write-Host 'Switch to it rather than starting a second copy -- they would fight over the same installs.' -ForegroundColor DarkGray
     Wait-DevConfigKeyPress
     exit 1
@@ -163,6 +163,7 @@ Write-Host ''
 if ($Action -eq 'Uninstall') {
     Write-Host 'Calm OS cleanup -- resetting settings and removing developer tools' -ForegroundColor Cyan
     Write-Host 'Ubuntu and its files will be deleted. Targeted tools are removed even if they predate setup.' -ForegroundColor Yellow
+    Write-Host 'Some uninstallers may request Administrator approval.' -ForegroundColor DarkGray
 } elseif ($Script:DevConfigResumed) {
     Write-Host "Welcome back. Resuming Calm OS setup ($Action) after the reboot..." -ForegroundColor Cyan
 } else {
@@ -244,13 +245,13 @@ if ($logPath) {
     Write-Host "  Full log: $logPath" -ForegroundColor DarkGray
 }
 
-# Release the run lock before the final pause so a completed run does not block the next start.
+# Close the log before releasing the lock so another run can start while this window waits.
+Stop-DevConfigLog
 Exit-DevConfigSingleInstance
 
 # The elevated window owns the final pause on both the initial and resumed runs.
 Wait-DevConfigKeyPress
 
-Stop-DevConfigLog
 if ($failure) {
     exit 1
 }

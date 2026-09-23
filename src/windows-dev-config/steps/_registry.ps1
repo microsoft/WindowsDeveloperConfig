@@ -41,10 +41,16 @@ function Set-DevConfigRegistryValue {
         [string] $Type = 'DWord'
     )
     $psPath = Convert-DevConfigRegistryPath -KeyPath $KeyPath
-    if (-not (Test-Path -LiteralPath $psPath)) {
-        New-Item -Path $psPath -Force | Out-Null
+    try {
+        if (-not (Test-Path -LiteralPath $psPath)) {
+            New-Item -Path $psPath -Force | Out-Null
+        }
+        New-ItemProperty -Path $psPath -Name $ValueName -Value $Value -PropertyType $Type -Force | Out-Null
+    } catch [System.UnauthorizedAccessException] {
+        throw [System.UnauthorizedAccessException]::new(
+            "Windows blocked changing $psPath\$ValueName. Administrator access or Windows policy may restrict this setting.",
+            $_.Exception)
     }
-    New-ItemProperty -Path $psPath -Name $ValueName -Value $Value -PropertyType $Type -Force | Out-Null
 }
 
 function Test-DevConfigRegistryValueAbsent {
@@ -80,6 +86,7 @@ function New-DevConfigRegistryStep {
 
     $type = if ($Setting.ContainsKey('Type')) { $Setting.Type } else { 'DWord' }
     New-DevConfigStep -Name $Setting.Name -Description $Setting.Description `
+        -BestEffort:([bool]$Setting['BestEffort']) `
         -Check {
             param($KeyPath, $ValueName, $Value)
             Test-DevConfigRegistryValue -KeyPath $KeyPath -ValueName $ValueName -Value $Value

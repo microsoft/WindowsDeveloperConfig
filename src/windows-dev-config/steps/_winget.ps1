@@ -330,7 +330,7 @@ function Invoke-DevConfigPackageCleanup {
                 }
                 $arguments += '--exact', '--scope', $scope, '--disable-interactivity', '--accept-source-agreements'
                 $result = Invoke-DevConfigCleanupCommand -FilePath 'winget.exe' -Arguments $arguments `
-                    -SuccessCodes @(0, $Script:DevConfigWingetNotFound)
+                    -SuccessCodes @(0, $Script:DevConfigWingetNotFound) -Unelevated:($scope -eq 'user' -and -not $CheckOnly)
                 if ($CheckOnly -and $result.ExitCode -eq 0) {
                     return $false
                 }

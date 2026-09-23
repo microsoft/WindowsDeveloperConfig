@@ -17,23 +17,56 @@ function Update-DevConfigSessionPath {
 function Invoke-DevConfigNativeCommand {
     param(
         [Parameter(Mandatory)] [string] $FilePath,
-        [string[]] $Arguments = @()
+        [string[]] $Arguments = @(),
+        [ValidateRange(0, 86400)] [int] $TimeoutSeconds = 0
     )
-    $ErrorActionPreference = 'Continue'
-    $PSNativeCommandUseErrorActionPreference = $false
+    $invoke = {
+        param($FilePath, $Arguments)
+        $ErrorActionPreference = 'Continue'
+        $PSNativeCommandUseErrorActionPreference = $false
+        $output = & $FilePath @Arguments 2>&1 | Out-String
+        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    }
+    if ($TimeoutSeconds -eq 0) {
+        return & $invoke $FilePath $Arguments
+    }
 
-    $output = & $FilePath @Arguments 2>&1 | Out-String
-    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    $pipeline = [PowerShell]::Create().AddScript($invoke.ToString()).AddArgument($FilePath).AddArgument($Arguments)
+    try {
+        $pending = $pipeline.BeginInvoke()
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        $nextProgress = 60
+        while (-not $pending.IsCompleted) {
+            if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                $pipeline.Stop()
+                throw [TimeoutException]::new("The command timed out and was stopped: $FilePath $($Arguments -join ' ').")
+            }
+            if ($timer.Elapsed.TotalSeconds -ge $nextProgress) {
+                Write-Host "  still working -- $([int]$timer.Elapsed.TotalMinutes)m so far" -ForegroundColor DarkGray
+                $nextProgress += 60
+            }
+            Start-Sleep -Milliseconds 500
+        }
+        return $pipeline.EndInvoke($pending)
+    } finally {
+        $pipeline.Dispose()
+    }
 }
 
 function Invoke-DevConfigCleanupCommand {
     param(
         [Parameter(Mandatory)] [string] $FilePath,
         [string[]] $Arguments = @(),
-        [int[]] $SuccessCodes = @(0)
+        [int[]] $SuccessCodes = @(0),
+        [switch] $Unelevated,
+        [ValidateRange(1, 86400)] [int] $TimeoutSeconds = 900
     )
-    $command = Get-Command $FilePath -CommandType Application -ErrorAction Stop
-    $result = Invoke-DevConfigNativeCommand -FilePath $command.Source -Arguments $Arguments
+    $command = Get-Command $FilePath -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    $result = if ($Unelevated) {
+        Invoke-DevConfigUnelevatedCommand -FilePath $command.Source -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
+    } else {
+        Invoke-DevConfigNativeCommand -FilePath $command.Source -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
+    }
     if ($null -eq $result.ExitCode -or $result.ExitCode -notin $SuccessCodes) {
         throw "$FilePath $($Arguments -join ' ') failed ($($result.ExitCode)): $($result.Output.Trim())"
     }

@@ -195,7 +195,7 @@ The Visual C++ runtime is installed before uv, matching Windows' native architec
 | Widgets off | `HKLM\SOFTWARE\Policies\Microsoft\Dsh\AllowNewsAndInterests` | `0` |
 | No PowerToys always-on-top toasts | `HKCU\...\Notifications\Settings\PowerToys\Enabled` | `0` |
 
-Widgets are turned off through the OS policy value because the per-user taskbar icon value no longer takes effect on Windows 11 24H2 and later.
+Widgets are turned off through OS policy. If Windows protects that policy, the step is flagged and setup continues.
 
 **Microsoft Edge** (`HKLM\SOFTWARE\Policies\Microsoft\Edge`)
 
@@ -263,7 +263,7 @@ Every step is a triple: a check, an apply, and the same check again.
 - If the apply runs but the check still fails afterwards, that's an error — not a silent success.
 - Steps that aren't worth stopping the whole run for are marked **best-effort**. If one of those fails it's reported as **flagged**, the run continues, and the summary names it at the end so it doesn't scroll past you.
 
-That's why the totals in the summary can add up to more than 50: the tally is saved across the reboot and carried into the resumed run, which re-checks every step it already did. Steps counted before the restart are counted again when they're confirmed after it.
+Each step is counted once in the summary, including across a reboot.
 
 ### Elevation and PowerShell 7
 
@@ -467,6 +467,8 @@ Run in an elevated PowerShell window:
 
 From source: `.\src\windows-dev-config\dev-config.ps1 -AllowUnsigned -Action Uninstall`.
 `bootstrap.ps1` also accepts `-Action Uninstall`. Cleanup uses Windows PowerShell to remove PowerShell 7.
+Per-user tools are removed through temporary tasks in the same account's non-elevated, signed-in session.
+Some uninstallers may request Administrator approval.
 
 **Cleanup runs without confirmation and permanently deletes the `Ubuntu` distro and its files.**
 It uninstalls WSL and the tools below, including pre-existing, machine-wide, and all-user MSIX installations.
@@ -476,7 +478,8 @@ It does not restore previous settings.
 - **Terminal:** remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries, and the Copilot fragment.
 - **Tools:** remove uv executables, caches, and local data; NVM; the WinUI Copilot plugin; Node.js; Copilot; Python 3.14 and its launcher/install manager; Git; GitHub CLI; Oh My Posh; Azure CLI; Coreutils; .NET SDK 10; Intelligent Terminal; PowerToys; Visual Studio Code; Windows App CLI; and PowerShell 7.
 
-Failures are flagged; cleanup continues. Unlisted settings, fonts, the Windows Terminal app, the Visual C++ runtime, and setup files remain.
+Failed or timed-out steps are flagged; cleanup continues. Long-running commands show progress.
+Unlisted settings, fonts, the Windows Terminal app, the Visual C++ runtime, and setup files remain.
 
 Manual resets for other settings (`HKLM` requires elevation):
 

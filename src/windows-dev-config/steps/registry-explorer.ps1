@@ -58,9 +58,8 @@ public static class DevConfigExplorerSettings
     $fileVisibilityMask = [uint32]3
     $cabinet = [DevConfigExplorerSettings+CabinetState]::new()
     $cabinet.Length = [Runtime.InteropServices.Marshal]::SizeOf([type][DevConfigExplorerSettings+CabinetState])
-    if (-not [DevConfigExplorerSettings]::ReadCabinetState([ref]$cabinet, $cabinet.Length)) {
-        throw 'Could not read the Explorer cabinet settings.'
-    }
+    # A false result supplies defaults when no cabinet settings have been saved.
+    [void][DevConfigExplorerSettings]::ReadCabinetState([ref]$cabinet, $cabinet.Length)
 
     $shell = [DevConfigExplorerSettings+ShellState]::new()
     # The mask covers hidden files and file extensions, not other Explorer preferences.

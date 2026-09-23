@@ -8,10 +8,9 @@ Set-StrictMode -Version Latest
 
 function Get-DevConfigUvCleanupPath {
     foreach ($name in @('uv', 'uvx', 'uvw')) {
-        $command = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue
-        if ($command -and (Test-Path -LiteralPath $command.Source)) {
-            $command.Source
-        }
+        Get-Command $name -CommandType Application -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path -LiteralPath $_.Source } |
+            Select-Object -ExpandProperty Source
     }
     foreach ($root in @($env:LOCALAPPDATA, $env:APPDATA)) {
         $path = Join-Path $root 'uv'
@@ -27,7 +26,7 @@ function Remove-DevConfigUv {
     )
     $uv = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue
     if ($uv) {
-        Invoke-DevConfigCleanupCommand -FilePath $uv.Source -Arguments @('cache', 'clean') | Out-Null
+        Invoke-DevConfigCleanupCommand -FilePath 'uv' -Arguments @('cache', 'clean') | Out-Null
     }
     try {
         Invoke-DevConfigPackageCleanup -Ids @($Id)
@@ -35,6 +34,25 @@ function Remove-DevConfigUv {
         foreach ($path in @(Get-DevConfigUvCleanupPath | Select-Object -Unique)) {
             Remove-Item -LiteralPath $path -Recurse -Force
         }
+    }
+}
+
+function Remove-DevConfigNvm {
+    $uninstallers = @(
+        foreach ($scope in @('User', 'Machine')) {
+            $nvmHome = [Environment]::GetEnvironmentVariable('NVM_HOME', $scope)
+            if ($nvmHome) {
+                $path = Join-Path ([Environment]::ExpandEnvironmentVariables($nvmHome)) 'unins000.exe'
+                if (Test-Path -LiteralPath $path) { $path }
+            }
+        }
+    ) | Select-Object -Unique
+    if (-not $uninstallers) {
+        throw 'The NVM uninstaller was not found under NVM_HOME. Repair its installation and retry.'
+    }
+    foreach ($path in $uninstallers) {
+        Invoke-DevConfigCleanupCommand -FilePath $path -Unelevated `
+            -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') | Out-Null
     }
 }
 
@@ -180,12 +198,9 @@ function Invoke-PackagesPhase {
                     }
                     'nvmForNode' {
                         New-DevConfigStep -Name 'NvmCleanup' -Description 'Uninstall NVM for Windows' -BestEffort `
-                            -Check { param($Path) -not (Test-Path -LiteralPath $Path) } `
-                            -Apply {
-                                param($Path)
-                                Invoke-DevConfigCleanupCommand -FilePath $Path -Arguments @('/VERYSILENT', '/SP-', '/SUPPRESSMSGBOXES') | Out-Null
-                            } `
-                            -ArgumentList @((Join-Path $env:ProgramFiles 'nvm\unins000.exe'))
+                            -Check { param($Id) Invoke-DevConfigPackageCleanup -Ids @($Id) -CheckOnly } `
+                            -Apply { param($Id) Remove-DevConfigNvm } `
+                            -ArgumentList @($package.Id)
                     }
                     default {
                         $ids = @($package.Id)

@@ -18,7 +18,7 @@ function Start-DevConfigLog {
         Start-Transcript -LiteralPath $Path -Append:$Append -Force | Out-Null
         $Script:DevConfigLogPath = $Path
     } catch {
-        Write-Verbose "Could not start the log file: $($_.Exception.Message)"
+        Write-Warning "Could not start the log file: $($_.Exception.Message)"
         $Script:DevConfigLogPath = $null
     }
 }

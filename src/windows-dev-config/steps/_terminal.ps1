@@ -71,15 +71,21 @@ function Read-DevConfigTerminalSettings {
 
     # Invalid JSON stops the run so a hand-edited settings file is not overwritten.
     try {
+        if ($PSVersionTable.PSEdition -ne 'Core') {
+            # Windows PowerShell needs JSONC comments and trailing commas removed without changing strings.
+            $raw = [regex]::Replace($raw, '("(?:\\.|[^"\\])*")|//[^\r\n]*|/\*[\s\S]*?\*/', {
+                param($match)
+                if ($match.Groups[1].Success) { $match.Value } else { ' ' }
+            })
+            # A trailing comma must follow a value, not an opening delimiter or another comma.
+            $raw = [regex]::Replace($raw, '("(?:\\.|[^"\\])*")|(?<=[}\]"0-9el])\s*,\s*(?=[}\]])', '$1')
+        }
         $settings = $raw | ConvertFrom-Json
         if ($null -eq $settings) {
             return [pscustomobject]@{}
         }
         return $settings
     } catch {
-        if ($PSVersionTable.PSEdition -ne 'Core') {
-            throw "PowerShell 7 is required to safely read Windows Terminal's settings, so $Path was left untouched."
-        }
         throw "Windows Terminal's settings file couldn't be read as JSON, so it was left untouched. Fix or rename $Path and run this again."
     }
 }

@@ -13,6 +13,7 @@ $Script:DevConfigCheckMark = [char]0x2713
 $Script:DevConfigResumed     = $false
 $Script:DevConfigAction      = 'Full'
 $Script:DevConfigTally       = @{ Done = 0; AlreadyOk = 0; Warned = 0 }
+$Script:DevConfigTalliedSteps = @{}
 # Persist flagged names so a blocked step is counted once across the reboot.
 $Script:DevConfigWarnedSteps      = @()
 $Script:DevConfigSilentSkips      = 0
@@ -48,9 +49,10 @@ function Save-DevConfigTally {
     )
     try {
         $state = [pscustomobject]@{
-            Done        = $Script:DevConfigTally.Done
-            AlreadyOk   = $Script:DevConfigTally.AlreadyOk
-            WarnedSteps = ($Script:DevConfigWarnedSteps -join ',')
+            Done         = $Script:DevConfigTally.Done
+            AlreadyOk    = $Script:DevConfigTally.AlreadyOk
+            TalliedSteps = $Script:DevConfigTalliedSteps
+            WarnedSteps  = ($Script:DevConfigWarnedSteps -join ',')
         }
         $state | ConvertTo-Json -Compress | Set-Content -LiteralPath $Path -Encoding UTF8
     } catch {
@@ -70,6 +72,11 @@ function Restore-DevConfigTally {
         $saved = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
         $Script:DevConfigTally.Done      += [int]$saved.Done
         $Script:DevConfigTally.AlreadyOk += [int]$saved.AlreadyOk
+        if ($saved.PSObject.Properties['TalliedSteps']) {
+            foreach ($property in $saved.TalliedSteps.PSObject.Properties) {
+                $Script:DevConfigTalliedSteps[$property.Name] = [string]$property.Value
+            }
+        }
         if ($saved.WarnedSteps) {
             foreach ($name in ($saved.WarnedSteps -split ',')) {
                 if ($Script:DevConfigWarnedSteps -notcontains $name) {
@@ -121,6 +128,11 @@ function Write-DevConfigStepFlag {
         [Parameter(Mandatory)] [string] $Label,
         [Parameter(Mandatory)] [string] $Message
     )
+    $previous = $Script:DevConfigTalliedSteps[$Name]
+    if ($previous) {
+        $Script:DevConfigTally[$previous]--
+        $Script:DevConfigTalliedSteps.Remove($Name)
+    }
     if ($Script:DevConfigWarnedSteps -notcontains $Name) {
         $Script:DevConfigWarnedSteps += $Name
     }
@@ -149,6 +161,22 @@ function Set-DevConfigStepUnverified {
     $Script:DevConfigStepUnverified = $Reason
 }
 
+function Set-DevConfigStepTally {
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [ValidateSet('Done', 'AlreadyOk')] [string] $State
+    )
+    $previous = $Script:DevConfigTalliedSteps[$Name]
+    if ($previous -eq 'Done' -or $previous -eq $State) {
+        return
+    }
+    if ($previous) {
+        $Script:DevConfigTally[$previous]--
+    }
+    $Script:DevConfigTally[$State]++
+    $Script:DevConfigTalliedSteps[$Name] = $State
+}
+
 function Invoke-DevConfigSteps {
     param(
         [Parameter(Mandatory)] [object[]] $Steps
@@ -172,7 +200,7 @@ function Invoke-DevConfigSteps {
         }
         # Tally before printing so collapsed phases still count.
         if ($alreadyDone) {
-            $Script:DevConfigTally.AlreadyOk++
+            Set-DevConfigStepTally -Name $step.Name -State AlreadyOk
             # Clearing here also covers resumed phases that return before the reporting loop.
             Clear-DevConfigStepFlag -Name $step.Name
         }
@@ -212,7 +240,7 @@ function Invoke-DevConfigSteps {
             } elseif (-not [bool](& $step.Check @stepArgs)) {
                 throw "ran, but the follow-up check still says it isn't done."
             } else {
-                $Script:DevConfigTally.Done++
+                Set-DevConfigStepTally -Name $step.Name -State Done
                 Clear-DevConfigStepFlag -Name $step.Name
                 Write-Host "  $Script:DevConfigCheckMark $label done" -ForegroundColor Green
             }

@@ -270,7 +270,14 @@ function Remove-DevConfigWsl {
         Invoke-DevConfigCleanupCommand -FilePath 'wsl.exe' -Arguments @('--unregister', $Script:DevConfigWslDistributionName) | Out-Null
     }
     if (Test-DevConfigWslPackageInstalled) {
-        Invoke-DevConfigCleanupCommand -FilePath 'wsl.exe' -Arguments @('--uninstall') | Out-Null
+        # WSL can terminate itself during removal; the step still verifies that the package is gone.
+        Invoke-DevConfigCleanupCommand -FilePath 'wsl.exe' -Arguments @('--uninstall') -SuccessCodes @(0, 1, 3010) | Out-Null
+        for ($attempt = 0; $attempt -lt 15; $attempt++) {
+            if (-not (Test-DevConfigWslPackageInstalled)) {
+                return
+            }
+            Start-Sleep -Seconds 2
+        }
     }
 }
 

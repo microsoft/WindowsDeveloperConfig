@@ -63,13 +63,14 @@ function Invoke-RegistryTaskbarSearchPhase {
             Description      = 'Disable Start menu account notifications'
             ResetOnUninstall = $true
         }
-        # Widgets are configured at OS policy level because the direct taskbar icon key is blocked on 24H2+.
+        # Windows may protect the Widgets policy even from an administrator.
         @{
             Name        = 'WidgetServiceOff'
             KeyPath     = 'HKLM\SOFTWARE\Policies\Microsoft\Dsh'
             ValueName   = 'AllowNewsAndInterests'
             Value       = 0
-            Description = 'Disable Widget service'
+            Description = 'Disable Widgets'
+            BestEffort  = $true
         }
     )
 
