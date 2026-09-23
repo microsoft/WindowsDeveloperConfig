@@ -86,15 +86,15 @@ For a fixed-action one-liner, choose one of the signed release wrappers:
 
 | Wrapper | Action |
 | ------- | ------ |
-| `install-full.ps1` | `Full` |
-| `install-partial.ps1` | `Partial` |
+| `setup-full.ps1` | `Full` |
+| `setup-zenith.ps1` | `Partial` |
 | `uninstall.ps1` | `Uninstall` (destructive cleanup) |
 
 ```powershell
-irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/install-full.ps1 | iex
+irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/setup-full.ps1 | iex
 ```
 
-Replace `install-full.ps1` with the chosen wrapper. Short URLs should point to these
+Replace `setup-full.ps1` with the chosen wrapper. Short URLs should point to these
 repository-root release files, not `src/`. All three require `| iex` to execute.
 The wrappers accept no setup options and verify the Microsoft signature of the
 downloaded `bootstrap.ps1` before running it with the fixed action.
@@ -554,7 +554,7 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 | File | What it is |
 | ---- | ---------- |
 | `bootstrap.ps1` | Remote entry point: elevation, verified downloads, protected installation, and launch. |
-| `install-full.ps1`, `install-partial.ps1`, `uninstall.ps1` | Fixed-action wrappers that verify and call the signed bootstrap. |
+| `setup-full.ps1`, `setup-zenith.ps1`, `uninstall.ps1` | Fixed-action wrappers that verify and call the signed bootstrap. |
 | `dev-config.ps1` | The orchestrator: elevation, shell selection, run lock, logging, phases, and summary. |
 | `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
 | `steps/_security.ps1` | Signature and directory-permission checks. Its signature is verified before loading unless `-AllowUnsigned` is used. |
