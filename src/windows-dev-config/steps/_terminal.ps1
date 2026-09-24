@@ -13,7 +13,7 @@ $Script:DevConfigTerminalJsonDepth = 32
 $Script:DevConfigPs7ProfileName = 'PowerShell'
 $Script:CopilotFragmentGuid = '{b1a4d2c8-6f3e-4a7b-9e2d-1c8f5a3b7d91}'
 
-# Paths already backed up in this run, so a later phase cannot overwrite the pre-run original.
+# Paths backed up in this operation; null means resume could not recover the backup state.
 $Script:DevConfigTerminalBackedUp = @()
 
 function Get-DevConfigCopilotFragmentDir {
@@ -96,6 +96,9 @@ function Save-DevConfigTerminalSettings {
         [Parameter(Mandatory)] [string] $Path,
         [Parameter(Mandatory)] [object] $Settings
     )
+    if ($null -eq $Script:DevConfigTerminalBackedUp) {
+        throw 'The Terminal backup state could not be restored; settings were left unchanged to preserve the original backup.'
+    }
     if ((Test-Path -LiteralPath $Path) -and ($Script:DevConfigTerminalBackedUp -notcontains $Path)) {
         Copy-Item -LiteralPath $Path -Destination "$Path.bak" -Force
         $Script:DevConfigTerminalBackedUp += $Path
@@ -203,7 +206,9 @@ function Reset-DevConfigTerminal {
         $remaining = @($list | Where-Object {
             $guid = Get-DevConfigJsonValue -Object $_ -Path 'guid'
             $name = Get-DevConfigJsonValue -Object $_ -Path 'name'
-            $guid -notin $profileGuids -and $name -ne $DistributionName
+            $source = Get-DevConfigJsonValue -Object $_ -Path 'source'
+            $guid -notin $profileGuids -and $name -ne $DistributionName -and
+                $source -ne 'Windows.Terminal.PowershellCore'
         })
         if ($remaining.Count -ne @($list).Count) {
             $profiles.PSObject.Properties['list'].Value = $remaining

@@ -36,8 +36,9 @@ function Suspend-DevConfigForReboot {
     }
 
     Clear-DevConfigResume
+    Save-DevConfigTally -Path (Join-Path (Split-Path -Path $ScriptPath -Parent) 'devconfig-tally.json') `
+        -TerminalBackedUp $Script:DevConfigTerminalBackedUp
     Register-ScheduledTask -TaskName $Script:DevConfigResumeTask -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
-    Save-DevConfigTally -Path (Join-Path (Split-Path -Path $ScriptPath -Parent) 'devconfig-tally.json')
 
     Write-Host ''
     Write-Host 'WSL needs a restart to finish. Rebooting in 10s -- setup continues after you' -ForegroundColor Yellow

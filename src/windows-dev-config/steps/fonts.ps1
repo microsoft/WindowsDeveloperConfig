@@ -167,7 +167,8 @@ function Test-DevConfigCascadiaDefaultFont {
         return (-not (Get-DevConfigTerminalSettingsTarget))
     }
     $settings = Read-DevConfigTerminalSettings -Path $path
-    return (Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face') -eq $Script:CascadiaDefaultFontFace
+    return (Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face') -eq $Script:CascadiaDefaultFontFace -and
+        (Test-DevConfigCascadiaFontsInstalled)
 }
 
 function Set-DevConfigCascadiaDefaultFont {
@@ -177,11 +178,19 @@ function Set-DevConfigCascadiaDefaultFont {
     }
 
     $settings = Read-DevConfigTerminalSettings -Path $path
-    $font     = Resolve-DevConfigJsonBranch -Object $settings -Path 'profiles', 'defaults', 'font'
-    Set-DevConfigJsonProperty -Object $font -Name 'face' -Value $Script:CascadiaDefaultFontFace
+    $face = $Script:CascadiaDefaultFontFace
+    if (-not (Test-DevConfigCascadiaFontsInstalled)) {
+        if ((Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face') -ne $face) {
+            throw 'Cascadia fonts are not installed; the current Windows Terminal font was left unchanged.'
+        }
+        $face = 'Cascadia Mono'
+        Set-DevConfigStepUnverified -Reason 'Cascadia fonts are not installed; using Cascadia Mono until installation succeeds.'
+    }
+    $font = Resolve-DevConfigJsonBranch -Object $settings -Path 'profiles', 'defaults', 'font'
+    Set-DevConfigJsonProperty -Object $font -Name 'face' -Value $face
 
     Save-DevConfigTerminalSettings -Path $path -Settings $settings
-    Write-Host "Set the Windows Terminal default font to '$($Script:CascadiaDefaultFontFace)' in $path"
+    Write-Host "Set the Windows Terminal default font to '$face' in $path"
 }
 
 function Invoke-FontsPhase {
