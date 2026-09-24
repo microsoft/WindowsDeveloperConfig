@@ -152,18 +152,24 @@ function Get-DevConfigRelaunchArguments {
         [switch] $Resumed,
         [switch] $AllowUnsigned,
         [switch] $RequestElevation,
+        [switch] $ApplyTerminalFont,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
     )
     $arguments = @('-NoProfile')
     if (-not $AllowUnsigned) {
         $arguments += '-ExecutionPolicy', 'RemoteSigned'
     }
-    $arguments += '-File', "`"$ScriptPath`"", '-Action', $Action
-    if (-not $RequestElevation) {
-        $arguments += '-NoElevate'
-    }
-    if ($Resumed) {
-        $arguments += '-Resumed'
+    $arguments += '-File', "`"$ScriptPath`""
+    if ($ApplyTerminalFont) {
+        $arguments += '-ApplyTerminalFont'
+    } else {
+        $arguments += '-Action', $Action
+        if (-not $RequestElevation) {
+            $arguments += '-NoElevate'
+        }
+        if ($Resumed) {
+            $arguments += '-Resumed'
+        }
     }
     if ($AllowUnsigned) {
         $arguments += '-AllowUnsigned'

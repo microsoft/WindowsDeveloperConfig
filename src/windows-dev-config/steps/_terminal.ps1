@@ -15,6 +15,76 @@ $Script:CopilotFragmentGuid = '{b1a4d2c8-6f3e-4a7b-9e2d-1c8f5a3b7d91}'
 
 # Paths backed up in this operation; null means resume could not recover the backup state.
 $Script:DevConfigTerminalBackedUp = @()
+$Script:DevConfigTerminalFontRunOnceKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce'
+$Script:DevConfigTerminalFontRunOnceName = 'CalmOS-ApplyTerminalFont'
+
+function Get-DevConfigPendingTerminalFontPath {
+    Join-Path $env:LOCALAPPDATA 'CalmOS\terminal-font.json'
+}
+
+function Get-DevConfigTerminalFontRunOnceCommand {
+    if (Test-Path -LiteralPath $Script:DevConfigTerminalFontRunOnceKey) {
+        $values = Get-ItemProperty -LiteralPath $Script:DevConfigTerminalFontRunOnceKey
+        $property = $values.PSObject.Properties[$Script:DevConfigTerminalFontRunOnceName]
+        if ($property) { return $property.Value }
+    }
+    return $null
+}
+
+function Get-DevConfigPendingTerminalFont {
+    $path = Get-DevConfigPendingTerminalFontPath
+    if (-not (Test-Path -LiteralPath $path)) {
+        return $null
+    }
+    $pending = (Read-DevConfigTextFile -Path $path) | ConvertFrom-Json
+    if ($pending -isnot [pscustomobject]) {
+        throw 'The pending Terminal font update is invalid. Run setup again to reschedule it.'
+    }
+    foreach ($name in 'Path', 'FontFace', 'PreviousFace', 'BackupRequired', 'Command') {
+        if (-not $pending.PSObject.Properties[$name]) {
+            throw 'The pending Terminal font update is incomplete. Run setup again to reschedule it.'
+        }
+    }
+    if ($pending.Path -isnot [string] -or $pending.FontFace -isnot [string] -or
+        $pending.Command -isnot [string] -or $pending.BackupRequired -isnot [bool] -or
+        ($null -ne $pending.PreviousFace -and $pending.PreviousFace -isnot [string])) {
+        throw 'The pending Terminal font update has invalid values. Run setup again to reschedule it.'
+    }
+    return $pending
+}
+
+function Invoke-DevConfigTerminalFontLock {
+    param([Parameter(Mandatory)] [scriptblock] $ScriptBlock)
+
+    $lockPath = [IO.Path]::ChangeExtension((Get-DevConfigPendingTerminalFontPath), '.lock')
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $lockPath)) | Out-Null
+    $lock = Invoke-DevConfigRetry -Name 'Terminal font update lock' -InitialDelaySeconds 1 -ScriptBlock {
+        [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    }
+    try {
+        & $ScriptBlock
+    } finally {
+        $lock.Dispose()
+    }
+}
+
+function Clear-DevConfigPendingTerminalFont {
+    param([switch] $LockHeld)
+
+    if (-not $LockHeld) {
+        if ((Test-Path -LiteralPath (Get-DevConfigPendingTerminalFontPath)) -or (Get-DevConfigTerminalFontRunOnceCommand)) {
+            Invoke-DevConfigTerminalFontLock { Clear-DevConfigPendingTerminalFont -LockHeld }
+        }
+        return
+    }
+    if (Get-DevConfigTerminalFontRunOnceCommand) {
+        Remove-ItemProperty -LiteralPath $Script:DevConfigTerminalFontRunOnceKey -Name $Script:DevConfigTerminalFontRunOnceName
+    }
+    $path = Get-DevConfigPendingTerminalFontPath
+    if (Test-Path -LiteralPath $path) {
+        Remove-Item -LiteralPath $path -Force
+    }
+}
 
 function Get-DevConfigCopilotFragmentDir {
     Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\Fragments\DevConfig'
@@ -90,12 +160,9 @@ function Read-DevConfigTerminalSettings {
     }
 }
 
-# Backup preserves the original JSONC because JSON conversion drops comments.
-function Save-DevConfigTerminalSettings {
-    param(
-        [Parameter(Mandatory)] [string] $Path,
-        [Parameter(Mandatory)] [object] $Settings
-    )
+function Save-DevConfigTerminalBackup {
+    param([Parameter(Mandatory)] [string] $Path)
+
     if ($null -eq $Script:DevConfigTerminalBackedUp) {
         throw 'The Terminal backup state could not be restored; settings were left unchanged to preserve the original backup.'
     }
@@ -103,6 +170,15 @@ function Save-DevConfigTerminalSettings {
         Copy-Item -LiteralPath $Path -Destination "$Path.bak" -Force
         $Script:DevConfigTerminalBackedUp += $Path
     }
+}
+
+# Backup preserves the original JSONC because JSON conversion drops comments.
+function Save-DevConfigTerminalSettings {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [object] $Settings
+    )
+    Save-DevConfigTerminalBackup -Path $Path
     $json = $Settings | ConvertTo-Json -Depth $Script:DevConfigTerminalJsonDepth
     Write-DevConfigTextFile -Path $Path -Content $json
 }
@@ -176,6 +252,13 @@ function Reset-DevConfigTerminal {
         [Parameter(Mandatory)] [string] $DistributionName,
         [switch] $CheckOnly
     )
+    if ($CheckOnly) {
+        if ((Test-Path -LiteralPath (Get-DevConfigPendingTerminalFontPath)) -or (Get-DevConfigTerminalFontRunOnceCommand)) {
+            return $false
+        }
+    } else {
+        Clear-DevConfigPendingTerminalFont
+    }
     $path = Get-DevConfigTerminalSettingsPath
     if (-not $path) {
         return $true

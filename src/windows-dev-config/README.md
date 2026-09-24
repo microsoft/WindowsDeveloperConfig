@@ -233,7 +233,8 @@ Widgets are turned off through OS policy. If Windows protects that policy, the s
 ### Fonts, Terminal and prompt
 
 - **Cascadia Code NF** and **Cascadia Mono NF** are downloaded from the pinned [`microsoft/cascadia-code`](https://github.com/microsoft/cascadia-code/releases) release `2407.24`, verified against a known SHA-256, and installed **for all users** under `%SystemRoot%\Fonts`. An earlier per-user copy left by a previous run is removed.
-- **Windows Terminal** gets Cascadia Mono NF as its default font face after font installation verifies, and PowerShell 7 as its default profile. If font installation fails, setup flags it and keeps the current font, or uses Cascadia Mono if the missing NF font was already selected. `settings.json` is backed up to `settings.json.bak` before either change.
+- **Windows Terminal** gets PowerShell 7 as its default profile. After font installation verifies, a one-time, per-user `RunOnce` update selects Cascadia Mono NF at the next sign-in, without elevation or another setup run. Until then, the current font stays selected so an open Terminal does not warn about a newly installed font. This also works when WSL needs no reboot. If font installation fails, setup flags it and keeps the current font, or uses Cascadia Mono if the missing NF font was already selected.
+- **Terminal backups:** `settings.json.bak` preserves the original settings across setup, reboot/resume, and the next-sign-in font update. A font choice changed manually after setup is left alone.
 - **Oh My Posh** runs only in Windows Terminal or non-elevated PowerShell 7 sessions, in both modes. Setup updates its block in `$PROFILE`. If other initialization is present, it leaves the profile unchanged and flags it for manual adjustment.
 - A **GitHub Copilot** profile is added to Windows Terminal as a settings fragment in `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\DevConfig`, so it appears in the dropdown without editing your settings file.
 
@@ -308,6 +309,8 @@ Only one restart is ever performed. If WSL still isn't usable after it, the run 
 ### Logs
 
 The transcript is **`devconfig-log.txt`** next to `dev-config.ps1`, normally `%ProgramData%\CalmOS\devconfig-log.txt`. Setup prints the path when it finishes.
+
+The next-sign-in font update writes `%LOCALAPPDATA%\CalmOS\terminal-font.log`. Keep the setup files in place until that update has run.
 
 The transcript is more verbose than the console on purpose: it records handled errors and raw command output that are deliberately kept off screen. Text in the log that isn't on your console is usually something the run recovered from.
 
@@ -497,7 +500,7 @@ It uninstalls WSL and the tools below, including pre-existing, machine-wide, and
 Cleanup covers Full's configuration regardless of which setup action ran. It does not restore previous settings.
 
 - **Settings:** disable Sudo, Developer Mode, and Remote Desktop; reset Explorer, Start, search, notification, Bluetooth tray, taskbar End Task, Widgets, Edge policies, long-path, and WSL first-run settings; select the unrestricted QuietHours profile and switch app/system themes to light.
-- **Terminal:** remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries (including dynamically generated PowerShell entries), and the Copilot fragment.
+- **Terminal:** cancel any pending next-sign-in font update; remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries (including dynamically generated PowerShell entries), and the Copilot fragment.
 - **Integrations:** remove the managed Oh My Posh profile block, WinUI template package, and win-dev-skills marketplace. Custom profile code and unrelated plugins are preserved; a marketplace still used by other plugins is flagged rather than force-removed.
 - **Tools:** remove uv executables, caches, and local data; NVM; the WinUI Copilot plugin; Node.js; Copilot; Python 3.14 and its launcher/install manager; Git; GitHub CLI; Oh My Posh; Azure CLI; Coreutils; .NET SDK 10; Intelligent Terminal; PowerToys; Visual Studio Code; Windows App CLI; and PowerShell 7.
 

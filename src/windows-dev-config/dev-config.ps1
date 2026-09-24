@@ -8,6 +8,7 @@ param(
     [switch] $NoElevate,
     [switch] $Resumed,
     [switch] $AllowUnsigned,
+    [switch] $ApplyTerminalFont,
     [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
 )
 
@@ -50,6 +51,33 @@ try {
 . (Join-Path $stepsDir '_winget.ps1')
 . (Join-Path $stepsDir '_pwsh-bootstrap.ps1')
 
+$Script:DevConfigAllowUnsigned = [bool]$AllowUnsigned
+if ($ApplyTerminalFont) {
+    . (Join-Path $stepsDir 'fonts.ps1')
+    $pendingPath = Get-DevConfigPendingTerminalFontPath
+    if (-not (Test-Path -LiteralPath $pendingPath)) {
+        Write-Host 'No Terminal font update is pending.'
+        exit 0
+    }
+    $logPath = [IO.Path]::ChangeExtension($pendingPath, '.log')
+    Start-DevConfigLog -Path $logPath
+    $failure = $null
+    try {
+        Invoke-DevConfigPendingTerminalFont
+    } catch {
+        $failure = $_
+        Write-Host "The Terminal font update failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Full log: $logPath" -ForegroundColor DarkGray
+    } finally {
+        Stop-DevConfigLog
+    }
+    if ($failure) {
+        Wait-DevConfigKeyPress -TimeoutSeconds 60
+        exit 1
+    }
+    exit 0
+}
+
 # TLS is configured before any download step runs.
 Enable-DevConfigModernTls
 
@@ -77,7 +105,6 @@ Start-DevConfigLog -Path (Join-Path $PSScriptRoot 'devconfig-log.txt') -Append:$
 Clear-DevConfigResume
 
 $Script:DevConfigResumed = [bool]$Resumed -and $Action -ne 'Uninstall'
-$Script:DevConfigAllowUnsigned = [bool]$AllowUnsigned
 $Script:DevConfigAction = $Action
 if ($Script:DevConfigResumed) {
     # Restore the pre-reboot tally so the final summary covers the whole run.
@@ -225,6 +252,9 @@ try {
     if ($tally.Warned -gt 0) {
         Write-Host "  Flagged: $($Script:DevConfigWarnedSteps -join ', ')" -ForegroundColor Yellow
         Write-Host '  These were skipped or could not be confirmed. Running this again retries just those.' -ForegroundColor DarkGray
+    }
+    if ($Action -ne 'Uninstall' -and (Get-DevConfigTerminalFontRunOnceCommand)) {
+        Write-Host '  The Terminal font will change at your next sign-in; no setup rerun is needed.' -ForegroundColor DarkGray
     }
     Write-Host '  A few Explorer and taskbar changes appear once you sign out and back in.' -ForegroundColor DarkGray
 } catch {
