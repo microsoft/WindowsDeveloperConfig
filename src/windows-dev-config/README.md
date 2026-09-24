@@ -494,7 +494,7 @@ other installation types use WinGet. Some uninstallers may still request Adminis
 It uninstalls WSL and the tools below, including pre-existing, machine-wide, and all-user MSIX installations.
 Cleanup covers Full's configuration regardless of which setup action ran. It does not restore previous settings.
 
-- **Settings:** disable Sudo, Developer Mode, and Remote Desktop; reset Explorer, Start, search, notification, Bluetooth tray, taskbar End Task, Widgets, Edge policies, long-path, and WSL first-run settings; switch app/system themes to light.
+- **Settings:** disable Sudo, Developer Mode, and Remote Desktop; reset Explorer, Start, search, notification, Bluetooth tray, taskbar End Task, Widgets, Edge policies, long-path, and WSL first-run settings; select the unrestricted QuietHours profile and switch app/system themes to light.
 - **Terminal:** remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries, and the Copilot fragment.
 - **Integrations:** remove the managed Oh My Posh profile block, WinUI template package, and win-dev-skills marketplace. Custom profile code and unrelated plugins are preserved; a marketplace still used by other plugins is flagged rather than force-removed.
 - **Tools:** remove uv executables, caches, and local data; NVM; the WinUI Copilot plugin; Node.js; Copilot; Python 3.14 and its launcher/install manager; Git; GitHub CLI; Oh My Posh; Azure CLI; Coreutils; .NET SDK 10; Intelligent Terminal; PowerToys; Visual Studio Code; Windows App CLI; and PowerShell 7.

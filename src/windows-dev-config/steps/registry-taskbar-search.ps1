@@ -79,9 +79,11 @@ function Invoke-RegistryTaskbarSearchPhase {
     }
     if ($Script:DevConfigAction -eq 'Uninstall') {
         $steps += New-DevConfigRegistryStep -Reset -Setting @{
-            Name      = 'QuietHoursProfile'
-            KeyPath   = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\QuietHours\Profiles'
-            ValueName = 'DefaultProfile'
+            Name       = 'QuietHoursProfile'
+            KeyPath    = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\QuietHours\Profiles'
+            ValueName  = 'DefaultProfile'
+            Type       = 'String'
+            ResetValue = 'Microsoft.QuietHoursProfile.Unrestricted'
         }
     }
 
