@@ -1,159 +1,25 @@
-<#
-.SYNOPSIS
-  Shared helpers for PATH refresh, TLS, native process execution, and UTF-8 text I/O.
-#>
+[CmdletBinding()]
+param()
 
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
+& {
+    $ErrorActionPreference = 'Stop'
+    Set-StrictMode -Version Latest
 
-function Update-DevConfigSessionPath {
-    $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-    $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
-    # A missing per-user PATH is normal, so empty values are filtered before joining.
-    $env:Path    = (@($machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'
-}
-
-# Normalize native failures to exit codes so callers are not tied to shell-specific error behavior.
-function Invoke-DevConfigNativeCommand {
-    param(
-        [Parameter(Mandatory)] [string] $FilePath,
-        [string[]] $Arguments = @(),
-        [ValidateRange(0, 86400)] [int] $TimeoutSeconds = 0
-    )
-    $invoke = {
-        param($FilePath, $Arguments)
-        $ErrorActionPreference = 'Continue'
-        $PSNativeCommandUseErrorActionPreference = $false
-        $output = & $FilePath @Arguments 2>&1 | Out-String
-        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $bootstrap = (Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/bootstrap.ps1' -UseBasicParsing -TimeoutSec 60).TrimStart([char]0xFEFF)
+    $signature = Get-AuthenticodeSignature -Content ([Text.Encoding]::Unicode.GetBytes($bootstrap)) -SourcePathOrExtension '.ps1'
+    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
+        $signature.SignerCertificate.Subject -ne 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') {
+        throw 'The setup bootstrap failed Microsoft signature verification. Setup was not started.'
     }
-    if ($TimeoutSeconds -eq 0) {
-        return & $invoke $FilePath $Arguments
-    }
-
-    $pipeline = [PowerShell]::Create().AddScript($invoke.ToString()).AddArgument($FilePath).AddArgument($Arguments)
-    try {
-        $pending = $pipeline.BeginInvoke()
-        $timer = [Diagnostics.Stopwatch]::StartNew()
-        $nextProgress = 60
-        while (-not $pending.IsCompleted) {
-            if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-                $pipeline.Stop()
-                throw [TimeoutException]::new("The command timed out and was stopped: $FilePath $($Arguments -join ' ').")
-            }
-            if ($timer.Elapsed.TotalSeconds -ge $nextProgress) {
-                Write-Host "  still working -- $([int]$timer.Elapsed.TotalMinutes)m so far" -ForegroundColor DarkGray
-                $nextProgress += 60
-            }
-            Start-Sleep -Milliseconds 500
-        }
-        return $pipeline.EndInvoke($pending)
-    } finally {
-        $pipeline.Dispose()
-    }
-}
-
-function Invoke-DevConfigCleanupCommand {
-    param(
-        [Parameter(Mandatory)] [string] $FilePath,
-        [string[]] $Arguments = @(),
-        [int[]] $SuccessCodes = @(0),
-        [switch] $Unelevated,
-        [ValidateRange(1, 86400)] [int] $TimeoutSeconds = 900
-    )
-    $command = Get-Command $FilePath -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    $result = if ($Unelevated) {
-        Invoke-DevConfigUnelevatedCommand -FilePath $command.Source -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
-    } else {
-        Invoke-DevConfigNativeCommand -FilePath $command.Source -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
-    }
-    if ($null -eq $result.ExitCode -or $result.ExitCode -notin $SuccessCodes) {
-        throw "$FilePath $($Arguments -join ' ') failed ($($result.ExitCode)): $($result.Output.Trim())"
-    }
-    return $result
-}
-
-# Some installers can wait indefinitely, so process waits are bounded and emit periodic progress.
-function Invoke-DevConfigProcess {
-    param(
-        [Parameter(Mandatory)] [string] $FilePath,
-        [string[]] $Arguments = @(),
-        [Parameter(Mandatory)] [int] $TimeoutSeconds,
-        [switch] $NoNewWindow,
-        [string] $RedirectStandardOutput,
-        [string] $RedirectStandardError
-    )
-    $start = @{ FilePath = $FilePath; PassThru = $true }
-    if ($Arguments.Count)         { $start.ArgumentList           = $Arguments }
-    if ($NoNewWindow)             { $start.NoNewWindow            = $true }
-    if ($RedirectStandardOutput)  { $start.RedirectStandardOutput = $RedirectStandardOutput }
-    if ($RedirectStandardError)   { $start.RedirectStandardError  = $RedirectStandardError }
-
-    $process   = Start-Process @start
-    # Cache the process handle before exit so Windows PowerShell can still report ExitCode.
-    try { $null = $process.Handle } catch { Write-Verbose "Could not hold a handle on $FilePath." }
-    $startedAt = Get-Date
-    $deadline  = $startedAt.AddSeconds($TimeoutSeconds)
-    $nextBeat  = $startedAt.AddSeconds(60)
-    while (-not $process.HasExited) {
-        $now = Get-Date
-        if ($now -ge $deadline) {
-            try { $process.Kill() } catch { Write-Verbose "Could not stop $FilePath : $($_.Exception.Message)" }
-            $minutes = [Math]::Round($TimeoutSeconds / 60)
-            # TimeoutException lets retry logic distinguish a bounded wait from retryable install failures.
-            throw [System.TimeoutException]::new("$FilePath did not finish within $minutes minutes, so it was stopped.")
-        }
-        if ($now -ge $nextBeat) {
-            Write-Host "  still working -- $([int]($now - $startedAt).TotalMinutes)m so far" -ForegroundColor DarkGray
-            $nextBeat = $now.AddSeconds(60)
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    $process.WaitForExit()
-    return $process.ExitCode
-}
-
-# TLS 1.2 is enabled once so downloads work on Windows PowerShell 5.1 defaults.
-function Enable-DevConfigModernTls {
-    try {
-        [Net.ServicePointManager]::SecurityProtocol =
-            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    } catch {
-        Write-Verbose "Could not raise the TLS version: $($_.Exception.Message)"
-    }
-}
-
-# ReadAllText preserves UTF-8 files without relying on Windows PowerShell 5.1 ANSI decoding.
-function Read-DevConfigTextFile {
-    param(
-        [Parameter(Mandatory)] [string] $Path
-    )
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return $null
-    }
-    return [System.IO.File]::ReadAllText($Path)
-}
-
-# Write through a UTF-8 no-BOM temp file to avoid truncation and edition-specific encoding behavior.
-function Write-DevConfigTextFile {
-    param(
-        [Parameter(Mandatory)] [string] $Path,
-        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Content
-    )
-    $parent = Split-Path -Parent $Path
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    $temp = "$Path.new"
-    [System.IO.File]::WriteAllText($temp, $Content, [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temp -Destination $Path -Force
+    & ([scriptblock]::Create($bootstrap)) -Action Partial
 }
 
 # SIG # Begin signature block
 # MIInRAYJKoZIhvcNAQcCoIInNTCCJzECAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCb3wAXH0VSvuT1
-# EdZ3WWXiTj/qewvuT6B2OTGCRo5B1aCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDyc9el4M5f/eAS
+# poTgeVxoctEET4U+R2g95ikd9uBDMaCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
 # yE7XD1dIAAAAAAIdMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQzWhcNMjcwNDE1MTg1
@@ -225,19 +91,19 @@ function Write-DevConfigTextFile {
 # MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jv
 # c29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIdTRnITtcPV0gAAAAAAh0w
 # DQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwLwYJ
-# KoZIhvcNAQkEMSIEIMJ1kwggob+DAjsyaBUHr6I+kmkinHO8ErRSWtvXUWh3MEIG
+# KoZIhvcNAQkEMSIEII2sLwtbPQh8o637b7MEnHId2rW4UltAezcO9ARA2HfaMEIG
 # CisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBvAGYAdKEagBhodHRwOi8v
-# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAVW8jyRCGLCFZt1nG
-# RqNuHh4wwopTt3LroW+VlXtmTCmJBUUg1YxRKb6x+y+04r/o3Z1kzUMyebvwjr+H
-# pJliQ9QVXRvcn8WqaDrf1PAaRaLnf9TzzSmetQT9rxqk7nSWc+P4SqM2qPlOh0q1
-# Zyuadr44nVn+3nH0v9L3TexiPtQORnNTQUuZ3oFOOzGSJJz3WyW26OgJnlj6x340
-# yTw2VkqIYNe6uAUC5MCgOLANweCr5b5LOGjGvqEPdFya/6IRoHoalnGSasYJu1L4
-# th9zacNTH7Nam9UEZvZEmgNVQJemTO65FsGYnP1ANFxL9v7fFBa7Jo54Ku+lF+UB
-# xheeYqGCF7AwghesBgorBgEEAYI3AwMBMYIXnDCCF5gGCSqGSIb3DQEHAqCCF4kw
+# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAz9YNPBqRiqXSzaPY
+# qXML+ygFDDjgSDCjMspntpS8F5gi5fdeEvvMFDkK9ztqZ/AGq+V343zkIJmotPrf
+# bqtAz+pXo7FD6PU2U/5oXv/nu73Nuf2/Xr6MXafXdpF0Ew1ORx3/YfN4RTcJeroc
+# +fq2iBPZ91VNXYG3E/Odk0NA5rt/p350oIFBMSxxpMOTEml/mBNOyy5EiG6B2ViD
+# z/KRsr+HDAkHNULUF/qgUyifwHxj0qw35R5JZvh5FM9y9futUqv6V3wyql7rgWWc
+# ziwzfNOzBw9qWYcZclhQB01Gzz0EtSWIf9Z/c59pogwBNf1F/sMQveWD77Gsdjik
+# CNc546GCF7AwghesBgorBgEEAYI3AwMBMYIXnDCCF5gGCSqGSIb3DQEHAqCCF4kw
 # gheFAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFaBgsqhkiG9w0BCRABBKCCAUkEggFF
-# MIIBQQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCCvFC7UkXct4i6z
-# uYOiZDR/z5waetqg+GdEQF+FDUnpjwIGaq9vGOb1GBMyMDI2MDkyNTIyNDc1Ny4y
-# NTNaMASAAgH0oIHZpIHWMIHTMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
+# MIIBQQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCBPE6sI5yswAZmA
+# ApI3rcy42dvatTuvWCsjrKE/9iVbCgIGaq9vGObaGBMyMDI2MDkyNTIyNDc1Ni4z
+# NTdaMASAAgH0oIHZpIHWMIHTMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
 # Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
 # cmF0aW9uMS0wKwYDVQQLEyRNaWNyb3NvZnQgSXJlbGFuZCBPcGVyYXRpb25zIExp
 # bWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjo2RjFBLTA1RTAtRDk0NzEl
@@ -342,22 +208,22 @@ function Write-DevConfigTextFile {
 # BAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQG
 # A1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIcCVUV18NZ
 # B9EAAQAAAhwwDQYJYIZIAWUDBAIBBQCgggFKMBoGCSqGSIb3DQEJAzENBgsqhkiG
-# 9w0BCRABBDAvBgkqhkiG9w0BCQQxIgQgwb1JLJe01bwqjOclSuwuKkeX47F59gmA
-# QslQDuCjh6swgfoGCyqGSIb3DQEJEAIvMYHqMIHnMIHkMIG9BCCgIGkmNhdo7+KE
+# 9w0BCRABBDAvBgkqhkiG9w0BCQQxIgQgFPzyaJqDGoSG+LrefQ4R1dXU7z+LOMFS
+# jGpuJTPFTw8wgfoGCyqGSIb3DQEJEAIvMYHqMIHnMIHkMIG9BCCgIGkmNhdo7+KE
 # 7dWhI+E2Ctx2RLWoYvvJodCIciHHaDCBmDCBgKR+MHwxCzAJBgNVBAYTAlVTMRMw
 # EQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVN
 # aWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0
 # YW1wIFBDQSAyMDEwAhMzAAACHAlVFdfDWQfRAAEAAAIcMCIEIHeIon9dd8kSbI29
-# hu2m1+ivmWiZkoMmR2OSYAAFz7PvMA0GCSqGSIb3DQEBCwUABIICAH/O4OxvMqkP
-# buJH7Xfd+obIZNlsT7/z3k9+4zo2SWQnh8kH0+9MEUFx0UUikda+ROzElexBdTXA
-# RJU/U1LAVw5M06LkVbB3GDHybEIlHA5wMSmcLnnRmOkYUeo1DpRBBbLobiDNZ0bt
-# g2WwemGdCT+DzaSmowravMaqUfa9ni7iQeSZxf5zVObDdgiIyzbN1mwSSB+Wd0Qk
-# /KiKEmYANzn+X1bXTYSa2RLz509H8JjzcVPUrTMFQUvrdlwOaMChwJlxFT3PoJ6e
-# 6qNkYVIDQQGgkMHWzAmTVZDgUtfJdvsmpvWJaROyFhmCxGHmZKVmVaKIX1DyDRPm
-# ANvqBRy9/KH//djI89IJYjphFZFzT3kuAOscOhB6NC4LpomSKb12EjonUla2YUfs
-# coQlHk59BWFlzbPP2gGpZIEYiWHquxvbimUVs7tuAisKvQad5WgpU8oabH2cnXH8
-# uAkzVujELN27RaEiexbMQG1MLQW6vHHy2bsfmClcoTGByZgNnhytQUNYebGVY0l0
-# BNh57Jwc9S9rSb5aJb05k7fzGcqP4+LZIcsMIIAb+psx9taPZYYpZaSp7+GF1gvw
-# 5HGZBIRBQaKB2/EF81hs1iw15CqIKRhdb3Xi0yvx8EXc8B44zMpIzFrmvGxNf14y
-# Mnhkw4U2/YANkN/VuZrRQIufnmsPM03C
+# hu2m1+ivmWiZkoMmR2OSYAAFz7PvMA0GCSqGSIb3DQEBCwUABIICAI1+0FtHP5yz
+# G3JN17H0AZgGkpO6bXzqUAFPlsS4/QdDlHH987M8zwX7XilKLpB/YxHwCQgR7gh5
+# BrgCm3/tVp5dO6KYYTErTGQ8vGkJr1+yUqZOZx4FgYVV4eGEcLoEgIcfZpS4z18m
+# qWrgi6m/qKq1TD9eWE0TvVpJ8bvQP2qK9pZi5JflpGeeDfAi7GTJC4clj9gLIeGN
+# ENYnCxJAvULMQUzL4f1QJKaMf6bPxoWJZtaaJDkiE69/PuYnPvPJRkSF8Q5AUaaO
+# bv42pzKlIEcHwotHg+fUp7z2//Xg8u4ugh81sOWaR03Qoz+IxJv/Qda+f/+vm0rf
+# +yQyYHtrnlGOCJ/eE5wpudUw4AD118U7rGXZQeVqmub1hB7ma3LwCBAJNQ6gFP8i
+# hthpXHI+7fSq3lFr2oEJPwKW7Bc2FIaRRQPlAOq0ge7YQftcsgvxzWdpzKwPL3F3
+# c5FlbJdUxNfdDod8KIW8OPhb85I6OnbbsfL1UIn4wxyKvA1TvDcyy87CttAn+OUM
+# aDdjJ5NRTWgo9TWNJDNzxUe4uT9uW0Mmtl6kHjsLvCM3Dq+FY5owE4VDszgX+G5G
+# N7Hpe/KKmiH920JXXHLPDEb7xMMMif4ne1wL21aTXqnZ7ZcbRrn3Tt5pMBqp10l0
+# UpC9z7Tl5CfMPUTMGlHK56maqCsajM+x
 # SIG # End signature block

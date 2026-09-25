@@ -87,7 +87,7 @@ For a fixed-action one-liner, choose one of the signed release wrappers:
 | Wrapper | Action |
 | ------- | ------ |
 | `setup-full.ps1` | `Full` |
-| `setup-zenith.ps1` | `Partial` |
+| `setup-standard.ps1` | `Partial` |
 | `uninstall.ps1` | `Uninstall` (destructive cleanup) |
 
 ```powershell
@@ -561,7 +561,7 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 | File | What it is |
 | ---- | ---------- |
 | `bootstrap.ps1` | Remote entry point: elevation, verified downloads, protected installation, and launch. |
-| `setup-full.ps1`, `setup-zenith.ps1`, `uninstall.ps1` | Fixed-action wrappers that verify and call the signed bootstrap. |
+| `setup-full.ps1`, `setup-standard.ps1`, `uninstall.ps1` | Fixed-action wrappers that verify and call the signed bootstrap. |
 | `dev-config.ps1` | The orchestrator: elevation, shell selection, run lock, logging, phases, and summary. |
 | `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
 | `steps/_security.ps1` | Signature and directory-permission checks. Its signature is verified before loading unless `-AllowUnsigned` is used. |
