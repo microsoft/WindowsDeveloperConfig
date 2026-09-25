@@ -63,6 +63,7 @@ function Invoke-PackagesPhase {
             Show-DevConfigPhaseHeader
         }
         Initialize-DevConfigWinGet
+        Confirm-DevConfigWinGetReady
     }
 
     # PowerShell's process architecture can differ from Windows' native architecture.

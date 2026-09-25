@@ -147,6 +147,8 @@ Every one of these is listed in full detail in [What it changes](#what-it-change
 
 Installed with winget from the `winget` source, silently, with agreements accepted:
 
+Before installing packages, setup checks the WinGet module's connection. An RPC connection failure triggers one repair and retry, then a fallback to `winget.exe` if it can query packages. If neither works, setup stops with a repair message.
+
 | Package | winget id |
 | ------- | --------- |
 | Windows Terminal | `Microsoft.WindowsTerminal` |

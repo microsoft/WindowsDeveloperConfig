@@ -6,7 +6,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# Prefer the WinGet module for structured results; fall back to winget.exe when PSGallery is unreachable.
+# Prefer structured module results; use winget.exe when the module is unavailable.
 $Script:DevConfigWinGetMode = 'Module'
 
 # Exit codes are stable across locales; console text is not.
@@ -75,6 +75,44 @@ function Initialize-DevConfigWinGet {
 
     Write-Host '  Using the built-in winget command instead.' -ForegroundColor Yellow
     Write-Verbose "WinGet module unavailable: $reason"
+    $Script:DevConfigWinGetMode = 'Cli'
+}
+
+function Confirm-DevConfigWinGetReady {
+    if ($Script:DevConfigWinGetMode -eq 'Cli') {
+        return
+    }
+
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        try {
+            Get-WinGetPackage -Source winget -ErrorAction Stop | Out-Null
+            return
+        } catch [System.Runtime.InteropServices.COMException] {
+            # 0x800706BA means the module could not reach WinGet's RPC server.
+            if ($_.Exception.HResult -ne -2147023174) { throw }
+            $moduleError = $_.Exception.Message
+        }
+
+        if ($attempt -eq 1) {
+            Write-Host "  The WinGet module could not connect ($moduleError). Repairing WinGet..." -ForegroundColor Yellow
+            try {
+                $null = Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop *>&1
+            } catch {
+                Write-Host "  WinGet repair did not complete: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
+    try {
+        $listed = Invoke-DevConfigWingetCli -Arguments @('list', '--source', 'winget', '--accept-source-agreements', '--disable-interactivity')
+        if ($listed.ExitCode -ne 0 -and $listed.ExitCode -ne $Script:DevConfigWingetNotFound) {
+            throw "winget list failed with exit code $($listed.ExitCode)"
+        }
+    } catch {
+        throw "The WinGet module cannot connect ($moduleError), and winget.exe cannot query packages ($($_.Exception.Message)). Update App Installer from the Microsoft Store, then reopen PowerShell and run setup again."
+    }
+
+    Write-Host '  The WinGet module still cannot connect. Using the built-in winget command instead.' -ForegroundColor Yellow
     $Script:DevConfigWinGetMode = 'Cli'
 }
 
