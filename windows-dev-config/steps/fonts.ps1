@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Installs Cascadia Code Nerd Fonts.
-  Sets Cascadia Mono NF as the Windows Terminal default font.
+  Schedules Cascadia Mono NF as the Windows Terminal default font at next sign-in.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -161,27 +161,124 @@ function Install-DevConfigCascadiaFonts {
 }
 
 function Test-DevConfigCascadiaDefaultFont {
-    $path = Get-DevConfigTerminalSettingsPath
+    $path = Get-DevConfigTerminalSettingsTarget
     if (-not $path) {
-        # Terminal writes settings.json on first launch; no target path means no default font can be verified.
-        return (-not (Get-DevConfigTerminalSettingsTarget))
+        return $true
     }
     $settings = Read-DevConfigTerminalSettings -Path $path
-    return (Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face') -eq $Script:CascadiaDefaultFontFace
+    if (-not (Test-DevConfigCascadiaFontsInstalled)) {
+        return $false
+    }
+    $face = Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face'
+    if ($face -eq $Script:CascadiaDefaultFontFace) {
+        return $true
+    }
+    $pending = Get-DevConfigPendingTerminalFont
+    return [bool]($pending -and $pending.Path -eq $path -and
+        $pending.FontFace -eq $Script:CascadiaDefaultFontFace -and $pending.PreviousFace -eq $face -and
+        $pending.Command -eq (Get-DevConfigTerminalFontRunOnceCommand))
 }
 
 function Set-DevConfigCascadiaDefaultFont {
+    param(
+        [string] $ScriptPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'dev-config.ps1')
+    )
+
     $path = Get-DevConfigTerminalSettingsTarget
     if (-not $path) {
         throw 'Windows Terminal is not installed, so its default font cannot be set.'
     }
 
     $settings = Read-DevConfigTerminalSettings -Path $path
-    $font     = Resolve-DevConfigJsonBranch -Object $settings -Path 'profiles', 'defaults', 'font'
-    Set-DevConfigJsonProperty -Object $font -Name 'face' -Value $Script:CascadiaDefaultFontFace
+    $face = $Script:CascadiaDefaultFontFace
+    if (-not (Test-DevConfigCascadiaFontsInstalled)) {
+        Clear-DevConfigPendingTerminalFont
+        if ((Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face') -ne $face) {
+            throw 'Cascadia fonts are not installed; the current Windows Terminal font was left unchanged.'
+        }
+        $face = 'Cascadia Mono'
+        Set-DevConfigStepUnverified -Reason 'Cascadia fonts are not installed; using Cascadia Mono until installation succeeds.'
+        $font = Resolve-DevConfigJsonBranch -Object $settings -Path 'profiles', 'defaults', 'font'
+        Set-DevConfigJsonProperty -Object $font -Name 'face' -Value $face
+        Save-DevConfigTerminalSettings -Path $path -Settings $settings
+        Write-Host "Set the Windows Terminal default font to '$face' in $path"
+        return
+    }
 
-    Save-DevConfigTerminalSettings -Path $path -Settings $settings
-    Write-Host "Set the Windows Terminal default font to '$($Script:CascadiaDefaultFontFace)' in $path"
+    $ScriptPath = (Get-Item -LiteralPath $ScriptPath -ErrorAction Stop).FullName
+    $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -ApplyTerminalFont -AllowUnsigned:$Script:DevConfigAllowUnsigned
+    $command = "`"$shell`" $($arguments -join ' ')"
+    if ($command.Length -gt 260) {
+        throw 'The setup path is too long for the next-sign-in font update. Use a shorter install directory.'
+    }
+    $scheduled = Invoke-DevConfigTerminalFontLock {
+        $settings = Read-DevConfigTerminalSettings -Path $path
+        if ((Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face') -eq $face) {
+            Clear-DevConfigPendingTerminalFont -LockHeld
+            return $false
+        }
+        Save-DevConfigTerminalBackup -Path $path
+        $pending = [pscustomobject]@{
+            Path           = $path
+            FontFace       = $face
+            PreviousFace   = Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face'
+            BackupRequired = [bool](Test-Path -LiteralPath $path)
+            Command        = $command
+        }
+        Write-DevConfigTextFile -Path (Get-DevConfigPendingTerminalFontPath) -Content ($pending | ConvertTo-Json -Compress)
+        if (-not (Test-Path -LiteralPath $Script:DevConfigTerminalFontRunOnceKey)) {
+            New-Item -Path $Script:DevConfigTerminalFontRunOnceKey -Force | Out-Null
+        }
+        New-ItemProperty -LiteralPath $Script:DevConfigTerminalFontRunOnceKey -Name $Script:DevConfigTerminalFontRunOnceName `
+            -Value $command -PropertyType String -Force | Out-Null
+        return $true
+    }
+    if ($scheduled) {
+        Write-Host "Scheduled '$face' for your next sign-in; the current Terminal font is unchanged."
+    } else {
+        Write-Host "Windows Terminal already uses '$face'."
+    }
+}
+
+function Invoke-DevConfigPendingTerminalFont {
+    Invoke-DevConfigTerminalFontLock {
+        $pending = Get-DevConfigPendingTerminalFont
+        if (-not $pending) {
+            Write-Host 'No Terminal font update is pending.'
+            return
+        }
+        $path = Get-DevConfigTerminalSettingsTarget
+        if (-not $path) {
+            Clear-DevConfigPendingTerminalFont -LockHeld
+            Write-Host 'Windows Terminal is no longer installed; the pending font update was canceled.'
+            return
+        }
+        if ($pending.Path -ne $path -or $pending.FontFace -ne $Script:CascadiaDefaultFontFace) {
+            throw 'The pending Terminal font update no longer matches this configuration. Run setup again to reschedule it.'
+        }
+        if (-not (Test-DevConfigCascadiaFontsInstalled)) {
+            throw 'Cascadia fonts are no longer installed. The Terminal font was left unchanged.'
+        }
+        $settings = Read-DevConfigTerminalSettings -Path $path
+        $face = Get-DevConfigJsonValue -Object $settings -Path 'profiles', 'defaults', 'font', 'face'
+        if ($face -ne $pending.PreviousFace -and $face -ne $pending.FontFace) {
+            Clear-DevConfigPendingTerminalFont -LockHeld
+            Write-Host 'The Terminal font changed after setup; your choice was left unchanged.'
+            return
+        }
+        if ($face -ne $pending.FontFace) {
+            if ($pending.BackupRequired -and -not (Test-Path -LiteralPath "$path.bak")) {
+                throw 'The original Terminal backup is missing. The font was left unchanged; run setup again to reschedule it.'
+            }
+            $Script:DevConfigTerminalBackedUp = @($path)
+            $font = Resolve-DevConfigJsonBranch -Object $settings -Path 'profiles', 'defaults', 'font'
+            Set-DevConfigJsonProperty -Object $font -Name 'face' -Value $pending.FontFace
+            Save-DevConfigTerminalSettings -Path $path -Settings $settings
+            Write-Host "Set the Windows Terminal default font to '$($pending.FontFace)' in $path"
+        }
+        Clear-DevConfigPendingTerminalFont -LockHeld
+    }
 }
 
 function Invoke-FontsPhase {
@@ -191,7 +288,7 @@ function Invoke-FontsPhase {
             -Check { Test-DevConfigCascadiaFontsInstalled } `
             -Apply { Install-DevConfigCascadiaFonts } `
             -BestEffort
-        New-DevConfigStep -Name 'CascadiaDefaultFont' -Description 'Set Cascadia Mono NF as the Windows Terminal default font' `
+        New-DevConfigStep -Name 'CascadiaDefaultFont' -Description 'Configure Cascadia Mono NF for the next sign-in' `
             -Check { Test-DevConfigCascadiaDefaultFont } `
             -Apply { Set-DevConfigCascadiaDefaultFont } `
             -BestEffort
@@ -201,10 +298,10 @@ function Invoke-FontsPhase {
 }
 
 # SIG # Begin signature block
-# MIInKwYJKoZIhvcNAQcCoIInHDCCJxgCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIInRAYJKoZIhvcNAQcCoIInNTCCJzECAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDBHVpqmhFmax+9
-# o4HOcq8Ko1Ivs/kbIQhV3Qc7JJ+TiaCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCA1vjsWvv4q3TX+
+# BZhooz+6yTxPEhSwhEIurI+5ZUIC3qCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
 # yE7XD1dIAAAAAAIdMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQzWhcNMjcwNDE1MTg1
@@ -272,142 +369,143 @@ function Invoke-FontsPhase {
 # vZGtqa9FSL2RazArA+rDPuf6JGYz4HpgMZHB4S6szWSKYBv0VisCzfxgeU+dquXW
 # 9bd0auYlOB58DPcOYKdc3Se94g+xL4pcEhbB54JOgAkwYTu/9dLeH2pDqeJZAABV
 # DWRQCaXfO5LgyKwKCLYXpigrZYCjUSBcr+Ve8PFWMhVTQl0v4q8J/AUmQN5W4n10
-# 1cY2L4A7GTQG1h32HHAvfQESWP0xghnHMIIZwwIBATBuMFcxCzAJBgNVBAYTAlVT
+# 1cY2L4A7GTQG1h32HHAvfQESWP0xghngMIIZ3AIBATBuMFcxCzAJBgNVBAYTAlVT
 # MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jv
 # c29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIdTRnITtcPV0gAAAAAAh0w
 # DQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwLwYJ
-# KoZIhvcNAQkEMSIEIHjFdbJeJIbIUW0jw00k7M8x+PCzoA2oHMJzJfDmBrg/MEIG
+# KoZIhvcNAQkEMSIEICn890+QLLOjMlOTPuq2Yt0Tf1K28oGExibm949ni1v0MEIG
 # CisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBvAGYAdKEagBhodHRwOi8v
-# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAAbTIFR3jvAlOODBT
-# VIFtvQQxDqrY4s9LD+DQEhCPJ9FZFnNmC+sBVzJOeNR0qyUEVh/1F/BgPeIKLDSf
-# eHNNfRkwfAImTAd6Cu0xCYQxYIoFT9O9CndFClOCiwG8wvTXKghyH3xLzVg1u2G6
-# OhGtuhzHpeN+F4Pgl+b5Eni9LwqUSjpQZV/xbq14aomjRzjDLx0V6I5xieeqQaCP
-# eAPKe9oNpJjs0Ul5kkHqNOfvBe+Pa2oVvz7lC4B9n0I7vh4/Wdm9qygF+Qgzx1Tm
-# oThQ5tFTiErl8qd2W3DSeVKEz8XmJdapUflQkhe0zsNvIDL2MROJY4mW4xM4I/DC
-# b60PqKGCF5cwgheTBgorBgEEAYI3AwMBMYIXgzCCF38GCSqGSIb3DQEHAqCCF3Aw
-# ghdsAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG9w0BCRABBKCCAUEEggE9
-# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCBe10Uov+gqX2q3
-# UEDWg5t40DIXSptiuy5ZlQcdM79XpwIGaqpmra1/GBMyMDI2MDkxODE2MTEzOS44
-# NzFaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
+# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAH1sikD1Q5k1H2ua2
+# dYGRHN07dKizXa4vrcb1PHYCdVZjqIrX7M5G7vi4v30WuMgPrjs/adOm1T7nFeQl
+# U/Z6eOeSRhiUamzmFcUSKr3zNwwubcKRHyDlkH8w0XhxVE67WKYi4AFJGQU/V/oG
+# ecBbF0Kw8AzLf3eccWSbDud/4tlOI40W340/Jy4B0qzJzImsfIO3JSeZ4mN0ZXZd
+# eTvPmD5PFjQEdPLsJk6bn8q1ypJPbZzIeniYWCCjH2wfoW6L/DFGNT+1y2AttRJa
+# hfBbXjJqd26bQVNaZaUPm2cOiLvph5tMALdle8JhZPiayjLy4SzmKEaSoRIQi8vq
+# T2Q4paGCF7AwghesBgorBgEEAYI3AwMBMYIXnDCCF5gGCSqGSIb3DQEHAqCCF4kw
+# gheFAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFaBgsqhkiG9w0BCRABBKCCAUkEggFF
+# MIIBQQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCDX8Lv4IorJn0Rm
+# IT/6aWWbxyRx98e4+1x4kQRfxa9nJwIGaq2l2N4EGBMyMDI2MDkyNTAwMjIzMy4z
+# ODhaMASAAgH0oIHZpIHWMIHTMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
 # Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
-# cmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScw
-# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046OTYwMC0wNUUwLUQ5NDcxJTAjBgNVBAMT
-# HE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZpY2WgghHtMIIHIDCCBQigAwIBAgIT
-# MwAAAiY1tD5nQ5P2HwABAAACJjANBgkqhkiG9w0BAQsFADB8MQswCQYDVQQGEwJV
+# cmF0aW9uMS0wKwYDVQQLEyRNaWNyb3NvZnQgSXJlbGFuZCBPcGVyYXRpb25zIExp
+# bWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjozMjFBLTA1RTAtRDk0NzEl
+# MCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2VydmljZaCCEf4wggcoMIIF
+# EKADAgECAhMzAAACGqmgHQagD0OqAAEAAAIaMA0GCSqGSIb3DQEBCwUAMHwxCzAJ
+# BgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25k
+# MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jv
+# c29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMB4XDTI1MDgxNDE4NDgyOFoXDTI2MTEx
+# MzE4NDgyOFowgdMxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
+# DgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
+# LTArBgNVBAsTJE1pY3Jvc29mdCBJcmVsYW5kIE9wZXJhdGlvbnMgTGltaXRlZDEn
+# MCUGA1UECxMeblNoaWVsZCBUU1MgRVNOOjMyMUEtMDVFMC1EOTQ3MSUwIwYDVQQD
+# ExxNaWNyb3NvZnQgVGltZS1TdGFtcCBTZXJ2aWNlMIICIjANBgkqhkiG9w0BAQEF
+# AAOCAg8AMIICCgKCAgEAmYEAwSTz79q2V3ZWzQ5Ev7RKgadQtMBy7+V3XQ8R0NL8
+# R9mupxcqJQ/KPeZGJTER+9Qq/t7HOQfBbDy6e0TepvBFV/RY3w+LOPMKn0Uoh2/8
+# IvdSbJ8qAWRVoz2S9VrJzZpB8/f5rQcRETgX/t8N66D2JlEXv4fZQB7XzcJMXr1p
+# uhuXbOt9RYEyN1Q3Z7YjRkhfBsRc+SD/C9F4iwZqfQgo82GG4wguIhjJU7+XMfrv
+# 4vxAFNVg3mn1PoMWGZWio+e14+PGYPVLKlad+0IhdHK5AgPyXKkqAhEZpYhYYVEI
+# tHOOvqrwukxVAJXMvWA3GatWkRZn33WDJVtghCW6XPLi1cDKiGE5UcXZSV4OjQIU
+# B8vp2LUMRXud5I49FIBcE9nT00z8A+EekrPM+OAk07aDfwZbdmZ56j7ub5fNDLf8
+# yIb8QxZ8Mr4RwWy/czBuV5rkWQQ+msjJ5AKtYZxJdnaZehUgUNArU/u36SH1eXKM
+# QGRXr/xeKFGI8vvv5Jl1knZ8UqEQr9PxDbis7OXp2WSMK5lLGdYVH8VownYF3sbO
+# iRkx5Q5GaEyTehOQp2SfdbsJZlg0SXmHphGnoW1/gQ/5P6BgSq4PAWIZaDJj6AvL
+# LCdbURgR5apNQQed2zYUgUbjACA/TomA8Ll7Arrv2oZGiUO5Vdi4xxtA3BRTQTUC
+# AwEAAaOCAUkwggFFMB0GA1UdDgQWBBTwqyIJ3QMoPasDcGdGovbaY8IlNjAfBgNV
+# HSMEGDAWgBSfpxVdAF5iXYP05dJlpxtTNRnpcjBfBgNVHR8EWDBWMFSgUqBQhk5o
+# dHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpb3BzL2NybC9NaWNyb3NvZnQlMjBU
+# aW1lLVN0YW1wJTIwUENBJTIwMjAxMCgxKS5jcmwwbAYIKwYBBQUHAQEEYDBeMFwG
+# CCsGAQUFBzAChlBodHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpb3BzL2NlcnRz
+# L01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0ElMjAyMDEwKDEpLmNydDAMBgNV
+# HRMBAf8EAjAAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMIMA4GA1UdDwEB/wQEAwIH
+# gDANBgkqhkiG9w0BAQsFAAOCAgEA1a72WFq7B6bJT3VOJ21nnToPJ9O/q51bw1bh
+# PfQy67uy+f8x8akipzNL2k5b6mtxuPbZGpBqpBKguDwQmxVpX8cGmafeo3wGr4a8
+# Yk6Sy09tEh/Nwwlsyq7BRrJNn6bGOB8iG4OTy+pmMUh7FejNPRgvgeo/OPytm4NN
+# rMMg98UVlrZxGNOYsifpRJFg5jE/Yu6lqFa1lTm9cHuPYxWa2oEwC0sEAsTFb69i
+# KpN0sO19xBZCr0h5ClU9Pgo6ekiJb7QJoDzrDoPQHwbNA87Cto7TLuphj0m9l/I7
+# 0gLjEq53SHjuURzwpmNxdm18Qg+rlkaMC6Y2KukOfJ7oCSu9vcNGQM+inl9gsNgi
+# rZ6yJk9VsXEsoTtoR7fMNU6Py6ufJQGMTmq6ZCq2eIGOXWMBb79ZF6tiKTa4qami
+# 3US0mTY41J129XmAglVy+ujSZkHu2lHJDRHs7FjnIXZVUE5pl6yUIl23jG50fRTL
+# QcStdwY/LvJUgEHCIzjvlLTqLt6JVR5bcs5aN4Dh0YPG95B9iDMZrq4rli5SnGNW
+# ev5LLsDY1fbrK6uVpD+psvSLsNpht27QcHRsYdAMALXM+HNsz2LZ8xiOfwt6rOsV
+# WXoiHV86/TeMy5TZFUl7qB59INoMSJgDRladVXeT9fwOuirFIoqgjKGk3vO2bELr
+# YMN0QVwwggdxMIIFWaADAgECAhMzAAAAFcXna54Cm0mZAAAAAAAVMA0GCSqGSIb3
+# DQEBCwUAMIGIMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4G
+# A1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMTIw
+# MAYDVQQDEylNaWNyb3NvZnQgUm9vdCBDZXJ0aWZpY2F0ZSBBdXRob3JpdHkgMjAx
+# MDAeFw0yMTA5MzAxODIyMjVaFw0zMDA5MzAxODMyMjVaMHwxCzAJBgNVBAYTAlVT
+# MRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQK
+# ExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1l
+# LVN0YW1wIFBDQSAyMDEwMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA
+# 5OGmTOe0ciELeaLL1yR5vQ7VgtP97pwHB9KpbE51yMo1V/YBf2xK4OK9uT4XYDP/
+# XE/HZveVU3Fa4n5KWv64NmeFRiMMtY0Tz3cywBAY6GB9alKDRLemjkZrBxTzxXb1
+# hlDcwUTIcVxRMTegCjhuje3XD9gmU3w5YQJ6xKr9cmmvHaus9ja+NSZk2pg7uhp7
+# M62AW36MEBydUv626GIl3GoPz130/o5Tz9bshVZN7928jaTjkY+yOSxRnOlwaQ3K
+# Ni1wjjHINSi947SHJMPgyY9+tVSP3PoFVZhtaDuaRr3tpK56KTesy+uDRedGbsoy
+# 1cCGMFxPLOJiss254o2I5JasAUq7vnGpF1tnYN74kpEeHT39IM9zfUGaRnXNxF80
+# 3RKJ1v2lIH1+/NmeRd+2ci/bfV+AutuqfjbsNkz2K26oElHovwUDo9Fzpk03dJQc
+# NIIP8BDyt0cY7afomXw/TNuvXsLz1dhzPUNOwTM5TI4CvEJoLhDqhFFG4tG9ahha
+# YQFzymeiXtcodgLiMxhy16cg8ML6EgrXY28MyTZki1ugpoMhXV8wdJGUlNi5UPkL
+# iWHzNgY1GIRH29wb0f2y1BzFa/ZcUlFdEtsluq9QBXpsxREdcu+N+VLEhReTwDwV
+# 2xo3xwgVGD94q0W29R6HXtqPnhZyacaue7e3PmriLq0CAwEAAaOCAd0wggHZMBIG
+# CSsGAQQBgjcVAQQFAgMBAAEwIwYJKwYBBAGCNxUCBBYEFCqnUv5kxJq+gpE8RjUp
+# zxD/LwTuMB0GA1UdDgQWBBSfpxVdAF5iXYP05dJlpxtTNRnpcjBcBgNVHSAEVTBT
+# MFEGDCsGAQQBgjdMg30BATBBMD8GCCsGAQUFBwIBFjNodHRwOi8vd3d3Lm1pY3Jv
+# c29mdC5jb20vcGtpb3BzL0RvY3MvUmVwb3NpdG9yeS5odG0wEwYDVR0lBAwwCgYI
+# KwYBBQUHAwgwGQYJKwYBBAGCNxQCBAweCgBTAHUAYgBDAEEwCwYDVR0PBAQDAgGG
+# MA8GA1UdEwEB/wQFMAMBAf8wHwYDVR0jBBgwFoAU1fZWy4/oolxiaNE9lJBb186a
+# GMQwVgYDVR0fBE8wTTBLoEmgR4ZFaHR0cDovL2NybC5taWNyb3NvZnQuY29tL3Br
+# aS9jcmwvcHJvZHVjdHMvTWljUm9vQ2VyQXV0XzIwMTAtMDYtMjMuY3JsMFoGCCsG
+# AQUFBwEBBE4wTDBKBggrBgEFBQcwAoY+aHR0cDovL3d3dy5taWNyb3NvZnQuY29t
+# L3BraS9jZXJ0cy9NaWNSb29DZXJBdXRfMjAxMC0wNi0yMy5jcnQwDQYJKoZIhvcN
+# AQELBQADggIBAJ1VffwqreEsH2cBMSRb4Z5yS/ypb+pcFLY+TkdkeLEGk5c9MTO1
+# OdfCcTY/2mRsfNB1OW27DzHkwo/7bNGhlBgi7ulmZzpTTd2YurYeeNg2LpypglYA
+# A7AFvonoaeC6Ce5732pvvinLbtg/SHUB2RjebYIM9W0jVOR4U3UkV7ndn/OOPcbz
+# aN9l9qRWqveVtihVJ9AkvUCgvxm2EhIRXT0n4ECWOKz3+SmJw7wXsFSFQrP8DJ6L
+# GYnn8AtqgcKBGUIZUnWKNsIdw2FzLixre24/LAl4FOmRsqlb30mjdAy87JGA0j3m
+# Sj5mO0+7hvoyGtmW9I/2kQH2zsZ0/fZMcm8Qq3UwxTSwethQ/gpY3UA8x1RtnWN0
+# SCyxTkctwRQEcb9k+SS+c23Kjgm9swFXSVRk2XPXfx5bRAGOWhmRaw2fpCjcZxko
+# JLo4S5pu+yFUa2pFEUep8beuyOiJXk+d0tBMdrVXVAmxaQFEfnyhYWxz/gq77EFm
+# PWn9y8FBSX5+k77L+DvktxW/tM4+pTFRhLy/AsGConsXHRWJjXD+57XQKBqJC482
+# 2rpM+Zv/Cuk0+CQ1ZyvgDbjmjJnW4SLq8CdCPSWU5nR0W2rRnj7tfqAxM328y+l7
+# vzhwRNGQ8cirOoo6CGJ/2XBjU02N7oJtpQUQwXEGahC0HVUzWLOhcGbyoYIDWTCC
+# AkECAQEwggEBoYHZpIHWMIHTMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
+# Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
+# cmF0aW9uMS0wKwYDVQQLEyRNaWNyb3NvZnQgSXJlbGFuZCBPcGVyYXRpb25zIExp
+# bWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjozMjFBLTA1RTAtRDk0NzEl
+# MCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2VydmljZaIjCgEBMAcGBSsO
+# AwIaAxUA8YrutmKpSrubCaAYsU4pt1Ft8DaggYMwgYCkfjB8MQswCQYDVQQGEwJV
 # UzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UE
 # ChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGlt
-# ZS1TdGFtcCBQQ0EgMjAxMDAeFw0yNjAyMTkxOTQwMDJaFw0yNzA1MTcxOTQwMDJa
-# MIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMH
-# UmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSUwIwYDVQQL
-# ExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScwJQYDVQQLEx5uU2hpZWxk
-# IFRTUyBFU046OTYwMC0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1l
-# LVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC/
-# /w+ZZIL5RFFpVI8D3ZyuNu8IzcAEOD30OLYjh337rXjcrIlOSzpJc4ZeUxEyli6x
-# 6F6zm4NR8dbPb9diDp/hOUzHWGxiA1Z3RXKBb/4F/ojyvN43SEGWqSfVc3I3BlsY
-# T35ecVAJ9kVf90YOv29tFjJBBZkYvrT/DwwyRLscOyP4p+9/lyJjD+ULs3YXBhVr
-# fZ+MbQB+BYKLqRvBKbj/wR9akNrMxQINoGaD5jZO/N/nSsmG2P1zv/cv4gSoMBnW
-# eQIBkjd2I5w1DeXupp2vSiNmR5sA2ZkBK3yiQWaJvRxODlkfiyHk9Mkk/TrYTjmj
-# PCbhe+uqhHNRy8UlbOvWsCq0tRtUykHv39DgqAfJNrE8OSt835rBzDprrcAhwmgf
-# hoVi4AKeqwikY0nUa48K0Qy80XT4fiEA3ExEZNaRFo9Nq/GwbfgqKqGmc9xhKuRF
-# cjtua4KHZvnAvpWgEFSOCkovXs/BcLnkEHM9xZ8iUag5CyhNqXYYE/z0pcXdYaNI
-# kQ68EWmuvLm7g9oofV2vOm5GVNoghnkWG6nGPo/JwEgmA9oSS0EfvFRMWPA/gpSv
-# F3shArKHnaEpVSSi3DNbyiuYiEs9Ko0IkZc8xKFeQRaqGRxrB+2r/7B3X81Tps99
-# KhFwg+wD87od22F2MUg1x7twt3gaVnFk0IZIwUPCGwIDAQABo4IBSTCCAUUwHQYD
-# VR0OBBYEFF3hn9fYJN2Y/Z9LVbBPIxAzXHsQMB8GA1UdIwQYMBaAFJ+nFV0AXmJd
-# g/Tl0mWnG1M1GelyMF8GA1UdHwRYMFYwVKBSoFCGTmh0dHA6Ly93d3cubWljcm9z
-# b2Z0LmNvbS9wa2lvcHMvY3JsL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0El
-# MjAyMDEwKDEpLmNybDBsBggrBgEFBQcBAQRgMF4wXAYIKwYBBQUHMAKGUGh0dHA6
-# Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvY2VydHMvTWljcm9zb2Z0JTIwVGlt
-# ZS1TdGFtcCUyMFBDQSUyMDIwMTAoMSkuY3J0MAwGA1UdEwEB/wQCMAAwFgYDVR0l
-# AQH/BAwwCgYIKwYBBQUHAwgwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUA
-# A4ICAQA2Ux0tr9sYCjsq0FRyiVpx15OurNXv6Qk7iX+ArVPlz3w4tqjcTNm1dt3t
-# Tua2wJMpJhPH8n7UXhmT98d5Du44Ll4adnse4SQfVg3QL6aRkXHnJUn8y9iftB/P
-# y22n9xnwPFfj3QlDOSgLuHleu97U0iH2ZaluYabWXJihdiYpK8cPHFlqZOAiot0+
-# GD8dP+RMuvpxt/F2LmYelpoZwriiFOUmlxEUV7xJHyZZlDquskeyuq01DTv91N4q
-# M8cfPPhl/2pc4HeMf/nd2HouifJbDQFNd4WPhLzn0Sy3u1Zh3+S3tjQdqN+dyw60
-# RaV+RXCoOLgFZ3MAg/GoDl+fvb5hy/1a71ctX8wEad1Pf6def2pqfl3wFc++hkF8
-# DXXTZofJN4YVaN3InwbAGQDDkNK4lqecCixxmSKwidPynGeE5OtvNoK1pkLsm/i8
-# F1RjGczZ/kSF2VDkqG866iQ+jVbGOQ6Du3eyyFcFKZoDJ4B5mEAS9aT2SKqllLey
-# bOboH6r67siR5B/2Hnu7+KYuYZy0BEadtA6ngG4cnSR9JsrkhhsKmb11ujqwgJyN
-# x92MsoGGwNgN1aI0QID8CsjCFwpfmMzlA44xHKYv3hmjxeqBS4uU5rQeiAnVgpJe
-# aVGKm/lzPDtnppGV+7XhRp5b1ZxT/Z7Xxc+I7H7/jCtQDZoaZTCCB3EwggVZoAMC
-# AQICEzMAAAAVxedrngKbSZkAAAAAABUwDQYJKoZIhvcNAQELBQAwgYgxCzAJBgNV
-# BAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4w
-# HAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xMjAwBgNVBAMTKU1pY3Jvc29m
-# dCBSb290IENlcnRpZmljYXRlIEF1dGhvcml0eSAyMDEwMB4XDTIxMDkzMDE4MjIy
-# NVoXDTMwMDkzMDE4MzIyNVowfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hp
-# bmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jw
-# b3JhdGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAw
-# ggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDk4aZM57RyIQt5osvXJHm9
-# DtWC0/3unAcH0qlsTnXIyjVX9gF/bErg4r25PhdgM/9cT8dm95VTcVrifkpa/rg2
-# Z4VGIwy1jRPPdzLAEBjoYH1qUoNEt6aORmsHFPPFdvWGUNzBRMhxXFExN6AKOG6N
-# 7dcP2CZTfDlhAnrEqv1yaa8dq6z2Nr41JmTamDu6GnszrYBbfowQHJ1S/rboYiXc
-# ag/PXfT+jlPP1uyFVk3v3byNpOORj7I5LFGc6XBpDco2LXCOMcg1KL3jtIckw+DJ
-# j361VI/c+gVVmG1oO5pGve2krnopN6zL64NF50ZuyjLVwIYwXE8s4mKyzbnijYjk
-# lqwBSru+cakXW2dg3viSkR4dPf0gz3N9QZpGdc3EXzTdEonW/aUgfX782Z5F37Zy
-# L9t9X4C626p+Nuw2TPYrbqgSUei/BQOj0XOmTTd0lBw0gg/wEPK3Rxjtp+iZfD9M
-# 269ewvPV2HM9Q07BMzlMjgK8QmguEOqEUUbi0b1qGFphAXPKZ6Je1yh2AuIzGHLX
-# pyDwwvoSCtdjbwzJNmSLW6CmgyFdXzB0kZSU2LlQ+QuJYfM2BjUYhEfb3BvR/bLU
-# HMVr9lxSUV0S2yW6r1AFemzFER1y7435UsSFF5PAPBXbGjfHCBUYP3irRbb1Hode
-# 2o+eFnJpxq57t7c+auIurQIDAQABo4IB3TCCAdkwEgYJKwYBBAGCNxUBBAUCAwEA
-# ATAjBgkrBgEEAYI3FQIEFgQUKqdS/mTEmr6CkTxGNSnPEP8vBO4wHQYDVR0OBBYE
-# FJ+nFV0AXmJdg/Tl0mWnG1M1GelyMFwGA1UdIARVMFMwUQYMKwYBBAGCN0yDfQEB
-# MEEwPwYIKwYBBQUHAgEWM2h0dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMv
-# RG9jcy9SZXBvc2l0b3J5Lmh0bTATBgNVHSUEDDAKBggrBgEFBQcDCDAZBgkrBgEE
-# AYI3FAIEDB4KAFMAdQBiAEMAQTALBgNVHQ8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB
-# /zAfBgNVHSMEGDAWgBTV9lbLj+iiXGJo0T2UkFvXzpoYxDBWBgNVHR8ETzBNMEug
-# SaBHhkVodHRwOi8vY3JsLm1pY3Jvc29mdC5jb20vcGtpL2NybC9wcm9kdWN0cy9N
-# aWNSb29DZXJBdXRfMjAxMC0wNi0yMy5jcmwwWgYIKwYBBQUHAQEETjBMMEoGCCsG
-# AQUFBzAChj5odHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpL2NlcnRzL01pY1Jv
-# b0NlckF1dF8yMDEwLTA2LTIzLmNydDANBgkqhkiG9w0BAQsFAAOCAgEAnVV9/Cqt
-# 4SwfZwExJFvhnnJL/Klv6lwUtj5OR2R4sQaTlz0xM7U518JxNj/aZGx80HU5bbsP
-# MeTCj/ts0aGUGCLu6WZnOlNN3Zi6th542DYunKmCVgADsAW+iehp4LoJ7nvfam++
-# Kctu2D9IdQHZGN5tggz1bSNU5HhTdSRXud2f8449xvNo32X2pFaq95W2KFUn0CS9
-# QKC/GbYSEhFdPSfgQJY4rPf5KYnDvBewVIVCs/wMnosZiefwC2qBwoEZQhlSdYo2
-# wh3DYXMuLGt7bj8sCXgU6ZGyqVvfSaN0DLzskYDSPeZKPmY7T7uG+jIa2Zb0j/aR
-# AfbOxnT99kxybxCrdTDFNLB62FD+CljdQDzHVG2dY3RILLFORy3BFARxv2T5JL5z
-# bcqOCb2zAVdJVGTZc9d/HltEAY5aGZFrDZ+kKNxnGSgkujhLmm77IVRrakURR6nx
-# t67I6IleT53S0Ex2tVdUCbFpAUR+fKFhbHP+CrvsQWY9af3LwUFJfn6Tvsv4O+S3
-# Fb+0zj6lMVGEvL8CwYKiexcdFYmNcP7ntdAoGokLjzbaukz5m/8K6TT4JDVnK+AN
-# uOaMmdbhIurwJ0I9JZTmdHRbatGePu1+oDEzfbzL6Xu/OHBE0ZDxyKs6ijoIYn/Z
-# cGNTTY3ugm2lBRDBcQZqELQdVTNYs6FwZvKhggNQMIICOAIBATCB+aGB0aSBzjCB
-# yzELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1Jl
-# ZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjElMCMGA1UECxMc
-# TWljcm9zb2Z0IEFtZXJpY2EgT3BlcmF0aW9uczEnMCUGA1UECxMeblNoaWVsZCBU
-# U1MgRVNOOjk2MDAtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1T
-# dGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQCi/fMxFtkqr7XMXdsRyWU0lSKH
-# Z6CBgzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
-# DgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
-# JjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3
-# DQEBCwUAAgUA7leHxjAiGA8yMDI2MDkxODA5NDk1OFoYDzIwMjYwOTE5MDk0OTU4
-# WjB3MD0GCisGAQQBhFkKBAExLzAtMAoCBQDuV4fGAgEAMAoCAQACAgXlAgH/MAcC
-# AQACAhdWMAoCBQDuWNlGAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkK
-# AwKgCjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAA0G
-# YEmRN9eylopohMTO8jUZ4OLUAqOh5v8fqJES5iVnPxeh27h1BIn2tNSpDhix5/zS
-# YGiP2WkYSgl4IZF7DNhF+uIfYbpn6Z27TB9Z8uYkip3ayxmdsyT3A21Vu8iATmJa
-# FsvfSOMDnjn4cRwmUFKeSt/sB6UKy38KnRAm0yGimwvprLbhDJeQTWOqFTceAn0A
-# VzrA/ezfuUI1vLvYs0z0oCBKT2XFuxdUsUgsmWhA0ZyfZuBXBBjungl4xqATilVZ
-# gwVljtoyTAurGoi/RtXFZyTYYHedstOxjxWffoVYkCGJGft5KNSnkcLnnkynhipW
-# i7lJxyoElEejHjJZsZwxggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEG
-# A1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWlj
-# cm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFt
-# cCBQQ0EgMjAxMAITMwAAAiY1tD5nQ5P2HwABAAACJjANBglghkgBZQMEAgEFAKCC
-# AUowGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCDc
-# 92f1/f5xsR6ta0eqV1Vm4Hnjnu9Bs+SJMZh78X+vOTCB+gYLKoZIhvcNAQkQAi8x
-# geowgecwgeQwgb0EIMwyXGFnTNsZRBrs6GN/BbV0okaNP3VBYqLFjUsFnbgqMIGY
-# MIGApH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNV
+# ZS1TdGFtcCBQQ0EgMjAxMDANBgkqhkiG9w0BAQsFAAIFAO5gDLgwIhgPMjAyNjA5
+# MjQyMDU1MjBaGA8yMDI2MDkyNTIwNTUyMFowdzA9BgorBgEEAYRZCgQBMS8wLTAK
+# AgUA7mAMuAIBADAKAgEAAgIM6wIB/zAHAgEAAgISkDAKAgUA7mFeOAIBADA2Bgor
+# BgEEAYRZCgQCMSgwJjAMBgorBgEEAYRZCgMCoAowCAIBAAIDB6EgoQowCAIBAAID
+# AYagMA0GCSqGSIb3DQEBCwUAA4IBAQCbL30HGfjH/UcUIUjMpZKYD9MPoH02ymWw
+# i5CzYdUMi86PloXUCibdjJNqcKpvG4122S7WFlW9ZEuwuxsG3eVrQf98gjNTGxGh
+# kvId1qhzFGJh6z51zl8O7Pu4ZXeniGkTOBnijyo4c7Zz0IQuwV/GPJobFRvVdPGU
+# Nz2/RTH8ImJrBZwkLNDF5pSU14Jems5IfHEN1oXsUajFLdyC86e87hXXuAhjqC95
+# sK8R+8V6+b2qrq/LeAsOrqwHvtj7hZiV3O7Ck9P9Z4uT13ipeTQ9UHQ5UHvKDcDh
+# MPUv8CvDcRZDP1IZLy2M6rutm+GO3vHhADR9G952aAn+AaUHW3KlMYIEDTCCBAkC
+# AQEwgZMwfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNV
 # BAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQG
-# A1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAImNbQ+Z0OT
-# 9h8AAQAAAiYwIgQg2owTg9J3hzWYiP1FPCmkeA9nm7+qAsQzFU6M1OlBLPIwDQYJ
-# KoZIhvcNAQELBQAEggIADIaD18+z2GCqYt8oSQJWxO6BnNBhZiLCVnetp6LBjOdx
-# 6Pgfl3J7k2aD6HRdZkVDQrqnDRepH7mIk91Hr02a00PuBQODGS5hBCzjuCujv2m1
-# VSAmQ3SXSavV9ryy/XKuXOd+tbSDTtukjRhGyKz8E8EHeuLXU/SpAsFTVYfDiA76
-# 1JnJ5IcZRGCfJynFwuU3tkBRHJV7p0Kh2bGo+X5dDJSEEJpwho4FMVGBH94pSJ2b
-# +2Xtb1nAcsLxNVP9/brjDtzoSSLDSJ8OBX8Npuuj9z6dAKqgwZk9USxghU/QrvVn
-# H1NLjOegwo9U/XBRAsxQklnaQ8sOCpmaVIudJcDl8ZhZsSTtGq4cAKve/tGTW91J
-# bYSdahU7L7yt+mpib+E9R4K4hkc9srbiUylZKrxRNoDM+I2II6IWmNxDvC7gCx6K
-# fmWgY0EwquRUuDcbyzzwqGaGuRmcVYr5BKUJcUUCNsndA3ETlg2UKqu6xyBpPoI5
-# mZwpqbnLhNS47jV85KOemd9JmYJRd/d/SNYMy6BWFjzLMn6nVCTBhkk18vn6Uaoe
-# 7CGcSlqwlnhjbl+Y78dPbE/90QleZDY2Z+zAHeqmfjcjoUzAhaomne4wtEoe6A9g
-# 8pBGqS1xBRNVfy2EzPHAchKrTNUM1hWdDHWVm2nsakOWwRRKo+B5iE8ypkjediw=
+# A1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIaqaAdBqAP
+# Q6oAAQAAAhowDQYJYIZIAWUDBAIBBQCgggFKMBoGCSqGSIb3DQEJAzENBgsqhkiG
+# 9w0BCRABBDAvBgkqhkiG9w0BCQQxIgQgTP9JoTdmR5bT0I4AlMWfEqmckFVKu6YB
+# wxFE07ZWWtAwgfoGCyqGSIb3DQEJEAIvMYHqMIHnMIHkMIG9BCCdeiHHrbtpKcwB
+# 20doVU89WHIOH8S7w37uaHcDmemK+zCBmDCBgKR+MHwxCzAJBgNVBAYTAlVTMRMw
+# EQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVN
+# aWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0
+# YW1wIFBDQSAyMDEwAhMzAAACGqmgHQagD0OqAAEAAAIaMCIEIAy/9tw+Kq/bYTtT
+# L8sS+uADXpoDKQPrFpdbAMfhpPjEMA0GCSqGSIb3DQEBCwUABIICAER/Yx8raQbn
+# d1SeH9lumw+EdUIApP2sGyQda57p3AJn3sCpOW57ghyi+BqyDWpQoumaIGGL4K2u
+# SBSImjJOV635oReWp6qv3O2CikB99PBk5vrMpnltD1yWQLcjn/7zJc1Ht2FjIX/r
+# xcLkHJG+JDK5A+T2Vnq5bACfBKRK6PE7rS+Rk/zqYL4W28Mu2ifahbtmviCae0dZ
+# 4WfNyzv7sBv+1G3NdsiLOf7ihohgCSLipLHqUabl2VY8+7mwrpnlvz9Nd6ehu0/N
+# DHXZ9s6pLY4Gwx1cmczSuRrVzIKKRPUmmKVCjAKeeTyF0UHGv+6/UWuZSk9rDG10
+# llXLU8Pm/NpmucCjw3QZ0kDA+1OU69Z3F7Jz/M0AVMLkeP2y2GVe5hkGyoAr6jIE
+# u/CFgZFhRDO3Sj08OuIB7uUtaUOhZd+e0TONkxx2ygm70QBOpYmDvL15YV3W3hV9
+# dkgQa1ZvW/DK12Rfas5yLqTDUN9w6Mmvg45dN3PCGZ1iumFLiwpk7TPaZRJwXEU0
+# LHKqYbIUEYMpH1IIEc8iQoaagF9dHaZ32tEaYZ0C74ziQIIkveAaqf9YRtcSuI1j
+# a7XeTFQNZf/W4LSBjFA2ZHJIXQvR1LEvNQMTaymG7TZDsEvyt3m9OhEfcahsATa+
+# QT6mrAM9HSthbpgWO7nebPNe5n2Wr+nc
 # SIG # End signature block

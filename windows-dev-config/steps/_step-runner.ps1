@@ -11,7 +11,9 @@ $Script:DevConfigCheckMark = [char]0x2713
 
 # Defaults allow the step runner to load before the orchestrator sets run state.
 $Script:DevConfigResumed     = $false
+$Script:DevConfigAction      = 'Full'
 $Script:DevConfigTally       = @{ Done = 0; AlreadyOk = 0; Warned = 0 }
+$Script:DevConfigTalliedSteps = @{}
 # Persist flagged names so a blocked step is counted once across the reboot.
 $Script:DevConfigWarnedSteps      = @()
 $Script:DevConfigSilentSkips      = 0
@@ -40,35 +42,51 @@ function Show-DevConfigPhaseHeader {
     $Script:DevConfigPhaseHeaderShown = $true
 }
 
-# Save the tally across the reboot so the final summary covers the whole run.
+# Save progress and Terminal backup tracking across the reboot.
 function Save-DevConfigTally {
     param(
-        [Parameter(Mandatory)] [string] $Path
+        [Parameter(Mandatory)] [string] $Path,
+        [string[]] $TerminalBackedUp = @()
     )
     try {
         $state = [pscustomobject]@{
-            Done        = $Script:DevConfigTally.Done
-            AlreadyOk   = $Script:DevConfigTally.AlreadyOk
-            WarnedSteps = ($Script:DevConfigWarnedSteps -join ',')
+            Done             = $Script:DevConfigTally.Done
+            AlreadyOk        = $Script:DevConfigTally.AlreadyOk
+            TalliedSteps     = $Script:DevConfigTalliedSteps
+            WarnedSteps      = ($Script:DevConfigWarnedSteps -join ',')
+            TerminalBackedUp = @($TerminalBackedUp)
         }
         $state | ConvertTo-Json -Compress | Set-Content -LiteralPath $Path -Encoding UTF8
     } catch {
-        Write-Verbose "Could not save the tally before reboot: $($_.Exception.Message)"
+        throw "Could not save setup progress before reboot: $($_.Exception.Message)"
     }
 }
 
-# Best-effort restore: a missing or unreadable file limits the summary to this process.
+# Unknown backup state prevents resumed Terminal changes from overwriting an original.
 function Restore-DevConfigTally {
     param(
         [Parameter(Mandatory)] [string] $Path
     )
+    $Script:DevConfigTerminalBackedUp = $null
     if (-not (Test-Path -LiteralPath $Path)) {
         return
     }
     try {
         $saved = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($saved.PSObject.Properties['TerminalBackedUp'] -and $null -ne $saved.TerminalBackedUp) {
+            $backupPaths = @($saved.TerminalBackedUp)
+            if (@($backupPaths | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) {
+                throw 'The saved Terminal backup paths are invalid.'
+            }
+            $Script:DevConfigTerminalBackedUp = $backupPaths
+        }
         $Script:DevConfigTally.Done      += [int]$saved.Done
         $Script:DevConfigTally.AlreadyOk += [int]$saved.AlreadyOk
+        if ($saved.PSObject.Properties['TalliedSteps']) {
+            foreach ($property in $saved.TalliedSteps.PSObject.Properties) {
+                $Script:DevConfigTalliedSteps[$property.Name] = [string]$property.Value
+            }
+        }
         if ($saved.WarnedSteps) {
             foreach ($name in ($saved.WarnedSteps -split ',')) {
                 if ($Script:DevConfigWarnedSteps -notcontains $name) {
@@ -78,7 +96,7 @@ function Restore-DevConfigTally {
         }
         $Script:DevConfigTally.Warned = $Script:DevConfigWarnedSteps.Count
     } catch {
-        Write-Verbose "Could not restore the pre-reboot tally: $($_.Exception.Message)"
+        Write-Warning "Could not restore setup progress after reboot: $($_.Exception.Message)"
     } finally {
         Remove-Item -LiteralPath $Path -ErrorAction SilentlyContinue
     }
@@ -120,6 +138,11 @@ function Write-DevConfigStepFlag {
         [Parameter(Mandatory)] [string] $Label,
         [Parameter(Mandatory)] [string] $Message
     )
+    $previous = $Script:DevConfigTalliedSteps[$Name]
+    if ($previous) {
+        $Script:DevConfigTally[$previous]--
+        $Script:DevConfigTalliedSteps.Remove($Name)
+    }
     if ($Script:DevConfigWarnedSteps -notcontains $Name) {
         $Script:DevConfigWarnedSteps += $Name
     }
@@ -148,6 +171,22 @@ function Set-DevConfigStepUnverified {
     $Script:DevConfigStepUnverified = $Reason
 }
 
+function Set-DevConfigStepTally {
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [ValidateSet('Done', 'AlreadyOk')] [string] $State
+    )
+    $previous = $Script:DevConfigTalliedSteps[$Name]
+    if ($previous -eq 'Done' -or $previous -eq $State) {
+        return
+    }
+    if ($previous) {
+        $Script:DevConfigTally[$previous]--
+    }
+    $Script:DevConfigTally[$State]++
+    $Script:DevConfigTalliedSteps[$Name] = $State
+}
+
 function Invoke-DevConfigSteps {
     param(
         [Parameter(Mandatory)] [object[]] $Steps
@@ -171,7 +210,7 @@ function Invoke-DevConfigSteps {
         }
         # Tally before printing so collapsed phases still count.
         if ($alreadyDone) {
-            $Script:DevConfigTally.AlreadyOk++
+            Set-DevConfigStepTally -Name $step.Name -State AlreadyOk
             # Clearing here also covers resumed phases that return before the reporting loop.
             Clear-DevConfigStepFlag -Name $step.Name
         }
@@ -211,7 +250,7 @@ function Invoke-DevConfigSteps {
             } elseif (-not [bool](& $step.Check @stepArgs)) {
                 throw "ran, but the follow-up check still says it isn't done."
             } else {
-                $Script:DevConfigTally.Done++
+                Set-DevConfigStepTally -Name $step.Name -State Done
                 Clear-DevConfigStepFlag -Name $step.Name
                 Write-Host "  $Script:DevConfigCheckMark $label done" -ForegroundColor Green
             }
@@ -226,10 +265,10 @@ function Invoke-DevConfigSteps {
 }
 
 # SIG # Begin signature block
-# MIInKwYJKoZIhvcNAQcCoIInHDCCJxgCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIInKAYJKoZIhvcNAQcCoIInGTCCJxUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCC+3FUqEM8qbIxU
-# /P9juPVoApUC8/5T0AByZnP5B7vrMaCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCC033V32RXiiwky
+# ApDaR16kGz3HG7v7iUQqAbwFk6YMoqCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
 # yE7XD1dIAAAAAAIdMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQzWhcNMjcwNDE1MTg1
@@ -297,65 +336,65 @@ function Invoke-DevConfigSteps {
 # vZGtqa9FSL2RazArA+rDPuf6JGYz4HpgMZHB4S6szWSKYBv0VisCzfxgeU+dquXW
 # 9bd0auYlOB58DPcOYKdc3Se94g+xL4pcEhbB54JOgAkwYTu/9dLeH2pDqeJZAABV
 # DWRQCaXfO5LgyKwKCLYXpigrZYCjUSBcr+Ve8PFWMhVTQl0v4q8J/AUmQN5W4n10
-# 1cY2L4A7GTQG1h32HHAvfQESWP0xghnHMIIZwwIBATBuMFcxCzAJBgNVBAYTAlVT
+# 1cY2L4A7GTQG1h32HHAvfQESWP0xghnEMIIZwAIBATBuMFcxCzAJBgNVBAYTAlVT
 # MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jv
 # c29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIdTRnITtcPV0gAAAAAAh0w
 # DQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwLwYJ
-# KoZIhvcNAQkEMSIEIPUigDBs4gqwhnZux8fjlLx1Vi8lMav26UnGMmaT1tmOMEIG
+# KoZIhvcNAQkEMSIEIJaXNNAaEkJYk+qbrvBXuW06x8179fTdB19kIHbTgf3jMEIG
 # CisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBvAGYAdKEagBhodHRwOi8v
-# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAVR5MDWtGh8o+cWZ5
-# H8X7GTs5RqVE8+kszRkF0BESt6jT21+CCqbYFOJKnuD5xubRVmw0LMt23R32pbck
-# vZWmldtOUUVzG6n4yo5qnOHVDb5lBDAfPPmvVCldvrMrouT0S90qUkKFAkVxlj8O
-# EcHqof4p7JTYnNthuPnbOe7++LrCjpjGrPvW4b9GbVbAL6eId+EgY81BDeergCNN
-# ZF7JQAzugMOOvE7aBsgVqeTkpT3BbPBwMKZpqA4KVFsLuTnX8SzDn8Z+MEoi+6ul
-# m0fs2jmhDKdfzE0xOeaBubfMafQPl6CGPp41JfN0WsYVm1Ci5rufKgXOISkdaOhR
-# owIaqKGCF5cwgheTBgorBgEEAYI3AwMBMYIXgzCCF38GCSqGSIb3DQEHAqCCF3Aw
-# ghdsAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG9w0BCRABBKCCAUEEggE9
-# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCBy/YyuWPPEPO2R
-# s1pB2Nm3qu4a/Ul8WzlLn3vX5KQOVAIGaqqIgV3rGBMyMDI2MDkxODE2MTEzOC4y
-# MzNaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
+# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAJHxMP5OTv037aq5u
+# h8c6N/uXWQxZ2cRxyJ7zf2J5ISoXjc/tzbLPn3QRTfA5i697CyuCvtiezP30mJhX
+# 4XWiBDVILBAugz3ZkMTP9o3SYvoAPrvnqLq+2QhxM0EoZ55vnNOQgwvA/HkrAV/q
+# Oicv+qAK1KNhijT2sS2qPPD+WM4p2oznSrtRIwnpWhuHY2w6fM0Abb8KAX4i+JEf
+# FVim0C+BUIGpnJSUYRF91q1V52iJjlRgLn1hwWjjWmS5GXFVe+PHMyuyxDtP8Zu0
+# VnF2fjFmLNwd/b5WjiJgk1V7MHofqIQozXkAvUROW8gu1ZH2DOeQPthTtBDP+PX7
+# +VUvz6GCF5QwgheQBgorBgEEAYI3AwMBMYIXgDCCF3wGCSqGSIb3DQEHAqCCF20w
+# ghdpAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG9w0BCRABBKCCAUEEggE9
+# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCAKmYxiMjfx8rtk
+# nkUsiJm+d0lvBAOy2eqFZPjaJU47RwIGaqpKYTLGGBMyMDI2MDkyNTAwMjIyMi43
+# NjJaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
 # Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
 # cmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScw
-# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046RjAwMi0wNUUwLUQ5NDcxJTAjBgNVBAMT
-# HE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZpY2WgghHtMIIHIDCCBQigAwIBAgIT
-# MwAAAiAk4ebgF7m0jgABAAACIDANBgkqhkiG9w0BAQsFADB8MQswCQYDVQQGEwJV
+# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046MzcwMy0wNUUwLUQ5NDcxJTAjBgNVBAMT
+# HE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZpY2WgghHqMIIHIDCCBQigAwIBAgIT
+# MwAAAh86cGnkojAulQABAAACHzANBgkqhkiG9w0BAQsFADB8MQswCQYDVQQGEwJV
 # UzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UE
 # ChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGlt
-# ZS1TdGFtcCBQQ0EgMjAxMDAeFw0yNjAyMTkxOTM5NTJaFw0yNzA1MTcxOTM5NTJa
+# ZS1TdGFtcCBQQ0EgMjAxMDAeFw0yNjAyMTkxOTM5NTFaFw0yNzA1MTcxOTM5NTFa
 # MIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMH
 # UmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSUwIwYDVQQL
 # ExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScwJQYDVQQLEx5uU2hpZWxk
-# IFRTUyBFU046RjAwMi0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1l
-# LVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDR
-# YY7yr7ijW6CR178uKveIMufutWOicxgJwKOce/2GOQceus6ZWfX14i3jNg3JOP7M
-# GJMkOAucwWBwiA8URp+ZYkGjpVoVkGZsV27WjqLwpf2AwqBsJ/TzqwE7JFFaxup3
-# Ldxj8GjdJymDFRrdVN/pYHoBFrjD1IkIDu8b1CWn8tgomiKRSY+STvJq99mVkdph
-# MBIUGOegQny8qRd24VME0xi8Oomks9Zq9EjDeKHGpvAbXUEQ6m3cROoEPhTE/miw
-# eQH9TqJt3IOsqPv3L8urojB747XBC2y0CDIHlKLcLl3ZG8D7JXKnWTFen3msMPJp
-# cvrQ3zUBVJrH/mI3RxHmCh9ppDP0uG1+PJwk6H/x+sfoG9hW64xoXkpx6DEfNZNf
-# cXdKbXF28XEXdLNnzo3SLNVymeQJhNqOSKhnU84QnKmrjEk541JiurlDCkCWO9lU
-# BUMb9x0nyfXUbNRPVLgP+PTMRdXOowJdYCzCQfN2ZqL0s4YI28F1Dbn7Bgw2E4P1
-# E9unsvMzJHtzhS2Th3TpCfBbOGalIlF9x/DJZ/ssm/yyzT9YtIFeqmfNxBPTE3aO
-# uh6HxmTICzfYAATvWNhBbo19QwsjPeA9JvhqTLC2KUNgrXroGy4eDZo0n7jFYjZk
-# Uih1Ty+8E6qEvV2Na6Z5gUyD5a+tHGDmq69CmUiHfwIDAQABo4IBSTCCAUUwHQYD
-# VR0OBBYEFNvInOCIhxGA8mY7l1g07UHvyNgzMB8GA1UdIwQYMBaAFJ+nFV0AXmJd
+# IFRTUyBFU046MzcwMy0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1l
+# LVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDL
+# O8XFOcfGqAqgiz0+AmQmFl3dZ0aTG4UFJkqqNdMHy28DaheCBs6ONufukye5x42C
+# WkzgRIy9kE2VWwEntZ8ZkgyrykC0bIqsID7+6FxguseTXf1Vwvm1D8104VmetoBJ
+# lJ4uGbuyJZUvXDx55nVh50ygLTzZ24WkQsnPpvRZv2kPc39f3bhLyHVtnHsa/W/8
+# 6Vrftd+AfFveA+qN/EY+XGj5c/DPMXCYECb0arYb92dDJWtwzpyBrp4gfHlgY1UE
+# pc4l4AGELrf2J4wrxTzTW+SM8XhV1dOOPrYjD080IbZqL8B+IF0RCdn269YXrGK6
+# QIHipznKZcCS8jN30YAHnTJVN5Zzs6t/2YsqBGDquvDad7934FFTwzvUcO3VoIyd
+# 93XWwvP8/SCFVJh21W8oGQTptGHyly+Fl4henVMVZF1v6osOtirX8GFTiEhnf8nR
+# dOg7yZYAJ0xy9CtDfbXaTn/cf3Lq3N/GCYKFjC+5mUCE+AJhmxMuMdvSUGmKiAFd
+# iPAjUTqsWWBBZJm0eCwgeGJFmmQA+V7/98BKcE+gUL7O9eWRDQwKeAcvo6rxNv2Y
+# 4jKrHA6Z/wi3a/fKUhLCNZES8qGdrpDAm7qh+6FjYxytAbkiKM6uTNy/ULPlwtlY
+# ZoAJDDQP7eYCywwVbNTbHXRBSS+NccC0sSB4W7U67wIDAQABo4IBSTCCAUUwHQYD
+# VR0OBBYEFNk72sGDlH0r5DwvfGR5XwJI8B7bMB8GA1UdIwQYMBaAFJ+nFV0AXmJd
 # g/Tl0mWnG1M1GelyMF8GA1UdHwRYMFYwVKBSoFCGTmh0dHA6Ly93d3cubWljcm9z
 # b2Z0LmNvbS9wa2lvcHMvY3JsL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0El
 # MjAyMDEwKDEpLmNybDBsBggrBgEFBQcBAQRgMF4wXAYIKwYBBQUHMAKGUGh0dHA6
 # Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvY2VydHMvTWljcm9zb2Z0JTIwVGlt
 # ZS1TdGFtcCUyMFBDQSUyMDIwMTAoMSkuY3J0MAwGA1UdEwEB/wQCMAAwFgYDVR0l
 # AQH/BAwwCgYIKwYBBQUHAwgwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUA
-# A4ICAQCtKGBto1BSvm4WFI+J0NSyVhU1LHL7F3fbjZ2d7F5Kn/FCTBZXpzrDVl63
-# FLRNcIFpnJy4/nlg43r7T5sJPdo4Ms8ADSHQEJnHSu3x9UpjCzREBPi9+nHhvDgR
-# x/1WmBD6gQUZJLOhcN2TxW4KJyhinMtiBFtkNRZ2vmZ1MAdNXTm5d0Lwk3wzj+/f
-# 7VCCTWCXJSoqNa3VU/6sACHI97Evbnzg8bd3hxrfz6CcCVuf77egvRHinthJuwSR
-# ePP7aVmcevb1nWUIAICdBebHQOrzNIeWBIQwvcFaS3SFc+49rqrwQOMFDR4FYBzS
-# 7b0QeBVxFuLL2iVu4KAHMNUhLLSD4iKLDFBNTOtTzTlhGvMgG77A1cjeQrDMHa6o
-# ReMDeUDqHUrxv8g7IRdIh+h0gDLkzN0xIuzli0Bv7JtybGJbV6JxaDF4CzSCIMRp
-# K59nI6iKo4LgnbQBZJW7+6akYsKG/pXPlfxNv2InpD10tSCkCvw9kr6W1+NRN+Eu
-# ZczRgAwWlcK9XJZ3uu/v/oxHtO7/kmVIs51F9qV6Y2QNXd6tU46YPrK98m2QDys+
-# lvLNimK0e1xZ7Z1GawKohKGvlLALWDlZQqgHfJ31CB0LlIDI7iLyYTpd2iyKjqsk
-# bQiyMtICH+RmH/oCg7JOK0ZA3XIMba9aSWgBF3QZ6pG3EGeQqjCCB3EwggVZoAMC
+# A4ICAQBlbu3IoynnPz0K1iPbeNnsej2b15l5sdl2FAFBBGT9lRdc2gNV8LAIusPY
+# HHhUvRDcsx4lbMNhVKPGu4TDLaqNt/CI+SFtGuqdRLpVP1XE9cCLyKrKPpcJFJCq
+# PpV+efoAtYBmIUQcxxwT7WIQ7gag8+rkKvrMkCoRqKS0mKv8J1sKfi85+G2uhZ/1
+# RteSVdYZOZOj+Sb4wzonTCTj7EtgMN/BX35W5dTzd7wJdGepYkVi871dSrC2Tr1Z
+# FzAR7S44drCWZpJ6phJabVNOsNxFJKgSykugOGWzQ318Rr3MTPg2s3Bns+pUPVgM
+# ijd4bUOH2BlEsLMMwOcolTTZqg1HYrdY1jxpUAI9ipjBQRINL/O705Z+/f2LjNmJ
+# QooCVJVX24adpZ519SsfazGoqXGt91bmqKo0fI09Il4sUHh4ih6rpiQDBlyL7vmv
+# CejwVxYevY4qVwTZ/o3gvl+R0lFxYS9feIM4NeG0+WsDZ7jLci5MFeuNwosQY3z2
+# 6Xg1oj0U9u+ncR9uTU+xBmJ8BtlCdhQ13RNMX5P+krRYPB3XCp9Jm6XaO1995q32
+# AIZm1mzBGI6yHlviXaEC5TzGiO1LXuPtXZU2X93oQJbMoe3v8+5CPKrQalGWyYuh
+# 2a3V1pwbj+W0FEmEFPpu8TI+qYO1IIQWUSRvFjXth5Ob02hMMjCCB3EwggVZoAMC
 # AQICEzMAAAAVxedrngKbSZkAAAAAABUwDQYJKoZIhvcNAQELBQAwgYgxCzAJBgNV
 # BAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4w
 # HAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xMjAwBgNVBAMTKU1pY3Jvc29m
@@ -395,44 +434,44 @@ function Invoke-DevConfigSteps {
 # t67I6IleT53S0Ex2tVdUCbFpAUR+fKFhbHP+CrvsQWY9af3LwUFJfn6Tvsv4O+S3
 # Fb+0zj6lMVGEvL8CwYKiexcdFYmNcP7ntdAoGokLjzbaukz5m/8K6TT4JDVnK+AN
 # uOaMmdbhIurwJ0I9JZTmdHRbatGePu1+oDEzfbzL6Xu/OHBE0ZDxyKs6ijoIYn/Z
-# cGNTTY3ugm2lBRDBcQZqELQdVTNYs6FwZvKhggNQMIICOAIBATCB+aGB0aSBzjCB
+# cGNTTY3ugm2lBRDBcQZqELQdVTNYs6FwZvKhggNNMIICNQIBATCB+aGB0aSBzjCB
 # yzELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1Jl
 # ZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjElMCMGA1UECxMc
 # TWljcm9zb2Z0IEFtZXJpY2EgT3BlcmF0aW9uczEnMCUGA1UECxMeblNoaWVsZCBU
-# U1MgRVNOOkYwMDItMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1T
-# dGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQCTGA9vpsJ6glqCLmI0rggGx4YE
-# EqCBgzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
+# U1MgRVNOOjM3MDMtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1T
+# dGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQBLIMg1P7sNuCXpmbH2IXT2tXeE
+# EKCBgzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
 # DgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
 # JjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3
-# DQEBCwUAAgUA7lepnDAiGA8yMDI2MDkxODEyMTQyMFoYDzIwMjYwOTE5MTIxNDIw
-# WjB3MD0GCisGAQQBhFkKBAExLzAtMAoCBQDuV6mcAgEAMAoCAQACAiAFAgH/MAcC
-# AQACAhLMMAoCBQDuWPscAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkK
-# AwKgCjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAC7Y
-# vQ6jgfibL72vBXSh8wBgYnPh7KKMuSwxWWD+g+DRHUwLts18ILaAH0J1FtRiiZDm
-# OGtCkSI7qVQ27hhMbcySnz2gtlu2AvLWQ/Rg0KY08awRp2aheyNbtP2yvRgINbX8
-# 7oQne9FrW/Q4YH49bGQpqossRKBmhWbgub06C/k4VvjADblMU8yXxLRWXIHHeUAN
-# V1lZLXYqhlnMZGCqVN0UBqHylxaFEgTVSgTUK4dtDFXgQB/Rz2nrhQXPy1uTexPN
-# QWa3AXmqWkPB3yQ9cvpVeqW4YP257mj+3+5+q2HPp9z8ZaUs0coEaJXDI1xBmmB+
-# e1rMkPUiUGP37c/ZGtYxggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEG
-# A1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWlj
-# cm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFt
-# cCBQQ0EgMjAxMAITMwAAAiAk4ebgF7m0jgABAAACIDANBglghkgBZQMEAgEFAKCC
-# AUowGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCAV
-# k7C6axCFGkt489xozlQHnN/0RFkhJ83Tp12pp5pQwDCB+gYLKoZIhvcNAQkQAi8x
-# geowgecwgeQwgb0EION7vyOlPA1VqlEp0QIVGlNd8S5YWBnKj97LuTWHSO2vMIGY
-# MIGApH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNV
-# BAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQG
-# A1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIgJOHm4Be5
-# tI4AAQAAAiAwIgQg8jDOcSA176Nyu50wLivpxFLEVQ2r+RxmC1k/GBCqaIEwDQYJ
-# KoZIhvcNAQELBQAEggIApZJeDVIRfq22/E8z2OyBqyhQLM+mjvK0yfsXZ3mjSf4N
-# WEI+2mOuXjjdXo7ABFuN0HeFiU/j+vYE9n4lpYdp3TI/EWhL4JMNS/gVHGaN4p43
-# JvZm1zQLweP3abrp7rAWZAgBvEifPlxDq5JJ9jKhdqPqgpo0FEoo/boOCcmVdCEw
-# H91Tae7zBiyBt9IOeBZRldkkoBQ+85ewKe6rWamDVVDor9FrTkNA9dhZ+Ao2IwJ+
-# T0KzupOqjG2fjDSi51Yz+78FdRdxzmUNS1+ZL+p9+JhfCtrFF7JbifWJWKL9XMap
-# 5mnj/3hbDtD5KDT0LkDI0dKkernDdD0afYnNT/+8kID4RTIpfbET0K2ey1BsRCFj
-# xrk3hRiPh4ILaSSJ4tc1IxOdxe3suij5qItihDFOs1ajc5dRaWKm2NIno9+TdZkj
-# HT/5PY8IhYvDMUVIJD88utYJneEgxWBAOYA2BVb88x76Q00gicsIoOvzpb7fzZPd
-# bxzQHK04q91h4LLz4B/0BdzMqV0GqR9XEQEQcMC1BBr/MfqVJt66QNFBJVJqRAq+
-# R/1Cge3VEqT+0rGofGsLDpJss3nGM7JlQ3BYZfScb6GwUW1XiC5di2BXRiqy+8Cz
-# JwnURdbp/WCqjLAg0JwI2ktioXiFgDALyxEqzyy3nGrJvVSRQMu8/cH/nvt5xgo=
+# DQEBCwUAAgUA7l/8RTAiGA8yMDI2MDkyNDE5NDUwOVoYDzIwMjYwOTI1MTk0NTA5
+# WjB0MDoGCisGAQQBhFkKBAExLDAqMAoCBQDuX/xFAgEAMAcCAQACAiFIMAcCAQAC
+# AhN1MAoCBQDuYU3FAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKg
+# CjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAKRgiqdC
+# 6ZgDku5XNmzXRNHJ0eLK7B1mEem+SadaALumVjPruNK4NVDZWaXb4ayJ4NKpFSHt
+# 1+5weyNRcVu3/P+E8eZybzmGH/h1YJKZutIffdomczl2vqv6PmOPEVoX8HCupDOv
+# Ds92BAuXamTbKwl3uJPG9bg3QjH9tYp2WkBTNltWCcdGKq8QxusLwk/URhfboPWO
+# qXFUXa505OTcMiteLftXhgOoCYOGhX2J8DFV3puAebEnxhj2KIIMiWR01dtGbFvd
+# bLlesump4joVxF0LO+eCGpucwMlPs6Y150AULu9NbezHD5RhLJhX+0I5Wt2hhCVl
+# ehBOlBGSUCgAcMcxggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UE
+# CBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9z
+# b2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQ
+# Q0EgMjAxMAITMwAAAh86cGnkojAulQABAAACHzANBglghkgBZQMEAgEFAKCCAUow
+# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCBqGNGh
+# DzhnVntJpLIVmiApP4hUA0YYFGV8386RdIgOqTCB+gYLKoZIhvcNAQkQAi8xgeow
+# gecwgeQwgb0EILAkCt9WkCsMtURkFu6TY0P3UXdRnCiYuPZhe3ykLfwUMIGYMIGA
+# pH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcT
+# B1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UE
+# AxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIfOnBp5KIwLpUA
+# AQAAAh8wIgQgF7Jv104F8FewARmDveuSI8t3gfFiISX5zxTS2gRoenkwDQYJKoZI
+# hvcNAQELBQAEggIACtvmH+L5bnqXo9J0qN14HAde78kAavjkeAeBF5Qm7KplnGli
+# xi1/HUJwcszjaLPEkU5Fv9Z6YgBzi57YGBn8+YfNpI6BVi0XawfzVHAVuSAWORDQ
+# GuQTnXzIsoYVrSN5pyUQHWsE+81e+nm/FbT/t6sRL6RH4FUTfd5D5lk4R2rxAHvN
+# r8qBy+K6tndNVNJCjtMi+pwa/V5i1pevkFZmSqwIMb39kCqTw1z+hmneCJ3DP4+F
+# ur0eejb3TRLG5L0YipnZiJbtlW6cSq1w5Q3p94qyZPbvYmohoVy2NdAI9JByOBol
+# YXkBtVzlLwnUNM5hbxcsLAebTRz9D6sshWMK1aCHvlHpiqPaV3oDpjXRN4JPMqap
+# L9wv6/FiL5+6B6Za5fzW6bvR9lZbd8/qEQK+T9OSrQai9KIvxL0rDjB4CIXHwUgy
+# 265CuLTXVQlZBmx2eGK46NjG4qyrdrmwZ0FOXBYdf9+Ri0lRyNOaiBQ6A0tRloNg
+# 9QgsOgGsoUD3s9OkW5IA+r8/6ceh8piR4Q75h7QOrUZk+WwPo7oNs9xFh/ri760s
+# J8PRo/VZjNIRuB8CteP5wcX28fiR7e0DZA90Y7sv3JRvKJHfBFhCU4GRLSIvOXrB
+# pHw3VuYrEKm5Y8hnL8pdn5r9B0Scskh9Q7mGeImq9J2TvzV+uST9GMMu/xw=
 # SIG # End signature block

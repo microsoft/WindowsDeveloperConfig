@@ -11,6 +11,7 @@ It is **idempotent** — every change is checked before it's made, so re-running
 ## Table of contents
 
 - [Quick start](#quick-start)
+- [Setup actions](#setup-actions)
 - [What to expect](#what-to-expect)
 - [Requirements](#requirements)
 - [Before you run this](#before-you-run-this)
@@ -19,7 +20,7 @@ It is **idempotent** — every change is checked before it's made, so re-running
 - [Running it other ways](#running-it-other-ways)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
-- [Undoing it](#undoing-it)
+- [Uninstall and manual cleanup](#uninstall-and-manual-cleanup)
 - [Customizing it](#customizing-it)
 - [Known limitations](#known-limitations)
 - [For contributors](#for-contributors)
@@ -58,6 +59,46 @@ For elevation, the launcher downloads and verifies the bootstrap, installs it in
 
 </details>
 
+## Setup actions
+
+Both `bootstrap.ps1` and `dev-config.ps1` accept `-Action`:
+
+| Action | Behavior |
+| ------ | -------- |
+| `Full` | Default. Applies the complete setup. |
+| `Partial` | A subset of `Full`, with the exclusions below. |
+| `Uninstall` | [Resets Full's settings and removes tools and Ubuntu data](#uninstall-and-manual-cleanup), even after Partial. |
+
+`Partial` skips changes to Sudo, Developer Mode, Remote Desktop, Edge policies, Explorer's
+recommended/cloud files, global notifications, the Bluetooth tray icon, web
+search, search highlights, Widgets, and WinUI templates. It still
+installs the WinUI Copilot plugin.
+
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Action Partial
+```
+
+The action is preserved across elevation, PowerShell relaunch, and reboot.
+Skipped settings are not reverted.
+
+For a fixed-action one-liner, choose one of the signed release wrappers:
+
+| Wrapper | Action |
+| ------- | ------ |
+| `setup-full.ps1` | `Full` |
+| `setup-zenith.ps1` | `Partial` |
+| `uninstall.ps1` | `Uninstall` (destructive cleanup) |
+
+```powershell
+irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/setup-full.ps1 | iex
+```
+
+Replace `setup-full.ps1` with the chosen wrapper. Short URLs should point to these
+repository-root release files, not `src/`. All three require `| iex` to execute.
+The wrappers accept no setup options and verify the Microsoft signature of the
+downloaded `bootstrap.ps1` before running it with the fixed action.
+
 ## What to expect
 
 Roughly **30 minutes** on a clean machine with a good connection, most of it spent downloading Visual Studio Code, the .NET SDK, PowerToys, and Ubuntu.
@@ -66,7 +107,7 @@ Roughly **30 minutes** on a clean machine with a good connection, most of it spe
 | - | ------------ | ---------------- |
 | 1 | The first UAC prompt appears | **Accept it.** Most of the settings are machine-wide and need Administrator. |
 | 2 | PowerShell 7 is installed if it isn't already, and the setup restarts itself on it | None |
-| 3 | Ten of the eleven phases run: packages, Windows settings, fonts, Terminal, prompt, Copilot | None. Long silent stretches during big downloads are normal — a "still working" note prints every minute |
+| 3 | Packages, Windows settings, fonts, Terminal, prompt, and Copilot are configured | None. Long silent stretches during big downloads are normal — a "still working" note prints every minute |
 | 4 | WSL is installed. The machine warns you and **restarts after 10 seconds** | **Save your work before you start.** |
 | 5 | You sign back in; a window opens and the second UAC prompt appears | **Accept it** to finish the run |
 | 6 | A summary prints: how many things changed, how many were already fine | Press a key to close, or leave it — it closes itself after 15 minutes |
@@ -85,7 +126,7 @@ You do **not** need Git, a repository clone, `winget configure`, the Visual C++ 
 
 ## Before you run this
 
-This flow is opinionated, and a few of its choices are worth knowing about up front rather than discovering later.
+See [Setup actions](#setup-actions) for what each action changes.
 
 | Change | Why it might matter to you |
 | ------ | -------------------------- |
@@ -94,13 +135,13 @@ This flow is opinionated, and a few of its choices are worth knowing about up fr
 | **All notifications are turned off** | Do Not Disturb is enabled globally, not just for a quiet-hours window. Teams, Outlook, and everything else stop raising toasts until you turn it back on. |
 | **Both Node.js LTS and nvm-windows are installed** | They are two different ways to manage Node. If you plan to use nvm, uninstall Node.js first so nvm owns the PATH entry. |
 | **Windows Terminal's `settings.json` is rewritten** | A `settings.json.bak` is written next to it first, but any comments in your settings file are lost, because the file is round-tripped through JSON. If the file can't be parsed, the Terminal change is flagged and skipped, the file is left untouched, and the remaining phases continue. |
-| **There's no uninstall** | Nothing that gets applied is reverted automatically. [Undoing it](#undoing-it) lists the manual reversals. |
+| **Uninstall is destructive cleanup** | Deletes `Ubuntu` and its files and removes targeted tools, including pre-existing installations. Previous settings are not restored. |
 
 Every one of these is listed in full detail in [What it changes](#what-it-changes).
 
 ## What it changes
 
-50 individual steps across 11 phases. Each one is checked first and skipped if the machine is already in that state.
+`Full` applies the setup below, skipping steps already in the desired state.
 
 ### Packages
 
@@ -109,13 +150,16 @@ Installed with winget from the `winget` source, silently, with agreements accept
 | Package | winget id |
 | ------- | --------- |
 | Windows Terminal | `Microsoft.WindowsTerminal` |
+| Intelligent Terminal | `Microsoft.IntelligentTerminal` |
 | PowerShell 7 | `Microsoft.PowerShell` |
 | Git | `Git.Git` |
 | GitHub CLI | `GitHub.cli` |
+| Azure CLI | `Microsoft.AzureCLI` |
 | GitHub Copilot CLI | `GitHub.Copilot` |
 | Visual Studio Code | `Microsoft.VisualStudioCode` |
 | .NET SDK 10 | `Microsoft.DotNet.SDK.10` |
 | Python 3.14 | `Python.Python.3.14` |
+| Visual C++ Redistributable | `Microsoft.VCRedist.2015+.x64` or `Microsoft.VCRedist.2015+.arm64` |
 | uv | `astral-sh.uv` |
 | Node.js LTS | `OpenJS.NodeJS.LTS` |
 | nvm for Windows | `CoreyButler.NVMforWindows` |
@@ -126,8 +170,10 @@ Installed with winget from the `winget` source, silently, with agreements accept
 
 A package counts as done only when winget reports it installed **and** current, so a re-run also picks up available updates.
 
+The Visual C++ runtime is installed before uv, matching Windows' native architecture.
+
 <details>
-<summary><strong>Windows settings — all 24 registry values</strong></summary>
+<summary><strong>Windows registry settings</strong></summary>
 
 **System** (`HKLM`, requires Administrator)
 
@@ -150,6 +196,7 @@ A package counts as done only when winget reports it installed **and** current, 
 | No recent files in Quick Access | `ShowRecent` | `0` |
 | No recommended or cloud files | `ShowCloudFilesInQuickAccess` | `0` |
 | No sync-provider tips | `Advanced\ShowSyncProviderNotifications` | `0` |
+| Details pane state | `Modules\GlobalSettings\DetailsContainer\DetailsContainer` | Binary `01 00 00 00 02 00 00 00` |
 
 **Taskbar, Start, search and notifications**
 
@@ -161,10 +208,11 @@ A package counts as done only when winget reports it installed **and** current, 
 | No web results in search | `HKCU\SOFTWARE\Policies\Microsoft\Windows\Explorer\DisableSearchBoxSuggestions` | `1` |
 | No search highlights | `HKCU\...\SearchSettings\IsDynamicSearchBoxEnabled` | `0` |
 | No Start menu recommendations | `HKCU\...\Explorer\Advanced\Start_IrisRecommendations` | `0` |
+| No Start menu account notifications | `HKCU\...\Explorer\Advanced\Start_AccountNotifications` | `0` |
 | Widgets off | `HKLM\SOFTWARE\Policies\Microsoft\Dsh\AllowNewsAndInterests` | `0` |
 | No PowerToys always-on-top toasts | `HKCU\...\Notifications\Settings\PowerToys\Enabled` | `0` |
 
-Widgets are turned off through the OS policy value because the per-user taskbar icon value no longer takes effect on Windows 11 24H2 and later.
+Widgets are turned off through OS policy. If Windows protects that policy, the step is flagged and setup continues.
 
 **Microsoft Edge** (`HKLM\SOFTWARE\Policies\Microsoft\Edge`)
 
@@ -185,8 +233,9 @@ Widgets are turned off through the OS policy value because the per-user taskbar 
 ### Fonts, Terminal and prompt
 
 - **Cascadia Code NF** and **Cascadia Mono NF** are downloaded from the pinned [`microsoft/cascadia-code`](https://github.com/microsoft/cascadia-code/releases) release `2407.24`, verified against a known SHA-256, and installed **for all users** under `%SystemRoot%\Fonts`. An earlier per-user copy left by a previous run is removed.
-- **Windows Terminal** gets Cascadia Mono NF as its default font face and PowerShell 7 as its default profile. `settings.json` is backed up to `settings.json.bak` before either change.
-- **Oh My Posh** is initialized from your PowerShell 7 `$PROFILE`. If an `oh-my-posh init` line is already there, nothing is added.
+- **Windows Terminal** gets PowerShell 7 as its default profile. After font installation verifies, a one-time, per-user `RunOnce` update selects Cascadia Mono NF at the next sign-in, without elevation or another setup run. Until then, the current font stays selected so an open Terminal does not warn about a newly installed font. This also works when WSL needs no reboot. If font installation fails, setup flags it and keeps the current font, or uses Cascadia Mono if the missing NF font was already selected.
+- **Terminal backups:** `settings.json.bak` preserves the original settings across setup, reboot/resume, and the next-sign-in font update. A font choice changed manually after setup is left alone.
+- **Oh My Posh** runs only in Windows Terminal or non-elevated PowerShell 7 sessions, in both modes. Setup updates its block in `$PROFILE`. If other initialization is present, it leaves the profile unchanged and flags it for manual adjustment.
 - A **GitHub Copilot** profile is added to Windows Terminal as a settings fragment in `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\DevConfig`, so it appears in the dropdown without editing your settings file.
 
 ### Developer extras
@@ -208,10 +257,12 @@ Nothing *inside* the distro is configured by this flow. For that, see [WSL Comfo
 
 ### The phases
 
+`Full` runs all phases below. `Partial` skips Edge and uses [fewer settings](#setup-actions).
+
 | # | Phase | Notes |
 | - | ----- | ----- |
 | 1 | Getting ready | Confirms PowerShell 7, then updates winget to the latest public stable release |
-| 2 | Packages | The 15 packages above, plus the PowerToys notification setting |
+| 2 | Packages | The packages above, plus the PowerToys notification setting |
 | 3 | System settings | Sudo, Developer Mode, long paths, Remote Desktop |
 | 4 | File Explorer tweaks | |
 | 5 | Taskbar, search & start tweaks | |
@@ -230,7 +281,7 @@ Every step is a triple: a check, an apply, and the same check again.
 - If the apply runs but the check still fails afterwards, that's an error — not a silent success.
 - Steps that aren't worth stopping the whole run for are marked **best-effort**. If one of those fails it's reported as **flagged**, the run continues, and the summary names it at the end so it doesn't scroll past you.
 
-That's why the totals in the summary can add up to more than 50: the tally is saved across the reboot and carried into the resumed run, which re-checks every step it already did. Steps counted before the restart are counted again when they're confirmed after it.
+Each step is counted once in the summary, including across a reboot.
 
 ### Elevation and PowerShell 7
 
@@ -245,17 +296,21 @@ A machine-wide lock (`Global\WindowsDevConfigSetup`) means a second copy won't s
 
 Enabling the WSL platform requires a restart. When one is needed, the setup:
 
-1. Registers a scheduled task named **`WindowsDevConfigResume`** that runs at your next logon, as you, at normal privilege after a 30-second delay.
-2. Saves its progress so far to `devconfig-tally.json`.
+1. Saves progress and Terminal backup tracking to `devconfig-tally.json`, preserving the original settings backup across resume. If saving fails, it does not schedule a resume or restart.
+2. Registers a scheduled task named **`WindowsDevConfigResume`** that runs at your next logon, as you, at normal privilege after a 30-second delay.
 3. Prints a warning and restarts after **10 seconds**.
 
 After you sign in, the task opens a window and Windows asks for fresh UAC consent before resuming elevated. Accept it to finish the run, print the combined summary for both halves, and remove the task. If Windows refuses the restart, the setup tells you and leaves the task registered — restart whenever you like and it still resumes.
+
+If Terminal backup tracking cannot be recovered on resume, changes to `settings.json` are flagged and skipped.
 
 Only one restart is ever performed. If WSL still isn't usable after it, the run stops and explains why rather than rebooting again.
 
 ### Logs
 
 The transcript is **`devconfig-log.txt`** next to `dev-config.ps1`, normally `%ProgramData%\CalmOS\devconfig-log.txt`. Setup prints the path when it finishes.
+
+The next-sign-in font update writes `%LOCALAPPDATA%\CalmOS\terminal-font.log`. Keep the setup files in place until that update has run.
 
 The transcript is more verbose than the console on purpose: it records handled errors and raw command output that are deliberately kept off screen. Text in the log that isn't on your console is usually something the run recovered from.
 
@@ -275,6 +330,8 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass
 ```powershell
 powershell.exe -NoProfile -File .\src\windows-dev-config\dev-config.ps1 -AllowUnsigned
 ```
+
+Add [`-Action Partial`](#setup-actions) for the reduced setup.
 
 **Pin a tag, or try a branch.** `-Ref` accepts a branch, tag, or commit SHA. Bootstrap resolves it once so its downloads use the same commit. Pass arguments with a script block, not `| iex`:
 
@@ -308,6 +365,8 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 **What it downloads, and from where.** GitHub (this repository, the pinned Cascadia Code release, which is checked against a SHA-256, and the latest `microsoft/winget-cli` release), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error, and neither is failing to look up the latest winget version.
 
 **Code signing.** Production requires valid Microsoft Corporation Authenticode signatures. Before execution, the elevation launcher verifies the bootstrap's signature and confirms the installed copy has the same hash. Bootstrap verifies its security helper before loading it and every payload `.ps1` before and after copying, including with `-NoLaunch`. Each production launch rechecks permissions and signatures before loading other helpers. Failed checks stop setup. `-AllowUnsigned` skips signature verification for source development.
+
+**Web wrappers.** Each action wrapper verifies and executes the same downloaded bootstrap text, with no unsigned fallback. `irm | iex` does not verify the wrapper's own signature; it trusts the HTTPS endpoint. To verify the entry script too, download the wrapper to a file and check its Authenticode signature and Microsoft Corporation signer before running it.
 
 **Protected files.** Administrators/SYSTEM own the setup and download directories and have write access. Ordinary users have read/execute access only. Unsafe permissions and reparse points are rejected, not repaired.
 
@@ -422,35 +481,38 @@ Then please [open an issue](https://github.com/microsoft/WindowsDeveloperConfig/
 
 </details>
 
-## Undoing it
+## Uninstall and manual cleanup
 
-There is no automatic undo, and the setup never removes anything on its own. The reversals below are the ones most people ask about. Registry changes under `HKLM` need an elevated prompt.
+Run in an elevated PowerShell window:
 
 ```powershell
-# Remote Desktop off again
-Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' fDenyTSConnections 1
-
-# Drop the two Edge policies (removes "managed by your organization" for them)
-Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge' NewTabPageLocation, HideFirstRunExperience
-
-# Notifications back on
-Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings' NOC_GLOBAL_SETTING_TOASTS_ENABLED 1
-
-# Widgets back on
-Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' AllowNewsAndInterests
-
-# Back to light mode
-Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' AppsUseLightTheme 1
-Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' SystemUsesLightTheme 1
+& "$env:ProgramData\CalmOS\dev-config.ps1" -Action Uninstall
 ```
 
-Everything else:
+From source: `.\src\windows-dev-config\dev-config.ps1 -AllowUnsigned -Action Uninstall`.
+`bootstrap.ps1` also accepts `-Action Uninstall`. Cleanup uses Windows PowerShell to remove PowerShell 7.
+Per-user tools are removed through temporary tasks in the same account's non-elevated, signed-in session.
+Git and Visual Studio Code use their registered Inno uninstallers without progress windows or automatic restarts;
+other installation types use WinGet. Some uninstallers may still request Administrator approval.
+
+**Cleanup runs without confirmation and permanently deletes the `Ubuntu` distro and its files.**
+It uninstalls WSL and the tools below, including pre-existing, machine-wide, and all-user MSIX installations.
+Cleanup covers Full's configuration regardless of which setup action ran. It does not restore previous settings.
+
+- **Settings:** disable Sudo, Developer Mode, and Remote Desktop; reset Explorer, Start, search, notification, Bluetooth tray, taskbar End Task, Widgets, Edge policies, long-path, and WSL first-run settings; select the unrestricted QuietHours profile and switch app/system themes to light.
+- **Terminal:** cancel any pending next-sign-in font update; remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries (including dynamically generated PowerShell entries), and the Copilot fragment.
+- **Integrations:** remove the managed Oh My Posh profile block, WinUI template package, and win-dev-skills marketplace. Custom profile code and unrelated plugins are preserved; a marketplace still used by other plugins is flagged rather than force-removed.
+- **Tools:** remove uv executables, caches, and local data; NVM; the WinUI Copilot plugin; Node.js; Copilot; Python 3.14 and its launcher/install manager; Git; GitHub CLI; Oh My Posh; Azure CLI; Coreutils; .NET SDK 10; Intelligent Terminal; PowerToys; Visual Studio Code; Windows App CLI; and PowerShell 7.
+
+Failed or timed-out steps are flagged; cleanup continues. Long-running commands show progress.
+Unlisted settings, fonts, Windows Terminal, the Visual C++ runtime, shared prerequisites (WinGet and Windows optional features), and setup files/logs remain.
+
+Additional manual cleanup:
 
 - **Packages:** `winget uninstall --id <id>` using the ids in [Packages](#packages).
 - **Explorer, Start and search settings:** all of them are also in Settings and Explorer's Options dialog. Sign out and back in for them to take effect.
 - **Windows Terminal:** restore the `settings.json.bak` written next to `settings.json`.
 - **The Copilot Terminal profile:** delete `%LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\DevConfig`.
-- **The Oh My Posh prompt:** remove the `oh-my-posh init` block from your PowerShell 7 `$PROFILE`.
 - **Ubuntu:** `wsl --unregister Ubuntu`. This permanently deletes the distro's file system.
 - **The setup itself:** delete `%ProgramData%\CalmOS` from an elevated terminal.
 
@@ -460,15 +522,20 @@ Edit the files under `src\windows-dev-config` in your clone, then run the [unsig
 
 | To... | Edit |
 | ----- | ---- |
-| Add or remove a package | The `$packages` list in [`steps/packages.ps1`](./steps/packages.ps1) |
-| Change or drop a Windows setting | The `$tweaks` list in the matching `steps/registry-*.ps1` |
+| Add or remove a package | The shared `$packages` list in [`steps/packages.ps1`](./steps/packages.ps1) |
+| Change or drop a Windows setting | The shared `$tweaks` list in the matching `steps/registry-*.ps1` |
 | Skip the Edge policies entirely | Remove `edge.ps1` from the `$phases` list in [`dev-config.ps1`](./dev-config.ps1) |
 | Keep Remote Desktop off | Delete the `RemoteDesktop` entry in [`steps/registry-system.ps1`](./steps/registry-system.ps1) |
 | Change the terminal font | `$Script:CascadiaDefaultFontFace` in [`steps/fonts.ps1`](./steps/fonts.ps1) |
-| Install a different distro | The `wsl --install -d Ubuntu` arguments in [`steps/wsl.ps1`](./steps/wsl.ps1) |
+| Install a different distro | `$Script:DevConfigWslDistributionName` in [`steps/wsl.ps1`](./steps/wsl.ps1) |
 | Add something new | Copy the shape of any phase file: build steps with `New-DevConfigStep` and pass them to `Invoke-DevConfigSteps` |
 
 A phase is just a file plus an entry in the `$phases` list. Files prefixed with `_` are shared helpers, not phases.
+
+Setup and cleanup use the same phase files and definitions. Phases marked `Uninstall = $true` provide cleanup steps.
+Package entries use `KeepOnUninstall`, `AdditionalUninstallIds`, `UninstallOrder`, and `InnoUninstall` for cleanup differences;
+registry entries are reset by default. `New-DevConfigRegistryStep -Reset` applies `ResetValue` when specified;
+otherwise it deletes only the named value.
 
 ## Known limitations
 
@@ -479,7 +546,7 @@ A phase is just a file plus an entry in the `$phases` list. Files prefixed with 
 | **Package versions move** | Packages are installed at whatever winget currently publishes, so two machines set up on different days can differ. `Microsoft.DotNet.SDK.10` and `Python.Python.3.14` pin a major version and will need bumping as those age. |
 | **The font release is pinned** | Cascadia Code `2407.24`, verified by hash. Newer releases need both the version and the hash updated in `steps/fonts.ps1`. |
 | **Terminal settings lose their comments** | `settings.json` is round-tripped through JSON, so comments don't survive. A `.bak` is written first. |
-| **No package selection at run time** | It's the full set or a local edit. There's no `-Skip` switch and no prompt. |
+| **No package selection at run time** | `Full` and `Partial` install all packages. There's no `-Skip` switch or selection prompt. |
 | **No dry run** | There's no `-WhatIf`. The `already OK` output tells you what a re-run *would* skip, but only after the fact. |
 | **Git and GitHub CLI are installed, not configured** | No `git config user.name`, no `gh auth login`. |
 | **`%ProgramData%\CalmOS` stays behind** | Setup and its log remain for resume and reruns. Deleting them requires Administrator rights. |
@@ -492,7 +559,8 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 | File | What it is |
 | ---- | ---------- |
 | `bootstrap.ps1` | Remote entry point: elevation, verified downloads, protected installation, and launch. |
-| `dev-config.ps1` | The orchestrator. Elevation, PowerShell 7, run lock, logging, the phase list, the summary. |
+| `setup-full.ps1`, `setup-zenith.ps1`, `uninstall.ps1` | Fixed-action wrappers that verify and call the signed bootstrap. |
+| `dev-config.ps1` | The orchestrator: elevation, shell selection, run lock, logging, phases, and summary. |
 | `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
 | `steps/_security.ps1` | Signature and directory-permission checks. Its signature is verified before loading unless `-AllowUnsigned` is used. |
 | `steps/_*.ps1` | Shared helpers: elevation, reboot and resume, winget, registry, Terminal settings, retry, process execution, console. |
