@@ -47,7 +47,12 @@ function Invoke-DevConfigNativeCommand {
             }
             Start-Sleep -Milliseconds 500
         }
-        return $pipeline.EndInvoke($pending)
+        $result = $pipeline.EndInvoke($pending)
+        # A command that cannot start fails inside the runspace, not here; surface it like the in-process path does.
+        if ($pipeline.Streams.Error.Count -gt 0) {
+            throw $pipeline.Streams.Error[0].Exception
+        }
+        return $result
     } finally {
         $pipeline.Dispose()
     }
@@ -68,7 +73,7 @@ function Invoke-DevConfigCleanupCommand {
         Invoke-DevConfigNativeCommand -FilePath $command.Source -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
     }
     if ($null -eq $result.ExitCode -or $result.ExitCode -notin $SuccessCodes) {
-        throw "$FilePath $($Arguments -join ' ') failed ($($result.ExitCode)): $($result.Output.Trim())"
+        throw "$FilePath $($Arguments -join ' ') failed ($($result.ExitCode)): $(([string]$result.Output).Trim())"
     }
     return $result
 }
