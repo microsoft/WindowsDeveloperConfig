@@ -31,10 +31,28 @@ It is **idempotent** — every change is checked before it's made, so re-running
 
 Run this in Windows PowerShell 5.1 or PowerShell 7. Bootstrap requests elevation when needed:
 
+### Standard experience
 ```powershell
-$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
-& ([scriptblock]::Create((irm $url)))
+irm https://aka.ms/devconfig/standard/setup.ps1 | iex
 ```
+
+### Full experience
+```powershell
+irm https://aka.ms/devconfig/full/setup.ps1 | iex
+```
+
+### Uninstall for both full and standard experiences
+```powershell
+irm https://aka.ms/devconfig/standard/setup.ps1 | iex
+```
+
+The AKA.ms links are direct references to the setup-full.ps1 and setup-standard.ps1 files.  Below is the same basic command as the full/setup.ps1
+
+```powershell
+irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/setup-full.ps1 | iex
+```
+
+> ⚠️ **It will restart your machine, once.** Enabling WSL needs a Windows optional feature that requires a restart. You get a 10-second warning, and a scheduled task resumes setup after you sign back in and accept the UAC prompt. **Save your work before you start.**
 
 You'll get one UAC prompt before setup and another after the restart.
 
@@ -59,8 +77,7 @@ For elevation, the launcher downloads and verifies the bootstrap, installs it in
 
 </details>
 
-## Setup actions
-
+## Setup actions with parameters
 Both `bootstrap.ps1` and `dev-config.ps1` accept `-Action`:
 
 | Action | Behavior |
@@ -75,24 +92,12 @@ search, search highlights, Widgets, and WinUI templates. It still
 installs the WinUI Copilot plugin.
 
 ```powershell
-$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/bootstrap.ps1'
 & ([scriptblock]::Create((irm $url))) -Action Partial
 ```
 
 The action is preserved across elevation, PowerShell relaunch, and reboot.
 Skipped settings are not reverted.
-
-For a fixed-action one-liner, choose one of the signed release wrappers:
-
-| Wrapper | Action |
-| ------- | ------ |
-| `setup-full.ps1` | `Full` |
-| `setup-standard.ps1` | `Partial` |
-| `uninstall.ps1` | `Uninstall` (destructive cleanup) |
-
-```powershell
-irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/setup-full.ps1 | iex
-```
 
 Replace `setup-full.ps1` with the chosen wrapper. Short URLs should point to these
 repository-root release files, not `src/`. All three require `| iex` to execute.
