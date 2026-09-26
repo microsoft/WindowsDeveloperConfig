@@ -40,12 +40,12 @@ A set of PowerShell scripts that installs dev tools, applies opinionated Windows
 
 Open any PowerShell window — elevated or not — and run:
 
-### Standard
+### Standard Experience
 ```powershell
 irm https://aka.ms/devconfig/standard/setup.ps1 | iex
 ```
 
-### Full experience
+### Full Experience
 ```powershell
 irm https://aka.ms/devconfig/full/setup.ps1 | iex
 ```
@@ -61,7 +61,7 @@ irm https://aka.ms/devconfig/full/setup.ps1 | iex
 - **Windows settings:** Dark theme, long paths, File Explorer defaults, Start/Search settings, and Do Not Disturb
 - **WSL:** WSL platform + Ubuntu, including the restart and the automatic resume afterwards.
 
-### Full
+### Full Experience
 - **Everything from standard**
 - **Windows settings:** Developer Mode, Sudo, widgets off, and Edge policies, additional Start/Search/System Tray settings
 - **Remote Desktop:** Enabled and firewall settings set
