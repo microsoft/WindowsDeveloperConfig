@@ -708,10 +708,10 @@ if ($preBootstrapUser -eq 'root' -or [string]::IsNullOrWhiteSpace($preBootstrapU
     Write-Host '    2. Drop you into zsh with your dotfiles already in place'
     Write-Host '    3. Install Homebrew (a few minutes, one-time)'
     Write-Host ''
-    Write-Host "  Open the 'Comfort Shell $sun ($Distro)' profile in Windows Terminal to begin." -ForegroundColor Yellow
+    Write-Host "  Open the 'Comfort Shell - $Distro' profile in Windows Terminal to begin." -ForegroundColor Yellow
 } else {
     Write-Host ''
-    Write-Host "  Open the 'Comfort Shell $sun ($Distro)' profile in Windows Terminal." -ForegroundColor Yellow
+    Write-Host "  Open the 'Comfort Shell - $Distro' profile in Windows Terminal." -ForegroundColor Yellow
     Write-Host "  You're already a regular user ($preBootstrapUser); no further setup needed." -ForegroundColor DarkGray
 }
 Write-Host ''

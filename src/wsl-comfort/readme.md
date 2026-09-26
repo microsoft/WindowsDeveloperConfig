@@ -217,7 +217,7 @@ This is what makes the Windows-side flow work on a freshly installed distro that
 | **Windows Terminal required** | The script hard-fails if `wt.exe` is not on PATH. A Comfort Shell without a WT profile would be half the experience, so we don't degrade. |
 | **WSL install requires a reboot** | First-time WSL installs always reboot. The script registers RunOnce and offers to reboot for you; cancelling the countdown is fine — the auto-resume will fire after any subsequent logon. |
 | **Ubuntu only** | Both halves bail on non-Ubuntu distros. Debian would mostly work but is untested; other families would not. |
-| **`wsl -l -q` UTF-16 quirk** | `wsl.exe --list --quiet` emits UTF-16LE with embedded NUL bytes. The script strips NULs in `Get-WslSupportedDistros`; do the same in any new code that parses `wsl -l -q`. |
+| **`wsl -l -q` UTF-16 quirk** | `wsl.exe --list --quiet` emits UTF-16LE with embedded NUL bytes. The script strips NULs in `Get-InstalledWslDistros`; do the same in any new code that parses `wsl -l -q`. |
 | **Homebrew in CI/skel** | Homebrew's installer probes for a real user. In skel mode we defer brew to the first interactive shell; the first user pays a one-time multi-minute cost on first login (logged to `~/.comfort-shell-install.log`). |
 | **Clipboard / `open` shims are best-effort** | `pbpaste` strips `\r` from `Get-Clipboard` output; complex clipboard payloads (images, multi-format) won't round-trip. `open` uses `wslpath -w` for files and falls back to passing the raw target for URLs. |
 | **`chsh` requires logout** | After the first run, `echo $SHELL` won't reflect zsh until you start a fresh login shell. The Windows Terminal "Comfort Shell" profile starts a fresh shell, so just open it. |
