@@ -137,12 +137,14 @@ resources:
 
             if (-not (Test-Path -LiteralPath $Path)) { return [ordered]@{} }
 
+            # pwsh 7 parses JSONC comments natively; a regex strip swallowed text between glob keys such as "**/.venv/**".
             $raw = Get-Content -LiteralPath $Path -Raw
-            $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
-            $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
-            if ([string]::IsNullOrWhiteSpace($clean)) { return [ordered]@{} }
+            if ([string]::IsNullOrWhiteSpace($raw)) { return [ordered]@{} }
 
-            return $clean | ConvertFrom-Json -AsHashtable
+            # A file that holds only comments parses to $null.
+            $parsed = $raw | ConvertFrom-Json -AsHashtable
+            if ($null -eq $parsed) { return [ordered]@{} }
+            return $parsed
         }
 
         $userDirectory = Get-VSCodeUserDirectory
@@ -212,12 +214,14 @@ resources:
 
             if (-not (Test-Path -LiteralPath $Path)) { return [ordered]@{} }
 
+            # pwsh 7 parses JSONC comments natively; a regex strip swallowed text between glob keys such as "**/.venv/**".
             $raw = Get-Content -LiteralPath $Path -Raw
-            $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
-            $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
-            if ([string]::IsNullOrWhiteSpace($clean)) { return [ordered]@{} }
+            if ([string]::IsNullOrWhiteSpace($raw)) { return [ordered]@{} }
 
-            return $clean | ConvertFrom-Json -AsHashtable
+            # A file that holds only comments parses to $null.
+            $parsed = $raw | ConvertFrom-Json -AsHashtable
+            if ($null -eq $parsed) { return [ordered]@{} }
+            return $parsed
         }
 
         $userDirectory = Get-VSCodeUserDirectory
@@ -288,12 +292,14 @@ resources:
 
             if (-not (Test-Path -LiteralPath $Path)) { return [ordered]@{} }
 
+            # pwsh 7 parses JSONC comments natively; a regex strip swallowed text between glob keys such as "**/.venv/**".
             $raw = Get-Content -LiteralPath $Path -Raw
-            $clean = [regex]::Replace($raw, '/\*[\s\S]*?\*/', '')
-            $clean = [regex]::Replace($clean, '(?m)^\s*//.*$', '')
-            if ([string]::IsNullOrWhiteSpace($clean)) { return [ordered]@{} }
+            if ([string]::IsNullOrWhiteSpace($raw)) { return [ordered]@{} }
 
-            return $clean | ConvertFrom-Json -AsHashtable
+            # A file that holds only comments parses to $null.
+            $parsed = $raw | ConvertFrom-Json -AsHashtable
+            if ($null -eq $parsed) { return [ordered]@{} }
+            return $parsed
         }
 
         $userDirectory = Get-VSCodeUserDirectory
