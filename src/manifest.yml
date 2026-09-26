@@ -121,7 +121,7 @@ flows:
     windows:
       install: Workloads/winforms/install.ps1
       configuration: Workloads/winforms/configuration.winget
-      build: dotnet build src/tests/winforms/hello.csproj -c Release -v q --nologo -o tests/winforms/bin
+      build: dotnet build src/tests/winforms/hello.csproj -c Release -v q --nologo -o src/tests/winforms/bin
       run: src\tests\winforms\bin\hello.exe
       expected: src/tests/winforms/expected.txt
       version: "dotnet --version"
