@@ -12,6 +12,7 @@ It is **idempotent** — every change is checked before it's made, so re-running
 
 - [Quick start](#quick-start)
 - [Setup actions](#setup-actions)
+- [Single workloads](#single-workloads)
 - [What to expect](#what-to-expect)
 - [Requirements](#requirements)
 - [Before you run this](#before-you-run-this)
@@ -48,7 +49,7 @@ Bootstrap avoids publisher-trust prompts by default. Organization policy can req
 1. Resolves the ref to a commit and requests UAC consent if needed.
 2. Verifies the downloaded security helper, then downloads the repository ZIP into an administrator-protected temporary directory.
 3. Verifies the Microsoft Corporation signature on every `.ps1` in the repository-root `windows-dev-config/` folder.
-4. Copies [`bootstrap.ps1`](./bootstrap.ps1), [`dev-config.ps1`](./dev-config.ps1), and [`steps/`](./steps) to `%ProgramData%\CalmOS`. Administrators/SYSTEM own and can modify the files; ordinary users have read/execute access.
+4. Copies [`bootstrap.ps1`](./bootstrap.ps1), [`dev-config.ps1`](./dev-config.ps1), [`steps/`](./steps), and [`workloads/`](./workloads) to `%ProgramData%\CalmOS`. Administrators/SYSTEM own and can modify the files; ordinary users have read/execute access.
 5. Rechecks permissions and signatures, unblocks files, removes temporary downloads, and launches setup.
 
 Files stay on disk so setup can load its helpers and resume after reboot.
@@ -98,6 +99,30 @@ Replace `setup-full.ps1` with the chosen wrapper. Short URLs should point to the
 repository-root release files, not `src/`. All three require `| iex` to execute.
 The wrappers accept no setup options and verify the Microsoft signature of the
 downloaded `bootstrap.ps1` before running it with the fixed action.
+
+## Single workloads
+
+The same engine can apply one developer workload instead of the whole workstation. It works like the
+full setup, with the same elevation, signature checks, PowerShell 7 switch, check/apply/verify steps,
+log, and summary. It does not need `winget configure`, the Visual C++ Redistributable, or a clone.
+
+| Workload | Installs | One-liner |
+| -------- | -------- | --------- |
+| `winui` | Developer Mode, PowerShell 7, .NET SDK 10, Windows App CLI, Visual Studio Community 2026 with the .NET desktop and WinUI application development workloads, and the WinUI `dotnet new` templates | `irm https://aka.ms/devconfig/winui/setup.ps1 \| iex` |
+
+The short URL points at the signed wrapper [`Workloads/winui/setup.ps1`](../Workloads/winui/setup.ps1),
+which verifies and runs `bootstrap.ps1 -Workload winui -Action Full`. To pick a workload with the
+bootstrap directly, pass `-Workload`:
+
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Workload winui
+```
+
+Workloads support `-Action Full` only for now. Visual Studio must be closed while its workloads are
+added; a restart requested by the Visual Studio Installer is listed in the summary. Each workload logs
+to `<workload>-log.txt`, for example `%ProgramData%\CalmOS\winui-log.txt`. Workloads share the run lock,
+so only one setup runs at a time.
 
 ## What to expect
 
@@ -310,7 +335,7 @@ Only one restart is ever performed. If WSL still isn't usable after it, the run 
 
 ### Logs
 
-The transcript is **`devconfig-log.txt`** next to `dev-config.ps1`, normally `%ProgramData%\CalmOS\devconfig-log.txt`. Setup prints the path when it finishes.
+The transcript is **`devconfig-log.txt`** next to `dev-config.ps1`, normally `%ProgramData%\CalmOS\devconfig-log.txt`. Setup prints the path when it finishes. [Single workloads](#single-workloads) log to `<workload>-log.txt` in the same folder.
 
 The next-sign-in font update writes `%LOCALAPPDATA%\CalmOS\terminal-font.log`. Keep the setup files in place until that update has run.
 
@@ -333,7 +358,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass
 powershell.exe -NoProfile -File .\src\windows-dev-config\dev-config.ps1 -AllowUnsigned
 ```
 
-Add [`-Action Partial`](#setup-actions) for the reduced setup.
+Add [`-Action Partial`](#setup-actions) for the reduced setup, or [`-Workload winui`](#single-workloads) for a single workload.
 
 **Pin a tag, or try a branch.** `-Ref` accepts a branch, tag, or commit SHA. Bootstrap resolves it once so its downloads use the same commit. Pass arguments with a script block, not `| iex`:
 
@@ -393,9 +418,9 @@ The UAC prompt was declined. Nothing was changed. Run the command again and acce
 </details>
 
 <details>
-<summary><strong>"Calm OS setup is already running in another window"</strong></summary>
+<summary><strong>"Setup is already running in another window"</strong></summary>
 
-Exactly what it says — switch to the other window. Two copies would fight over the same installs. If you're sure nothing is running, the previous process didn't exit cleanly; sign out and back in, or restart, and try again.
+Exactly what it says — switch to the other window. Two copies would fight over the same installs, so the full setup and single workloads share this lock. If you're sure nothing is running, the previous process didn't exit cleanly; sign out and back in, or restart, and try again.
 
 </details>
 
@@ -524,15 +549,16 @@ Edit the files under `src\windows-dev-config` in your clone, then run the [unsig
 
 | To... | Edit |
 | ----- | ---- |
-| Add or remove a package | The shared `$packages` list in [`steps/packages.ps1`](./steps/packages.ps1) |
+| Add or remove a package | Add it to the catalog in [`steps/packages.ps1`](./steps/packages.ps1), then list or remove its name in the packages phase of [`workloads/devconfig.ps1`](./workloads/devconfig.ps1) |
 | Change or drop a Windows setting | The shared `$tweaks` list in the matching `steps/registry-*.ps1` |
-| Skip the Edge policies entirely | Remove `edge.ps1` from the `$phases` list in [`dev-config.ps1`](./dev-config.ps1) |
+| Skip the Edge policies entirely | Remove the `edge.ps1` entry from the phase list in [`workloads/devconfig.ps1`](./workloads/devconfig.ps1) |
 | Keep Remote Desktop off | Delete the `RemoteDesktop` entry in [`steps/registry-system.ps1`](./steps/registry-system.ps1) |
 | Change the terminal font | `$Script:CascadiaDefaultFontFace` in [`steps/fonts.ps1`](./steps/fonts.ps1) |
 | Install a different distro | `$Script:DevConfigWslDistributionName` in [`steps/wsl.ps1`](./steps/wsl.ps1) |
 | Add something new | Copy the shape of any phase file: build steps with `New-DevConfigStep` and pass them to `Invoke-DevConfigSteps` |
+| Add a single workload | See [Adding a workload](#adding-a-workload) |
 
-A phase is just a file plus an entry in the `$phases` list. Files prefixed with `_` are shared helpers, not phases.
+A phase is just a file plus an entry in a workload's phase list. Files prefixed with `_` are shared helpers, not phases.
 
 Setup and cleanup use the same phase files and definitions. Phases marked `Uninstall = $true` provide cleanup steps.
 Package entries use `KeepOnUninstall`, `AdditionalUninstallIds`, `UninstallOrder`, and `InnoUninstall` for cleanup differences;
@@ -562,10 +588,44 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 | ---- | ---------- |
 | `bootstrap.ps1` | Remote entry point: elevation, verified downloads, protected installation, and launch. |
 | `setup-full.ps1`, `setup-standard.ps1`, `uninstall.ps1` | Fixed-action wrappers that verify and call the signed bootstrap. |
-| `dev-config.ps1` | The orchestrator: elevation, shell selection, run lock, logging, phases, and summary. |
+| `dev-config.ps1` | The orchestrator shared by every workload: elevation, shell selection, run lock, logging, phases, and summary. |
+| `workloads/<name>.ps1` | A workload definition: its display name, supported actions, and phase list. `devconfig` is the default. |
+| `steps/_workload.ps1` | Loads and validates workload definitions, and passes each phase its parameters and step selection. |
 | `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
 | `steps/_security.ps1` | Signature and directory-permission checks. Its signature is verified before loading unless `-AllowUnsigned` is used. |
 | `steps/_*.ps1` | Shared helpers: elevation, reboot and resume, winget, registry, Terminal settings, retry, process execution, console. |
 | `steps/<phase>.ps1` | One file per phase, each exporting a single `Invoke-<Name>Phase` function. |
 
-Adding a phase means adding one file and one line in the `$phases` list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.
+Adding a phase means adding one file and one entry in a workload's phase list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.
+
+### Adding a workload
+
+A workload reuses the shared engine, so it only describes *what* to set up. Everything else — elevation,
+signature checks, the protected install, PowerShell 7, WinGet recovery, retries, logging, the run lock,
+and the summary — comes from the files above and is fixed once for every workload.
+
+1. Add `workloads/<name>.ps1`. It takes `-Action` and returns a hashtable; it must not change the machine.
+   [`workloads/winui.ps1`](./workloads/winui.ps1) is the model to copy.
+
+   | Key | Required | Meaning |
+   | --- | -------- | ------- |
+   | `Name` | Yes | Display name, used as "`<Name>` setup complete." |
+   | `Actions` | Yes | Supported `-Action` values. Other actions are rejected before anything runs. |
+   | `Phases` | Yes | Ordered phases. Each has `File`, `Function`, and `Title`, plus optional `Parameters` (passed to the phase function) and `Steps` (run only these steps of a shared phase). |
+   | `MinimumOSVersion` | No | Oldest supported Windows version, checked before elevation. |
+   | `SetupNote` | No | Added to the opening line, for example the one restart or a large download. |
+   | `UninstallWarning` | No | Shown in yellow before cleanup starts. |
+   | `Notes` | No | Lines printed after the summary, such as a next step. |
+
+2. Reuse phases wherever possible. Install packages by name through the packages phase: add any new package to
+   the catalog in [`steps/packages.ps1`](./steps/packages.ps1) once, and every workload can list it. Pick
+   individual steps from a shared phase with `Steps`, as WinUI does for Developer Mode and the WinUI templates.
+   Only write a new phase file for work no phase covers, like [`steps/visual-studio.ps1`](./steps/visual-studio.ps1).
+3. Add a signed entry point at `src/Workloads/<name>/setup.ps1` by copying
+   [`Workloads/winui/setup.ps1`](../Workloads/winui/setup.ps1) and changing only `-Workload`.
+4. Test from a clone without signing: `.\src\windows-dev-config\dev-config.ps1 -AllowUnsigned -Workload <name>`.
+   After the sign cycle, point a short link such as `https://aka.ms/devconfig/<name>/setup.ps1` at the
+   repository-root `Workloads/<name>/setup.ps1`.
+
+The engine validates definitions when it loads them: unknown keys, missing phase files or functions, unknown
+phase parameters, unknown package names, and `Steps` that match nothing all stop the run with a message.

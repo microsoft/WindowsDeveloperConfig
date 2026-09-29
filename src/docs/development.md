@@ -25,6 +25,13 @@ PowerShell scripts with no configuration file at all. They keep the same
 idempotency contract: every step checks current state, acts only when
 needed, and verifies the result.
 
+Windows Dev Config's engine also runs **single workloads** through
+`bootstrap.ps1 -Workload <name>`, so a workload gets the same one-line,
+signed, elevated setup without `winget configure`. WinUI 3 is the first
+(`irm https://aka.ms/devconfig/winui/setup.ps1 | iex`); its
+`configuration.winget` stays for `winget configure` users and the Command
+Palette extension. See [Adding a workload](../windows-dev-config/README.md#adding-a-workload).
+
 Every automated flow is **exercised on a real GitHub-hosted runner** on every
 push, pull request, and nightly: the flow is applied, then a canonical "hello
 world" is built and executed, and its stdout is diffed against a checked-in
@@ -54,7 +61,7 @@ Command Palette extension.
 | PowerShell        | ✅ automated   | `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinAppCLI         | ✅ automated   | Developer Mode + `Microsoft.DotNet.SDK.10` + `Microsoft.WinAppCli` |
-| WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCli` + WinUI/Universal/ManagedDesktop VS workloads |
+| WinUI 3           | 🙋 manual     | `Microsoft.DotNet.SDK.10`, `Microsoft.VisualStudio.Community`, `Microsoft.WinAppCli` + WinUI/Universal/ManagedDesktop VS workloads. Also a PowerShell-native one-liner that adds the WinUI `dotnet new` templates ([`workloads/winui.ps1`](../windows-dev-config/workloads/winui.ps1)) |
 | Windows Dev Config | 🙋 manual     | PowerShell setup for developer tools, Windows settings, fonts, Terminal, and WSL + Ubuntu (see [`windows-dev-config/README.md`](../windows-dev-config/README.md)) |
 | Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
@@ -86,8 +93,8 @@ Workloads/
   java/            # configuration.winget (core) + install.ps1 (thin shim)
   rust/            # configuration.winget (core) + install.ps1 (thin shim)
   winforms/        # configuration.winget (core) + install.ps1 (thin shim)
-  winui/           # configuration.winget (core) + install.ps1 (thin shim)
-windows-dev-config/    # Windows Dev Config — bootstrap.ps1 (remote entry) + dev-config.ps1 (orchestrator) + steps/*.ps1 + README.md
+  winui/           # configuration.winget (core) + install.ps1 (thin shim) + setup.ps1 (one-line setup via the engine)
+windows-dev-config/    # Windows Dev Config — bootstrap.ps1 (remote entry) + dev-config.ps1 (orchestrator) + steps/*.ps1 + workloads/*.ps1 (devconfig, winui) + README.md
 wsl-comfort/           # Comfort Shell — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
 tests/
   _harness/          # build-run-diff harness used by CI:
@@ -348,3 +355,9 @@ Adding a language is a **data change**, not a workflow change:
    command, and expected-output path for each supported OS.
 
 That's it — `discover` in CI picks up the new flow automatically.
+
+To give a workload a one-line setup on the PowerShell engine (like
+`irm https://aka.ms/devconfig/winui/setup.ps1 | iex`), add a workload
+definition under `windows-dev-config/workloads/` and a `setup.ps1` wrapper
+next to its `configuration.winget`. The steps are in
+[Adding a workload](../windows-dev-config/README.md#adding-a-workload).

@@ -102,9 +102,21 @@ Full details: [`wsl-comfort/readme.md`](./wsl-comfort/readme.md).
 
 ## 🧪 Single-language workloads
 
-Just want one toolchain? Pick a row. Each workload ships a `configuration.winget` file plus a matching `install.ps1` shim that applies it and refreshes PATH in the current session. 
+Just want one toolchain? Each workload ships a `configuration.winget` file plus a matching `install.ps1` shim that applies it and refreshes PATH in the current session. WinUI 3 also has a one-line setup that needs neither.
 
-Most of the single-language workloads use [`winget configure`](https://learn.microsoft.com/en-us/windows/package-manager/winget/configure). If you've never used it before, enable it once:
+### One-line setup
+
+WinUI 3 runs on the same engine as Windows Dev Config: one command, nothing to clone, no `winget configure`. Open any PowerShell window — elevated or not — and run:
+
+```powershell
+irm https://aka.ms/devconfig/winui/setup.ps1 | iex
+```
+
+It enables Developer Mode and installs PowerShell 7, .NET SDK 10, the Windows App CLI, Visual Studio Community 2026 with the WinUI workloads, and the WinUI `dotnet new` templates. It is idempotent, so re-running it only fixes what has drifted. Details: [Single workloads](./src/windows-dev-config/README.md#single-workloads).
+
+### With `winget configure`
+
+Pick a row. Most of the single-language workloads use [`winget configure`](https://learn.microsoft.com/en-us/windows/package-manager/winget/configure). If you've never used it before, enable it once:
 
 ```powershell
 winget configure --enable

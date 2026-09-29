@@ -295,4 +295,8 @@ function Invoke-FontsPhase {
     )
 
     Invoke-DevConfigSteps -Steps $steps
+
+    if (Get-DevConfigTerminalFontRunOnceCommand) {
+        Add-DevConfigNote -Message 'The Terminal font will change at your next sign-in; no setup rerun is needed.'
+    }
 }

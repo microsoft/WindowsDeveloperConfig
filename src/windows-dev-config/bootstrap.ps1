@@ -16,6 +16,10 @@
   To select a branch or tag:
 
       & ([scriptblock]::Create((irm <url>))) -Ref 'v1.2.3'
+
+  To apply one workload from workloads\ instead of the full Windows Dev Config setup:
+
+      & ([scriptblock]::Create((irm <url>))) -Workload winui
 #>
 
 [CmdletBinding()]
@@ -24,7 +28,8 @@ param(
     [string] $InstallRoot,
     [switch] $AllowUnsigned,
     [switch] $NoLaunch,
-    [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+    [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
 )
 
 function Invoke-CalmOsBootstrap {
@@ -34,7 +39,8 @@ function Invoke-CalmOsBootstrap {
         [string] $InstallRoot,
         [switch] $AllowUnsigned,
         [switch] $NoLaunch,
-        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
     )
 
     $ErrorActionPreference = 'Stop'
@@ -42,6 +48,9 @@ function Invoke-CalmOsBootstrap {
 
     $repo = 'microsoft/WindowsDeveloperConfig'
     $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    $Workload = $Workload.ToLowerInvariant()
+    # The default workload is omitted from command lines so refs that predate workloads still accept them.
+    $workloadSuffix = if ($Workload -ne 'devconfig') { " -Workload $Workload" } else { '' }
 
     # Reject refs that could escape the repository path.
     if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
@@ -79,7 +88,8 @@ function Invoke-CalmOsBootstrap {
             [Parameter(Mandatory)] [string] $InstallRoot,
             [switch] $AllowUnsigned,
             [switch] $NoLaunch,
-            [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+            [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+            [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
         )
 
         $launcher = {
@@ -88,7 +98,8 @@ function Invoke-CalmOsBootstrap {
                 [string] $InstallRoot,
                 [switch] $AllowUnsigned,
                 [switch] $NoLaunch,
-                [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+                [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+                [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
             )
 
             $ErrorActionPreference = 'Stop'
@@ -132,6 +143,7 @@ function Invoke-CalmOsBootstrap {
             $arguments = @('-NoProfile')
             if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
             $arguments += '-File', $target, '-Ref', $Ref, '-InstallRoot', $InstallRoot, '-Action', $Action
+            if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
             if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
             if ($NoLaunch) { $arguments += '-NoLaunch' }
             & (Join-Path $PSHOME $shellName) @arguments
@@ -144,6 +156,7 @@ function Invoke-CalmOsBootstrap {
         $escapedRef = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Ref)
         $escapedRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($InstallRoot)
         $command = "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot' -Action '$Action'"
+        if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
         if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
         if ($NoLaunch) { $command += ' -NoLaunch' }
         # Start-Process joins arguments; Windows quoting keeps the command intact.
@@ -168,7 +181,7 @@ function Invoke-CalmOsBootstrap {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch -Action $Action
+        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch -Action $Action -Workload $Workload
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
         $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait -PassThru
         if ($proc.ExitCode -ne 0) {
@@ -176,7 +189,7 @@ function Invoke-CalmOsBootstrap {
         }
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
-            Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+            Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
         }
         return
     }
@@ -219,7 +232,11 @@ function Invoke-CalmOsBootstrap {
     }
 
     Write-Host ''
-    Write-Host 'Calm OS setup' -ForegroundColor Cyan
+    if ($Workload -eq 'devconfig') {
+        Write-Host 'Calm OS setup' -ForegroundColor Cyan
+    } else {
+        Write-Host "Windows Developer Config: $Workload workload" -ForegroundColor Cyan
+    }
     Write-Host "  Fetching '$Ref' from $repo..." -ForegroundColor DarkGray
 
     $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
@@ -252,6 +269,11 @@ function Invoke-CalmOsBootstrap {
         if (-not ((Test-Path (Join-Path $setupDir 'bootstrap.ps1')) -and (Test-Path (Join-Path $setupDir 'dev-config.ps1')) -and (Test-Path (Join-Path $setupDir 'steps\_security.ps1')))) {
             throw "'$Ref' doesn't contain the requested setup under $flow. Use -AllowUnsigned only for the source copy."
         }
+        # Refs that predate workloads have no workloads folder but still run the default setup.
+        $workloadsDir = Join-Path $setupDir 'workloads'
+        if ($Workload -ne 'devconfig' -and -not (Test-Path -LiteralPath (Join-Path $workloadsDir "$Workload.ps1") -PathType Leaf)) {
+            throw "'$Ref' doesn't contain the '$Workload' workload under $flow. Check the workload name, or pick a newer -Ref."
+        }
         Assert-DevConfigProtectedTree -Directory $setupDir
         if ($AllowUnsigned) {
             Write-Host '  Using the unsigned source copy because -AllowUnsigned was passed.' -ForegroundColor Yellow
@@ -265,6 +287,9 @@ function Invoke-CalmOsBootstrap {
         # Keep logs and progress when replacing setup scripts.
         Copy-Item -LiteralPath (Join-Path $setupDir 'bootstrap.ps1'), (Join-Path $setupDir 'dev-config.ps1') -Destination $InstallRoot -Force
         Copy-Item -LiteralPath (Join-Path $setupDir 'steps') -Destination $InstallRoot -Recurse -Force
+        if (Test-Path -LiteralPath $workloadsDir) {
+            Copy-Item -LiteralPath $workloadsDir -Destination $InstallRoot -Recurse -Force
+        }
         Assert-DevConfigProtectedTree -Directory $InstallRoot
         if (-not $AllowUnsigned) {
             Assert-DevConfigMicrosoftSigned -Directory $InstallRoot
@@ -278,13 +303,14 @@ function Invoke-CalmOsBootstrap {
 
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($target)
-            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action"
+            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix"
             if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
             Write-Host "Run when ready: $command" -ForegroundColor Cyan
             return
         }
 
         $arguments += '-File', "`"$target`"", '-Action', $Action
+        if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
         if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
         $start = @{ FilePath = $shell; ArgumentList = $arguments; Wait = $true; PassThru = $true }
         if ($Action -ne 'Uninstall') { $start.NoNewWindow = $true }

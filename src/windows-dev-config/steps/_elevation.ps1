@@ -153,7 +153,8 @@ function Get-DevConfigRelaunchArguments {
         [switch] $AllowUnsigned,
         [switch] $RequestElevation,
         [switch] $ApplyTerminalFont,
-        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
     )
     $arguments = @('-NoProfile')
     if (-not $AllowUnsigned) {
@@ -164,6 +165,10 @@ function Get-DevConfigRelaunchArguments {
         $arguments += '-ApplyTerminalFont'
     } else {
         $arguments += '-Action', $Action
+        # The default workload is omitted so these command lines match releases that predate workloads.
+        if ($Workload -ne 'devconfig') {
+            $arguments += '-Workload', $Workload
+        }
         if (-not $RequestElevation) {
             $arguments += '-NoElevate'
         }
@@ -183,7 +188,8 @@ function Invoke-DevConfigElevate {
         [switch] $NoElevate,
         [switch] $Resumed,
         [switch] $AllowUnsigned,
-        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
     )
 
     if (Test-DevConfigIsAdmin) {
@@ -202,7 +208,7 @@ function Invoke-DevConfigElevate {
         Get-DevConfigShellExe
     }
     # Preserve -Resumed so the elevated process continues after the WSL reboot.
-    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
     try {
         $proc = Start-Process -FilePath $shell -ArgumentList $relaunchArgs -Verb RunAs -Wait -PassThru
     } catch {

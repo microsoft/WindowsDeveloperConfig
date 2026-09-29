@@ -136,6 +136,8 @@ flows:
     # WinUI hello world needs an interactive desktop session to actually run;
     # CI only validates that the configuration applies cleanly. The build/run
     # fields stay populated so a human can execute the flow locally.
+    # Workloads/winui/setup.ps1 is the PowerShell-native one-line setup for the
+    # same toolchain (windows-dev-config/workloads/winui.ps1).
     manual_test: true
     os: [windows]
     windows:

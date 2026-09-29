@@ -128,7 +128,7 @@ resources:
           --productId Microsoft.VisualStudio.Product.Community
           --add Microsoft.VisualStudio.Workload.ManagedDesktop
           --add Microsoft.VisualStudio.Workload.Universal
-          --add Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cs
+          --add Microsoft.VisualStudio.Component.WindowsAppSdkSupport.CSharp
           --quiet --norestart --wait;
           if ($LASTEXITCODE -ne 0) { throw "Visual Studio workload installation failed with exit code $LASTEXITCODE." }
         treatAsArray: true

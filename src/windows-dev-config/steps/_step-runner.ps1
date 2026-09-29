@@ -12,6 +12,7 @@ $Script:DevConfigCheckMark = [char]0x2713
 # Defaults allow the step runner to load before the orchestrator sets run state.
 $Script:DevConfigResumed     = $false
 $Script:DevConfigAction      = 'Full'
+$Script:DevConfigWorkload    = 'devconfig'
 $Script:DevConfigTally       = @{ Done = 0; AlreadyOk = 0; Warned = 0 }
 $Script:DevConfigTalliedSteps = @{}
 # Persist flagged names so a blocked step is counted once across the reboot.
@@ -22,6 +23,10 @@ $Script:DevConfigPhaseIndex       = 0
 $Script:DevConfigPhaseTotal       = 0
 $Script:DevConfigPhaseTitle       = ''
 $Script:DevConfigPhaseHeaderShown = $false
+# A workload that reuses part of a shared phase names the steps it wants; null runs them all.
+$Script:DevConfigPhaseSteps       = $null
+# Notes collected during the run print with the final summary so they do not scroll away.
+$Script:DevConfigNotes            = @()
 
 function Write-DevConfigPhaseHeader {
     param(
@@ -40,6 +45,14 @@ function Show-DevConfigPhaseHeader {
     }
     Write-DevConfigPhaseHeader -Index $Script:DevConfigPhaseIndex -Total $Script:DevConfigPhaseTotal -Title $Script:DevConfigPhaseTitle
     $Script:DevConfigPhaseHeaderShown = $true
+}
+
+# Each workload keeps its own progress file so one workload's resume cannot absorb another's tally.
+function Get-DevConfigTallyPath {
+    param(
+        [Parameter(Mandatory)] [string] $Directory
+    )
+    return (Join-Path $Directory "$Script:DevConfigWorkload-tally.json")
 }
 
 # Save progress and Terminal backup tracking across the reboot.
@@ -163,6 +176,18 @@ function Clear-DevConfigStepFlag {
     $Script:DevConfigTally.Warned = $Script:DevConfigWarnedSteps.Count
 }
 
+# Steps use notes for follow-ups the user must do after the run, such as a restart an installer requested.
+function Add-DevConfigNote {
+    param(
+        [Parameter(Mandatory)] [string] $Message,
+        [switch] $Warning
+    )
+    if (@($Script:DevConfigNotes | Where-Object { $_.Message -eq $Message }).Count -gt 0) {
+        return
+    }
+    $Script:DevConfigNotes += [pscustomobject]@{ Message = $Message; Warning = [bool]$Warning }
+}
+
 # Allows unverified work to be flagged without failing the run when confirmation lags the apply action.
 function Set-DevConfigStepUnverified {
     param(
@@ -191,6 +216,14 @@ function Invoke-DevConfigSteps {
     param(
         [Parameter(Mandatory)] [object[]] $Steps
     )
+
+    if ($Script:DevConfigPhaseSteps) {
+        $Steps = @($Steps | Where-Object { $Script:DevConfigPhaseSteps -contains $_.Name })
+        # A selection that matches nothing is a workload typo, not a phase with nothing to do.
+        if ($Steps.Count -eq 0) {
+            throw "The '$Script:DevConfigPhaseTitle' phase has none of the steps this workload selects: $($Script:DevConfigPhaseSteps -join ', ')."
+        }
+    }
 
     # Fresh runs print before slow checks so the console shows why it is waiting.
     if (-not $Script:DevConfigResumed) {

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Installs or removes the Calm OS package set via winget.
+  Installs or removes a workload's packages via winget, from one shared package catalog.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -56,16 +56,10 @@ function Remove-DevConfigNvm {
     }
 }
 
-function Invoke-PackagesPhase {
-    if ($Script:DevConfigAction -ne 'Uninstall') {
-        # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
-        if (-not $Script:DevConfigResumed) {
-            Show-DevConfigPhaseHeader
-        }
-        Initialize-DevConfigWinGet
-        Confirm-DevConfigWinGetReady
-    }
-
+# Every package any workload installs; a workload lists the names it wants, in its own install order.
+# KeepOnUninstall, AdditionalUninstallIds, UninstallOrder, and InnoUninstall shape cleanup. Settings are
+# registry values that go with the package: applied after installs and reset first during cleanup.
+function Get-DevConfigPackageCatalog {
     # PowerShell's process architecture can differ from Windows' native architecture.
     $architecture = Get-ItemPropertyValue -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name 'PROCESSOR_ARCHITECTURE'
     $vcRedistId = switch ($architecture) {
@@ -74,7 +68,7 @@ function Invoke-PackagesPhase {
         default { throw "Unsupported Windows architecture: $architecture" }
     }
 
-    $packages = @(
+    @(
         @{
             Name            = 'Terminal'
             Id              = 'Microsoft.WindowsTerminal'
@@ -172,21 +166,68 @@ function Invoke-PackagesPhase {
             Id             = 'Microsoft.PowerToys'
             Large          = $true
             UninstallOrder = 13
+            Settings       = @(
+                @{
+                    Name        = 'PowerToysAOT'
+                    KeyPath     = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Microsoft.PowerToysWin32'
+                    ValueName   = 'Enabled'
+                    Value       = 0
+                    Description = 'Turn off PowerToys always-on-top notifications'
+                }
+            )
+        }
+        # Visual Studio Community 2026 (18.x). steps\visual-studio.ps1 adds workloads to this instance.
+        @{
+            Name  = 'VisualStudioCommunity'
+            Id    = 'Microsoft.VisualStudio.Community'
+            Large = $true
         }
     )
-    $powerToysNotifications = @{
-        Name        = 'PowerToysAOT'
-        KeyPath     = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings\Microsoft.PowerToysWin32'
-        ValueName   = 'Enabled'
-        Value       = 0
-        Description = 'Turn off PowerToys always-on-top notifications'
+}
+
+# Returns catalog entries in the requested order so each workload controls its own install order.
+function Get-DevConfigPackage {
+    param(
+        [Parameter(Mandatory)] [string[]] $Name
+    )
+    $duplicates = @($Name | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+    if ($duplicates.Count -gt 0) {
+        throw "Packages listed more than once: $($duplicates -join ', ')."
+    }
+    $catalog = @(Get-DevConfigPackageCatalog)
+    $selected = foreach ($packageName in $Name) {
+        $match = @($catalog | Where-Object { $_.Name -eq $packageName })
+        if ($match.Count -ne 1) {
+            throw "Package '$packageName' is not in the package catalog in steps\packages.ps1."
+        }
+        $match[0]
+    }
+    return $selected
+}
+
+function Invoke-PackagesPhase {
+    param(
+        [Parameter(Mandatory)] [string[]] $Packages
+    )
+    if ($Script:DevConfigAction -ne 'Uninstall') {
+        # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
+        if (-not $Script:DevConfigResumed) {
+            Show-DevConfigPhaseHeader
+        }
+        Initialize-DevConfigWinGet
+        Confirm-DevConfigWinGetReady
     }
 
+    $selected = @(Get-DevConfigPackage -Name $Packages)
+    $settings = @(foreach ($package in $selected) { if ($package['Settings']) { $package['Settings'] } })
+
     if ($Script:DevConfigAction -eq 'Uninstall') {
-        $cleanupPackages = $packages | Where-Object { -not $_['KeepOnUninstall'] } |
+        $cleanupPackages = $selected | Where-Object { -not $_['KeepOnUninstall'] } |
             Sort-Object { [int]$_['UninstallOrder'] }
         $steps = @(
-            New-DevConfigRegistryStep -Setting $powerToysNotifications -Reset
+            foreach ($setting in $settings) {
+                New-DevConfigRegistryStep -Setting $setting -Reset
+            }
             foreach ($package in $cleanupPackages) {
                 switch ($package.Name) {
                     'UV' {
@@ -224,20 +265,23 @@ function Invoke-PackagesPhase {
 
     # ArgumentList binds each package's Id at call time instead of relying on closure capture.
     # BestEffort lets independent packages continue; dependent phases verify packages before use.
-    $steps = foreach ($package in $packages) {
-        New-DevConfigStep -Name $package.Name -Description "winget install $($package.Id)" -BestEffort `
-            -Check { param($Id, $Large) Test-DevConfigWingetPackageInstalled -Id $Id } `
-            -Apply {
-                param($Id, $Large)
-                # Large packages can have several quiet download minutes because WinGet reports no progress here.
-                if ($Large) { Write-Host '  (Large download -- several quiet minutes here are normal.)' -ForegroundColor DarkGray }
-                Install-DevConfigWingetPackage -Id $Id
-                Wait-DevConfigWingetPackageSettled -Id $Id
-            } `
-            -ArgumentList @($package.Id, $package.ContainsKey('Large'))
-    }
-
-    $steps += New-DevConfigRegistryStep -Setting $powerToysNotifications
+    $steps = @(
+        foreach ($package in $selected) {
+            New-DevConfigStep -Name $package.Name -Description "winget install $($package.Id)" -BestEffort `
+                -Check { param($Id, $Large) Test-DevConfigWingetPackageInstalled -Id $Id } `
+                -Apply {
+                    param($Id, $Large)
+                    # Large packages can have several quiet download minutes because WinGet reports no progress here.
+                    if ($Large) { Write-Host '  (Large download -- several quiet minutes here are normal.)' -ForegroundColor DarkGray }
+                    Install-DevConfigWingetPackage -Id $Id
+                    Wait-DevConfigWingetPackageSettled -Id $Id
+                } `
+                -ArgumentList @($package.Id, $package.ContainsKey('Large'))
+        }
+        foreach ($setting in $settings) {
+            New-DevConfigRegistryStep -Setting $setting
+        }
+    )
 
     Invoke-DevConfigSteps -Steps $steps
 }

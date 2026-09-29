@@ -6,11 +6,17 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Script:DevConfigResumeTask = 'WindowsDevConfigResume'
+# Each workload has its own task so one workload's run never cancels another's pending resume.
+function Get-DevConfigResumeTaskName {
+    if ($Script:DevConfigWorkload -eq 'devconfig') {
+        return 'WindowsDevConfigResume'
+    }
+    return "WindowsDevConfigResume-$Script:DevConfigWorkload"
+}
 
 function Clear-DevConfigResume {
     # SilentlyContinue allows cleanup when no resume task is registered.
-    Unregister-ScheduledTask -TaskName $Script:DevConfigResumeTask -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName (Get-DevConfigResumeTaskName) -Confirm:$false -ErrorAction SilentlyContinue
 }
 
 function Suspend-DevConfigForReboot {
@@ -20,7 +26,7 @@ function Suspend-DevConfigForReboot {
 
     $shell = Get-DevConfigTaskShellExe
     # The limited task requires fresh UAC consent before any resumed code runs elevated.
-    $arguments = (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed -AllowUnsigned:$Script:DevConfigAllowUnsigned -RequestElevation -Action $Script:DevConfigAction) -join ' '
+    $arguments = (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed -AllowUnsigned:$Script:DevConfigAllowUnsigned -RequestElevation -Action $Script:DevConfigAction -Workload $Script:DevConfigWorkload) -join ' '
     $action = New-ScheduledTaskAction -Execute $shell -Argument $arguments
 
     # Scheduled task logon matching requires the DOMAIN\User or MACHINE\User account name.
@@ -36,9 +42,9 @@ function Suspend-DevConfigForReboot {
     }
 
     Clear-DevConfigResume
-    Save-DevConfigTally -Path (Join-Path (Split-Path -Path $ScriptPath -Parent) 'devconfig-tally.json') `
+    Save-DevConfigTally -Path (Get-DevConfigTallyPath -Directory (Split-Path -Path $ScriptPath -Parent)) `
         -TerminalBackedUp $Script:DevConfigTerminalBackedUp
-    Register-ScheduledTask -TaskName $Script:DevConfigResumeTask -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+    Register-ScheduledTask -TaskName (Get-DevConfigResumeTaskName) -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
 
     Write-Host ''
     Write-Host 'WSL needs a restart to finish. Rebooting in 10s -- setup continues after you' -ForegroundColor Yellow
