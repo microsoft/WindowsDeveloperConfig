@@ -275,7 +275,9 @@ function Update-DevConfigWinget {
 
 function Test-DevConfigWingetPackageInstalled {
     param(
-        [Parameter(Mandatory)] [string] $Id
+        [Parameter(Mandatory)] [string] $Id,
+        # Accepts an installed version that has an update, for apps that update themselves.
+        [switch] $AnyVersion
     )
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
         $listed = Invoke-DevConfigWingetCli -Arguments @('list', '--id', $Id, '--exact', '--accept-source-agreements')
@@ -285,6 +287,9 @@ function Test-DevConfigWingetPackageInstalled {
         if ($listed.ExitCode -ne 0) {
             throw "winget list $Id failed with exit code $($listed.ExitCode)"
         }
+        if ($AnyVersion) {
+            return $true
+        }
         # useLatest requires the package to be current, not only installed, so match the module path.
         return -not (Test-DevConfigWingetUpgradeAvailable -Id $Id)
     }
@@ -293,6 +298,9 @@ function Test-DevConfigWingetPackageInstalled {
     $pkg = Get-WinGetPackage -Id $Id -Source winget -MatchOption EqualsCaseInsensitive
     if (-not $pkg) {
         return $false
+    }
+    if ($AnyVersion) {
+        return $true
     }
 
     # useLatest requires the package to be current, not only installed.
@@ -338,10 +346,11 @@ function Install-DevConfigWingetPackage {
 # Get-WinGetPackage catalog reads can lag after install, so wait before checking the result.
 function Wait-DevConfigWingetPackageSettled {
     param(
-        [Parameter(Mandatory)] [string] $Id
+        [Parameter(Mandatory)] [string] $Id,
+        [switch] $AnyVersion
     )
     for ($attempt = 1; $attempt -le 5; $attempt++) {
-        if (Test-DevConfigWingetPackageInstalled -Id $Id) {
+        if (Test-DevConfigWingetPackageInstalled -Id $Id -AnyVersion:$AnyVersion) {
             return
         }
         if ($attempt -eq 1) {
@@ -349,7 +358,8 @@ function Wait-DevConfigWingetPackageSettled {
         }
         Start-Sleep -Seconds 3
     }
-    Set-DevConfigStepUnverified -Reason "WinGet reported $Id installed, but its catalog still doesn't list it as current 15s later. It's on the machine -- re-run to confirm."
+    $state = if ($AnyVersion) { 'installed' } else { 'current' }
+    Set-DevConfigStepUnverified -Reason "WinGet reported $Id installed, but its catalog still doesn't list it as $state 15s later. It's on the machine -- re-run to confirm."
 }
 
 function Invoke-DevConfigInnoCleanup {

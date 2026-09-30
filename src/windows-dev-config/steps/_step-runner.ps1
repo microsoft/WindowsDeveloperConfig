@@ -218,11 +218,13 @@ function Invoke-DevConfigSteps {
     )
 
     if ($Script:DevConfigPhaseSteps) {
-        $Steps = @($Steps | Where-Object { $Script:DevConfigPhaseSteps -contains $_.Name })
-        # A selection that matches nothing is a workload typo, not a phase with nothing to do.
-        if ($Steps.Count -eq 0) {
-            throw "The '$Script:DevConfigPhaseTitle' phase has none of the steps this workload selects: $($Script:DevConfigPhaseSteps -join ', ')."
+        # Every selected name must exist, so a misspelled step fails instead of being skipped.
+        $names = @($Steps | ForEach-Object { $_.Name })
+        $unknown = @($Script:DevConfigPhaseSteps | Where-Object { $names -notcontains $_ })
+        if ($unknown.Count -gt 0) {
+            throw "The '$Script:DevConfigPhaseTitle' phase has no step named $($unknown -join ', '). Its steps are $($names -join ', ')."
         }
+        $Steps = @($Steps | Where-Object { $Script:DevConfigPhaseSteps -contains $_.Name })
     }
 
     # Fresh runs print before slow checks so the console shows why it is waiting.

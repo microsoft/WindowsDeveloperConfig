@@ -88,7 +88,14 @@ if ($ApplyTerminalFont) {
 # The workload decides which phases run; everything else in this script is shared by every workload.
 $Workload = $Workload.ToLowerInvariant()
 $Script:DevConfigWorkload = $Workload
-$definition = Get-DevConfigWorkload -Directory (Join-Path $PSScriptRoot 'workloads') -Workload $Workload -Action $Action
+try {
+    $definition = Get-DevConfigWorkload -Directory (Join-Path $PSScriptRoot 'workloads') -Workload $Workload -Action $Action
+} catch {
+    # Pause so the reason stays readable when this runs in a window that closes on exit.
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    Wait-DevConfigKeyPress
+    exit 1
+}
 $workloadName = $definition['Name']
 
 # TLS is configured before any download step runs.
@@ -143,28 +150,25 @@ if ($Action -eq 'Uninstall') {
 
 $failure = $null
 try {
-    # Every phase file is loaded before any of them runs, so the elevated process is not still reading new code off disk minutes in.
-    $loadedPhases = @()
+    # Every phase is loaded and checked before any runs, so a bad definition changes nothing and no code is read off disk minutes in.
     foreach ($phase in $phases) {
         $path = Join-Path $stepsDir $phase.File
         if (-not (Test-Path -LiteralPath $path)) {
-            if ($Action -eq 'Uninstall') {
-                throw "The cleanup script is missing: $path. Run bootstrap.ps1 -Action Uninstall to reinstall it."
-            }
-            Write-Host "-- $($phase.File) not written yet, skipping" -ForegroundColor DarkGray
-            continue
+            $rerun = "bootstrap.ps1 -Action $Action"
+            if ($Workload -ne 'devconfig') { $rerun += " -Workload $Workload" }
+            throw "The $operation script is missing: $path. Run $rerun to reinstall it."
         }
         . $path
-        $loadedPhases += $phase
+        $null = Resolve-DevConfigWorkloadPhase -Phase $phase -OrchestratorPath $PSCommandPath
     }
 
     $phaseIndex = 0
-    foreach ($phase in $loadedPhases) {
+    foreach ($phase in $phases) {
         $phaseIndex++
 
         # Script-scoped phase metadata avoids passing header state through every phase file.
         $Script:DevConfigPhaseIndex       = $phaseIndex
-        $Script:DevConfigPhaseTotal       = $loadedPhases.Count
+        $Script:DevConfigPhaseTotal       = $phases.Count
         $Script:DevConfigPhaseTitle       = $phase.Title
         $Script:DevConfigPhaseHeaderShown = $false
 

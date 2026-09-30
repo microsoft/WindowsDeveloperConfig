@@ -170,6 +170,7 @@ function Invoke-CalmOsBootstrap {
         Write-Verbose "Could not raise the TLS version: $($_.Exception.Message)"
     }
 
+    $refName = $Ref
     if ($Ref -notmatch '^[a-fA-F0-9]{40}$') {
         $resolvedRef = (Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/commits/$([Uri]::EscapeDataString($Ref))" -UseBasicParsing -TimeoutSec 60).sha
         if ($resolvedRef -isnot [string] -or $resolvedRef -notmatch '^[a-fA-F0-9]{40}$') {
@@ -177,10 +178,23 @@ function Invoke-CalmOsBootstrap {
         }
         $Ref = $resolvedRef
     }
+    $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        # The elevated window closes on errors, so a ref without the workload is reported here, before UAC.
+        if ($Workload -ne 'devconfig') {
+            try {
+                $null = Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$repo/$Ref/$flow/workloads/$Workload.ps1" -Method Head -UseBasicParsing -TimeoutSec 60
+            } catch {
+                $failure = $_
+                $status = $null
+                try { $status = [int]$failure.Exception.Response.StatusCode } catch { }
+                if ($status -ne 404) { throw $failure }
+                throw "'$refName' doesn't contain the '$Workload' workload under $flow. Check the workload name, or pick a newer -Ref."
+            }
+        }
         $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch -Action $Action -Workload $Workload
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
         $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait -PassThru
@@ -239,7 +253,6 @@ function Invoke-CalmOsBootstrap {
     }
     Write-Host "  Fetching '$Ref' from $repo..." -ForegroundColor DarkGray
 
-    $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
     $securityCode = (Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$repo/$Ref/$flow/steps/_security.ps1" -UseBasicParsing -TimeoutSec 60).TrimStart([char]0xFEFF)
     if (-not $AllowUnsigned) {
         # Windows PowerShell requires UTF-16LE for in-memory signature verification.

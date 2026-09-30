@@ -105,7 +105,7 @@ function Get-DevConfigWorkload {
 }
 
 # Parameters come from the workload; phases that can reboot also receive the orchestrator path so resume can relaunch it.
-function Invoke-DevConfigWorkloadPhase {
+function Resolve-DevConfigWorkloadPhase {
     param(
         [Parameter(Mandatory)] [hashtable] $Phase,
         [Parameter(Mandatory)] [string] $OrchestratorPath
@@ -128,9 +128,27 @@ function Invoke-DevConfigWorkloadPhase {
         $parameters['OrchestratorPath'] = $OrchestratorPath
     }
 
+    # A missing mandatory value would otherwise stop the run at a parameter prompt.
+    foreach ($parameter in $command.Parameters.Values) {
+        $mandatory = @($parameter.Attributes | Where-Object { $_ -is [Parameter] -and $_.Mandatory }).Count -gt 0
+        if ($mandatory -and -not $parameters.ContainsKey($parameter.Name)) {
+            throw "$($Phase['Function']) requires -$($parameter.Name), so the workload must set it in Parameters."
+        }
+    }
+    return @{ Command = $command; Parameters = $parameters }
+}
+
+function Invoke-DevConfigWorkloadPhase {
+    param(
+        [Parameter(Mandatory)] [hashtable] $Phase,
+        [Parameter(Mandatory)] [string] $OrchestratorPath
+    )
+    $resolved = Resolve-DevConfigWorkloadPhase -Phase $Phase -OrchestratorPath $OrchestratorPath
+    $parameters = $resolved.Parameters
+
     $Script:DevConfigPhaseSteps = $Phase['Steps']
     try {
-        & $command @parameters
+        & $resolved.Command @parameters
     } finally {
         $Script:DevConfigPhaseSteps = $null
     }

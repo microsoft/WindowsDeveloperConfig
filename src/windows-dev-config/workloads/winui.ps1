@@ -18,11 +18,13 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Visual Studio 2026 supports Windows 11 and Windows Server 2019 or later.
+$isClient = (Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'InstallationType') -eq 'Client'
+
 @{
     Name             = 'WinUI'
     Actions          = @('Full')
-    # The Windows App SDK requires Windows 10 version 1809 or later.
-    MinimumOSVersion = '10.0.17763'
+    MinimumOSVersion = if ($isClient) { '10.0.22000' } else { '10.0.17763' }
     SetupNote        = 'Visual Studio alone is a multi-GB download'
     Notes            = @(
         'Open a new terminal so dotnet and winapp are on PATH.'

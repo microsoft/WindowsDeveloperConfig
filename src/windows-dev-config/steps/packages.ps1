@@ -178,9 +178,11 @@ function Get-DevConfigPackageCatalog {
         }
         # Visual Studio Community 2026 (18.x). steps\visual-studio.ps1 adds workloads to this instance.
         @{
-            Name  = 'VisualStudioCommunity'
-            Id    = 'Microsoft.VisualStudio.Community'
-            Large = $true
+            Name       = 'VisualStudioCommunity'
+            Id         = 'Microsoft.VisualStudio.Community'
+            Large      = $true
+            # Visual Studio updates itself, so a rerun must not start a multi-GB upgrade that needs it closed.
+            AnyVersion = $true
         }
     )
 }
@@ -268,15 +270,15 @@ function Invoke-PackagesPhase {
     $steps = @(
         foreach ($package in $selected) {
             New-DevConfigStep -Name $package.Name -Description "winget install $($package.Id)" -BestEffort `
-                -Check { param($Id, $Large) Test-DevConfigWingetPackageInstalled -Id $Id } `
+                -Check { param($Id, $Large, $AnyVersion) Test-DevConfigWingetPackageInstalled -Id $Id -AnyVersion:$AnyVersion } `
                 -Apply {
-                    param($Id, $Large)
+                    param($Id, $Large, $AnyVersion)
                     # Large packages can have several quiet download minutes because WinGet reports no progress here.
                     if ($Large) { Write-Host '  (Large download -- several quiet minutes here are normal.)' -ForegroundColor DarkGray }
                     Install-DevConfigWingetPackage -Id $Id
-                    Wait-DevConfigWingetPackageSettled -Id $Id
+                    Wait-DevConfigWingetPackageSettled -Id $Id -AnyVersion:$AnyVersion
                 } `
-                -ArgumentList @($package.Id, $package.ContainsKey('Large'))
+                -ArgumentList @($package.Id, $package.ContainsKey('Large'), [bool]$package['AnyVersion'])
         }
         foreach ($setting in $settings) {
             New-DevConfigRegistryStep -Setting $setting

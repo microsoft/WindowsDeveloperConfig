@@ -11,7 +11,7 @@ $Script:DevConfigVsProductId    = 'Microsoft.VisualStudio.Product.Community'
 $Script:DevConfigVsVersionRange = '[18.0,19.0)'
 $Script:DevConfigVsProductName  = 'Visual Studio Community 2026'
 
-# These installer exit codes mean success, with a restart needed before Visual Studio is fully usable.
+# Installer exit codes for success that needs a restart: 1641 (started), 3010 (required), 862968 (recommended).
 $Script:DevConfigVsRestartCodes = @(1641, 3010, 862968)
 
 function Get-DevConfigVsInstallerDirectory {
@@ -72,7 +72,7 @@ function Wait-DevConfigVisualStudioInstaller {
     $nextProgress = 60
     while (@(Get-DevConfigVisualStudioInstallerProcess).Count -gt 0) {
         if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-            throw 'The Visual Studio Installer is still running. Let it finish, then run this again.'
+            throw 'The Visual Studio Installer is still running. Close it or let it finish, then run this again.'
         }
         if ($timer.Elapsed.TotalSeconds -ge $nextProgress) {
             Write-Host "  still working -- $([int]$timer.Elapsed.TotalMinutes)m so far" -ForegroundColor DarkGray
@@ -86,6 +86,11 @@ function Add-DevConfigVisualStudioComponents {
     param(
         [Parameter(Mandatory)] [string[]] $Components
     )
+    # The installer can still be finishing the Visual Studio install or an update, so wait before reading the instance.
+    if (@(Get-DevConfigVisualStudioInstallerProcess).Count -gt 0) {
+        Write-Host '  (The Visual Studio Installer is running -- waiting up to 5 minutes for it to finish or close.)' -ForegroundColor DarkGray
+        Wait-DevConfigVisualStudioInstaller -TimeoutSeconds 300
+    }
     $installPath = Get-DevConfigVisualStudioPath
     if (-not $installPath) {
         if (Get-DevConfigVisualStudioPath -IncludeIncomplete) {
@@ -97,9 +102,6 @@ function Add-DevConfigVisualStudioComponents {
     if (-not (Test-Path -LiteralPath $setup)) {
         throw 'The Visual Studio Installer is missing. Repair Visual Studio from Settings > Apps, then run this again.'
     }
-    if (@(Get-DevConfigVisualStudioInstallerProcess).Count -gt 0) {
-        throw 'The Visual Studio Installer is already running. Close it or let it finish, then run this again.'
-    }
 
     Write-Host '  (Several GB -- the Visual Studio Installer works quietly for a while.)' -ForegroundColor DarkGray
     # Start-Process joins arguments with spaces, so the install path is quoted here.
@@ -108,8 +110,16 @@ function Add-DevConfigVisualStudioComponents {
         $arguments += '--add', $component
     }
     $arguments += '--quiet', '--norestart'
-    $exitCode = Invoke-DevConfigProcess -FilePath $setup -Arguments $arguments -TimeoutSeconds 14400 -NoNewWindow
-    Wait-DevConfigVisualStudioInstaller
+    # The installer echoes its log into this window; the full log is in its dd_*.log files.
+    $stdout = [System.IO.Path]::GetTempFileName()
+    $stderr = [System.IO.Path]::GetTempFileName()
+    try {
+        $exitCode = Invoke-DevConfigProcess -FilePath $setup -Arguments $arguments -TimeoutSeconds 14400 -NoNewWindow `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        Wait-DevConfigVisualStudioInstaller
+    } finally {
+        Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+    }
 
     if ($exitCode -eq 0) {
         return

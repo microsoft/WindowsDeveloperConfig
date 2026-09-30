@@ -119,8 +119,10 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 & ([scriptblock]::Create((irm $url))) -Workload winui
 ```
 
-Workloads support `-Action Full` only for now. Visual Studio must be closed while its workloads are
-added; a restart requested by the Visual Studio Installer is listed in the summary. Each workload logs
+Workloads support `-Action Full` only for now. The WinUI workload adds its Visual Studio workloads to
+Visual Studio Community 2026. Community is installed next to any other edition, and an installed copy
+is not upgraded because Visual Studio updates itself. Visual Studio must be closed while its workloads
+are added; a restart requested by the Visual Studio Installer is listed in the summary. Each workload logs
 to `<workload>-log.txt`, for example `%ProgramData%\CalmOS\winui-log.txt`. Workloads share the run lock,
 so only one setup runs at a time.
 
@@ -627,5 +629,9 @@ and the summary — comes from the files above and is fixed once for every workl
    After the sign cycle, point a short link such as `https://aka.ms/devconfig/<name>/setup.ps1` at the
    repository-root `Workloads/<name>/setup.ps1`.
 
-The engine validates definitions when it loads them: unknown keys, missing phase files or functions, unknown
-phase parameters, unknown package names, and `Steps` that match nothing all stop the run with a message.
+The engine checks a workload in three stages, and any problem stops the run with a message:
+
+- When it loads the definition: unknown keys, malformed values, the action, and the minimum Windows version.
+- Before the first phase runs: phase files, functions, and parameters, including required parameters the
+  workload doesn't set.
+- When a phase runs: package names and `Steps` names.
