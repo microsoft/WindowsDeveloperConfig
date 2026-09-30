@@ -110,8 +110,10 @@ function Resolve-DevConfigWorkloadPhase {
         [Parameter(Mandatory)] [hashtable] $Phase,
         [Parameter(Mandatory)] [string] $OrchestratorPath
     )
+    $scriptPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OrchestratorPath)
+    $phasePath = Join-Path (Split-Path -Parent $scriptPath) "steps\$($Phase['File'])"
     $command = Get-Command -Name $Phase['Function'] -CommandType Function -ErrorAction SilentlyContinue
-    if (-not $command) {
+    if (-not $command -or $command.ScriptBlock.File -ne $phasePath) {
         throw "$($Phase['File']) does not define $($Phase['Function'])."
     }
 

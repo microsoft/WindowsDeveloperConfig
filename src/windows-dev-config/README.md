@@ -632,6 +632,6 @@ and the summary — comes from the files above and is fixed once for every workl
 The engine checks a workload in three stages, and any problem stops the run with a message:
 
 - When it loads the definition: unknown keys, malformed values, the action, and the minimum Windows version.
-- Before the first phase runs: phase files, functions, and parameters, including required parameters the
-  workload doesn't set.
+- Before the first phase runs: phase files, functions defined in those files, and parameters, including
+  required parameters the workload doesn't set.
 - When a phase runs: package names and `Steps` names.
