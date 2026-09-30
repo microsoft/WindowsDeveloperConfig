@@ -150,7 +150,7 @@ if ($Action -eq 'Uninstall') {
 
 $failure = $null
 try {
-    # Every phase is loaded and checked before any runs, so a bad definition changes nothing and no code is read off disk minutes in.
+    # Load phase files and check function and parameter names before running any phase.
     foreach ($phase in $phases) {
         $path = Join-Path $stepsDir $phase.File
         if (-not (Test-Path -LiteralPath $path)) {
