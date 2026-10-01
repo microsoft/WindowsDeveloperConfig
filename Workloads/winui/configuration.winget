@@ -89,7 +89,6 @@ resources:
       id: Microsoft.VisualStudio.Community
       source: winget
       acceptAgreements: true
-      version: 18.4.3
     metadata:
       description: Install Visual Studio 2026 Community
       winget:
@@ -98,22 +97,11 @@ resources:
   - type: Microsoft.WinGet/Package
     name: WinAppCLI
     properties:
-      id: Microsoft.WinAppCLI
+      id: Microsoft.WinAppCli
       source: winget
       acceptAgreements: true
     metadata:
       description: Install Windows App SDK CLI (winappcli)
-      winget:
-        securityContext: elevated
-
-  - type: Microsoft.WinGet/Package
-    name: WindowsAppRuntime
-    properties:
-      id: Microsoft.WindowsAppRuntime.1.6
-      source: winget
-      acceptAgreements: true
-    metadata:
-      description: Install the Windows App Runtime 1.6
       winget:
         securityContext: elevated
 
@@ -140,7 +128,7 @@ resources:
           --productId Microsoft.VisualStudio.Product.Community
           --add Microsoft.VisualStudio.Workload.ManagedDesktop
           --add Microsoft.VisualStudio.Workload.Universal
-          --add Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cs
+          --add Microsoft.VisualStudio.Component.WindowsAppSdkSupport.CSharp
           --quiet --norestart --wait;
           if ($LASTEXITCODE -ne 0) { throw "Visual Studio workload installation failed with exit code $LASTEXITCODE." }
         treatAsArray: true

@@ -1,43 +1,82 @@
 <#
 .SYNOPSIS
-  Apply the WinUI 3 winget DSC configuration on Windows.
+  WinUI 3: Developer Mode, .NET SDK 10, the Windows App Development CLI, Visual Studio
+  Community 2026 with the WinUI workloads, and the WinUI dotnet-new templates.
 
 .DESCRIPTION
-  This script is a thin CI/dev shim. The core artifact for the WinUI 3 flow
-  is `configuration.winget` in this directory — a dscv3 winget DSC config
-  that mirrors the canonical Microsoft Learn onboarding
-  (https://learn.microsoft.com/windows/apps/get-started/start-here):
-    * asserts minimum OS version,
-    * enables Developer Mode,
-    * installs the .NET 10 SDK and Windows App Development CLI,
-    * installs Visual Studio 2026 Community, and
-    * adds the .NET Desktop, UWP, and Windows App SDK C# workloads/components.
-
-  The shim exists only to:
-    * apply the DSC config with retry via `_common/apply-configuration.ps1`
-      (which passes `--accept-configuration-agreements` and
-      `--disable-interactivity`),
-    * rehydrate PATH in the current session so later CI steps see `dotnet`,
-    * verify `dotnet` and `winapp` resolve, and
-    * emit `INSTALL_OK: winui` for the test harness.
+  Workload definition read by dev-config.ps1. It follows the Microsoft Learn WinUI onboarding
+  (https://learn.microsoft.com/windows/apps/get-started/start-here) and installs what
+  Workloads\winui\configuration.winget does, without needing winget configure. The phase
+  files under steps\ do the work.
 #>
 
 [CmdletBinding()]
-param()
+param(
+    [string] $Action = 'Full'
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-& (Join-Path $PSScriptRoot '..\_common\apply-configuration.ps1') `
-    -Id              'winui' `
-    -ConfigFile      (Join-Path $PSScriptRoot 'configuration.winget') `
-    -RequireCommands @('dotnet', 'winapp')
+# Visual Studio 2026 supports Windows 11 and Windows Server 2019 or later.
+$isClient = (Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'InstallationType') -eq 'Client'
+
+@{
+    Name             = 'WinUI'
+    Actions          = @('Full')
+    MinimumOSVersion = if ($isClient) { '10.0.22000' } else { '10.0.17763' }
+    SetupNote        = 'Visual Studio is a multi-GB download'
+    Notes            = @(
+        'Open a new terminal so dotnet and winapp are on PATH.'
+        'Create an app with: dotnet new winui -n MyApp, or the WinUI Blank App (Packaged) template in Visual Studio.'
+    )
+    Phases           = @(
+        @{
+            File     = 'prerequisites.ps1'
+            Function = 'Invoke-PrerequisitesPhase'
+            Title    = 'Getting ready'
+        }
+        @{
+            File     = 'registry-system.ps1'
+            Function = 'Invoke-RegistrySystemPhase'
+            Title    = 'Developer Mode'
+            Steps    = @('DeveloperMode')
+        }
+        @{
+            File       = 'packages.ps1'
+            Function   = 'Invoke-PackagesPhase'
+            Title      = 'Packages'
+            # Visual Studio is last so the quick installs finish before its long download.
+            Parameters = @{ Packages = @('PowerShell', 'DotnetSdk', 'winappCli', 'VisualStudioCommunity') }
+        }
+        @{
+            File       = 'visual-studio.ps1'
+            Function   = 'Invoke-VisualStudioPhase'
+            Title      = 'Visual Studio workloads'
+            Parameters = @{
+                Components = @(
+                    'Microsoft.VisualStudio.Workload.ManagedDesktop'
+                    'Microsoft.VisualStudio.Workload.Universal'
+                    # .NET WinUI app development tools. The VS 2022 ID ComponentGroup.WindowsAppSDK.Cs is not in 18.x.
+                    'Microsoft.VisualStudio.Component.WindowsAppSdkSupport.CSharp'
+                )
+            }
+        }
+        @{
+            # The WinUI dotnet-new templates step is shared with Dev Config's GitHub Copilot phase.
+            File     = 'copilot.ps1'
+            Function = 'Invoke-CopilotPhase'
+            Title    = 'WinUI templates'
+            Steps    = @('WinUITemplates')
+        }
+    )
+}
 
 # SIG # Begin signature block
 # MIInQwYJKoZIhvcNAQcCoIInNDCCJzACAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBFRy4rTbAaJIG9
-# Xg3osusM17Z1gbxmiPmd6rQ7ZFr7GKCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCD3zju79hR1C3y7
+# /gmbe+Ugumvblyx/vFfTW/93QNNxlaCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
 # yE7XD1dIAAAAAAIdMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQzWhcNMjcwNDE1MTg1
@@ -109,62 +148,62 @@ Set-StrictMode -Version Latest
 # MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jv
 # c29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIdTRnITtcPV0gAAAAAAh0w
 # DQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwLwYJ
-# KoZIhvcNAQkEMSIEIKM8Uu4+etBRaeQS2lNN/ODMWXWCCmQbaQVPZRwRfxc6MEIG
+# KoZIhvcNAQkEMSIEICxLEQ2J8PMbn/vRgUgCdiK7Biv6Ve++W1UPlhdxndGEMEIG
 # CisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBvAGYAdKEagBhodHRwOi8v
-# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAT2u6szMIICkB6Z+A
-# 6ARc99BcJMJ++N3ES5RBhaPqKcWRCmjNqtCZui7pj1YHTj6bVmL0D086Tq+O8ofz
-# +x2x09ae6IMtI6Z7jk9NmHlINuheJ+d2wMoPiLXZVT6T3f9U90nwppXTgza4mncN
-# d8BkxnP1yOxFusMvHBusPp6Zx9/MVCgvnoEEanWua9g2E3iTvnPw3WmXFmyA/33z
-# qT6DCeVLHUSFaDXaoZ4CBmK60i6mnnhGws/tBOsKjeXo0eZ2jv5HSNaS6YV2yMHl
-# afj5/0w7paMKtzHjNQn5LQBH79c1llpTB676lsfniEtdhwnPVkBy4tV8zV4IkRx5
-# 4+b8H6GCF68wgherBgorBgEEAYI3AwMBMYIXmzCCF5cGCSqGSIb3DQEHAqCCF4gw
+# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAJppgaAx7Qn0avTt7
+# 0VK6b2gBTLE/aT38T2glM8QyeMr2e2imKE1lrQdQoOKxkDpm5stAwUhrddu0BtVS
+# fR1sCQ84K6SK1EfLkIOEISqUA6j0CDzd1LiROVu+GtgQlK5XVqqD9ymFlJzlnNK9
+# O0fZR8fwYpS0WzFDyLYVJG+hfOXx8QQBpCifAnE1wCZw6WXJNv4yJsjewq6dUFAR
+# qqoTWS2T3gW/bxuywnDY4rsdH6dWBBAvJ6MMki4wUzeRKvQxH3d1aONfNl4SKVp+
+# dYooZ90kd9zXk73kMpxoaGG+UA1moS9T05t+jH6Yr5Cb7kHpp/BeHpNJQPfoyZpX
+# nkbMtqGCF68wgherBgorBgEEAYI3AwMBMYIXmzCCF5cGCSqGSIb3DQEHAqCCF4gw
 # gheEAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFZBgsqhkiG9w0BCRABBKCCAUgEggFE
-# MIIBQAIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCC2hbd43MUqUPup
-# PnRImrCEcjUlX3eLQ14OIsZiEx19uwIGargGOmC3GBIyMDI2MTAwMTA0NTMxNi40
-# M1owBIACAfSggdmkgdYwgdMxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5n
+# MIIBQAIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCB11LgzvQRhfGAx
+# kcmsc1f/JFcTg04GW/dEn3ALrXBlfAIGaq1tZYf6GBIyMDI2MTAwMTA0NTI0Ny4x
+# MlowBIACAfSggdmkgdYwgdMxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5n
 # dG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9y
 # YXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJcmVsYW5kIE9wZXJhdGlvbnMgTGlt
-# aXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1MgRVNOOjUyMUEtMDVFMC1EOTQ3MSUw
+# aXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1MgRVNOOjM2MDUtMDVFMC1EOTQ3MSUw
 # IwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFtcCBTZXJ2aWNloIIR/jCCBygwggUQ
-# oAMCAQICEzMAAAIXcfsupa8BHeoAAQAAAhcwDQYJKoZIhvcNAQELBQAwfDELMAkG
+# oAMCAQICEzMAAAITsEM1Zs+vlegAAQAAAhMwDQYJKoZIhvcNAQELBQAwfDELMAkG
 # A1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQx
 # HjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UEAxMdTWljcm9z
-# b2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAwHhcNMjUwODE0MTg0ODIzWhcNMjYxMTEz
-# MTg0ODIzWjCB0zELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAO
+# b2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAwHhcNMjUwODE0MTg0ODE3WhcNMjYxMTEz
+# MTg0ODE3WjCB0zELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAO
 # BgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEt
 # MCsGA1UECxMkTWljcm9zb2Z0IElyZWxhbmQgT3BlcmF0aW9ucyBMaW1pdGVkMScw
-# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046NTIxQS0wNUUwLUQ5NDcxJTAjBgNVBAMT
+# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046MzYwNS0wNUUwLUQ5NDcxJTAjBgNVBAMT
 # HE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUA
-# A4ICDwAwggIKAoICAQDAzzawTD7f29hHuIYIgUOdg2FEz4HMXYBiKrl1SlmkkU9G
-# MJyKlDpFRsj5EBg1ECkTHHnKCtdtpa27C+qyoBVJZtT9bp95y6OMguQ+qf2meC1Z
-# GR9CBtiC9pcAuXo9jbI4f1/vYwP7oDLFB6dKkAx1TNj9CT+O2Owd0VdUF762yGUi
-# RIncZnDxVUqpODcZkSXO3BslY22uEES+F/pqfEx6BAwk/u07z8EnshOzj8BXcPZu
-# /x4eTzVj586ZDyZDrVYurbAi2+XMhPlvN6Ur0u8TJx/nHWVfEDATDlrt2lL4IpNq
-# eG2/5DabB5sDJuN/2KjiTjyy1NqrWu1ys6IPB12pWbVL17yHVOzNcXOMsu8T0SaO
-# c18h7Cxj5EKFRoedjgUXDAkScS/8lLvqgdPSgZ3Lv4nrR8Y6XsDVShTICSGlvYGN
-# r5LBIiIdtDgUPImIuVnp2tlnzgygnznYlLEzSEGMY7oVmU87yK43KTrzQOLxWdtI
-# 2kh0k34OGV6l5NQwEMeoKZ3SZVZFZk+bWm+C3L3dqw2382DqjibZ2eihY50zfIqw
-# lpaPIeqJz2B9OtkEz48Jep5No7WgSJpD6HjDScdV1X5dK8jabXI3iKJuqObkc9oA
-# 7c4n46Y0t+01WavhnpTZPqkhwsHKygpwNS8KrJxePgL/6fUoUGkMZ0MzD2Ca7wID
-# AQABo4IBSTCCAUUwHQYDVR0OBBYEFFCs32OXA06h4TllCqcXnHxLVslDMB8GA1Ud
+# A4ICDwAwggIKAoICAQD0mXrguhnEMg1IWDP70pLk7O/mbnjx49XNz1FdZ7hPj8ym
+# V+Brh6rXZEZ2nlxW+eN17m/F+rZrH+Oe7u9Rbitk3iY5Sbm+H6RxixCVhDncXCAg
+# HecSNxAeiasbeZl7+jOMVICvoluCUq0h4DJI/MBwXPIB6vmUs1QcES9AwzwE6MzJ
+# qkK+HTGyDjEoVxUQlAsoR8IYF98xkj9qa60cVvcJRNntpWkbYocQVQ2VnW/Awq/F
+# dM9EOdvA8bPLKoknOd+ws0dDi9e3a21LU94KgYjSE3U96rzIawhcz2ihzALToMY1
+# Iz/gsDHa4q/CZSfo3AtzT62a+fLrDbytkt6OyRF+dVah8S/WZZjSMdScevBIYFLy
+# BU/2BwGzo/mDQ6kk8x/F1SQddGRww89bSEg/w1tbxblK6nwe7CdIpuOnICUYFR0z
+# 9XmtlvSxmaSfvXivpQsYr5wssA3pHcWFfo3SePrgXbstMrYFtLSkllpeOjR4M3PV
+# BzF4gUtSAX5EGwtgOfwTxwKR7Erw2W3caL3Ml/nnDpR9Nn6TBMzEyoXGHv5N/Hv5
+# oE5tn6fH3rUC2KoDLvNVXr2j8tZF0o9l29mf0RLIZtOc9+OQERG/bamtKUROVHDM
+# /puYRU4pYtZXDG7CHttRZS5RvVyP3fO+21BgZBq3kT0Assk2aW8soKyQHutouwID
+# AQABo4IBSTCCAUUwHQYDVR0OBBYEFBOeEErH4WvKmFBYxGKkfj2wwUA6MB8GA1Ud
 # IwQYMBaAFJ+nFV0AXmJdg/Tl0mWnG1M1GelyMF8GA1UdHwRYMFYwVKBSoFCGTmh0
 # dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvY3JsL01pY3Jvc29mdCUyMFRp
 # bWUtU3RhbXAlMjBQQ0ElMjAyMDEwKDEpLmNybDBsBggrBgEFBQcBAQRgMF4wXAYI
 # KwYBBQUHMAKGUGh0dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvY2VydHMv
 # TWljcm9zb2Z0JTIwVGltZS1TdGFtcCUyMFBDQSUyMDIwMTAoMSkuY3J0MAwGA1Ud
 # EwEB/wQCMAAwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwgwDgYDVR0PAQH/BAQDAgeA
-# MA0GCSqGSIb3DQEBCwUAA4ICAQBGaAV2EHvEgAgcQSDkj/lL6DHrtpHpGJbxkDC0
-# TebPyjR3Kf6kg/6WJ01HUgpBDSv5GNiAj1xnqZu8DK+Hd7ar8FXyuMcTe530/JjK
-# rfZ64WB1ne9fhvlBd49aWkEBit3OJHbusfPpbCkfl1mxLKltcMFtCRaQ2XqDzbJP
-# LcBsFsoNcF3PFmwRq5o6mVq0rsSvh2GCUoF7HwlDZ0xKRJnB4I0Nep32v/1bZV1F
-# mwMko/9dzhTJCVWxugGi0q1gRJcWSPBHUdWwf5DQLr383kI/9OrdiAjW5vhv37cw
-# kUpaElcJwkYVmRwvBSZjCgWDVcujsMsl0aOsgfWOwjY0VckVAd5/oB1F7URG9hB6
-# q3KsG/Ei9H4//zcU1jLPHTiKdRP1MXYDBM66oILpnrug3BHikQQnIAgRES+R2GON
-# 9ZyCyT+cZOV9qG81j9I4es1Eqjj0oOVxw3NEIlDJD4Pn2vv+p5s1LJA9N/Aj376M
-# RjRD9RYpU0uGKjnkZgGx4n32zs3OR3E6v1R+2nn3scSi9sDr2oaVnc6lQTcfVEEY
-# NWn8W8za5dO6bwusyQ9fHkCn+Rs8BKwL2O72gwJ7YgRc7ZJ4PVoPciq8A50cUoeD
-# W+ls9RBJZvqDbF8FXfTAVypo9iDNxvE9Y/Jmor5LyXvPDrho7mGYnt5DCgx9O7RV
-# rLqvjzCCB3EwggVZoAMCAQICEzMAAAAVxedrngKbSZkAAAAAABUwDQYJKoZIhvcN
+# MA0GCSqGSIb3DQEBCwUAA4ICAQCCbFomsapDYPpQmFnpCXZJkU5o24ZtbcvMH4RL
+# 6XYEHUwm0FFIV2L+FVjfc2nGwlCFDlMtWnQNdg6Qig9BzXusf4hWF6Y7yMK35Toj
+# VMjDpxHtz60Sj8mOnoSoRTVzj+atoyOAeFD6toL85QCb3wDWvhsg8e2wGYtE4aZ4
+# TlcsgVoEhlYe+HYI5chMo5tdV3nAa0nV1ll3BocAJcXnTqO1r66hR3LMB642VM8t
+# OtnyfKHEbCT1WHp6INDsJAxZJJrwMlL09ReN6iL29N1Ltkxeq762/pDPfG2gEXn5
+# gUri4T6aIaz3QXGbRUraVauYWGORGXnPKgc53Abuyk1iQOiYI81Yi51RCZBgqm38
+# eyyl9xv7GmdYgNB0zOATymPW+nAuBYScfsu1Ph1kJ6gOj08rjRHEEPyQonvr2eCQ
+# TB/AIPYRf8xCTv14i86GmcfXYa5UHK9opmTldm+q08403Cvyr+oDfzvsi5bBaCdp
+# 5f6munDR1n9Au1sYZWuA/5NFCO37Z1xkDk/dfgvAA2GI+zLQ6XhcJ2Ps7EEsW87O
+# wI8M9pWeSn518MUb404GKvtqpMnrzrbanKaDVX7qBz/VG/EL/CC9jIbTfd5wmq/Q
+# 6fRlE1iv6L86TCADcc/VosPRoesSnDqW3TbreJGQK+tx1w5bzDeMLxMm5oZbILZL
+# 2MSPODCCB3EwggVZoAMCAQICEzMAAAAVxedrngKbSZkAAAAAABUwDQYJKoZIhvcN
 # AQELBQAwgYgxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYD
 # VQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xMjAw
 # BgNVBAMTKU1pY3Jvc29mdCBSb290IENlcnRpZmljYXRlIEF1dGhvcml0eSAyMDEw
@@ -207,41 +246,41 @@ Set-StrictMode -Version Latest
 # QQIBATCCAQGhgdmkgdYwgdMxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5n
 # dG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9y
 # YXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJcmVsYW5kIE9wZXJhdGlvbnMgTGlt
-# aXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1MgRVNOOjUyMUEtMDVFMC1EOTQ3MSUw
+# aXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1MgRVNOOjM2MDUtMDVFMC1EOTQ3MSUw
 # IwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4D
-# AhoDFQBpsoAVoq3aFpR2qQd8VjMDN+BIy6CBgzCBgKR+MHwxCzAJBgNVBAYTAlVT
+# AhoDFQCYETxIKPGCNpybLz9UR2Ts3GlHpqCBgzCBgKR+MHwxCzAJBgNVBAYTAlVT
 # MRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQK
 # ExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1l
-# LVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3DQEBCwUAAgUA7mfKSTAiGA8yMDI2MDkz
-# MDE3NTAwMVoYDzIwMjYxMDAxMTc1MDAxWjB3MD0GCisGAQQBhFkKBAExLzAtMAoC
-# BQDuZ8pJAgEAMAoCAQACAgYBAgH/MAcCAQACAhOZMAoCBQDuaRvJAgEAMDYGCisG
+# LVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3DQEBCwUAAgUA7mhlWDAiGA8yMDI2MTAw
+# MTA0NTEzNloYDzIwMjYxMDAyMDQ1MTM2WjB3MD0GCisGAQQBhFkKBAExLzAtMAoC
+# BQDuaGVYAgEAMAoCAQACAiUhAgH/MAcCAQACAhNXMAoCBQDuabbYAgEAMDYGCisG
 # AQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKgCjAIAgEAAgMHoSChCjAIAgEAAgMB
-# hqAwDQYJKoZIhvcNAQELBQADggEBALAX2elJy6usIltpWrnZZNdW8+C/NcDxzml1
-# GUIIfoGnz/iNIOcxkRq0UEv9qVNMlIoIddZgZgw+pV93iw8xd6oIeQfs+5zVtfkX
-# vIzymsz+xhkh/MBpfoDzkS54EXWIXpmGE2py1X6mKWra7xqQhjVfQuBobB8I92EI
-# JiiOXHIRT0P7N6TpdAhUOh6UZ2NfaWSscjZcKcy1Rwxez2+FHLr/YyoC19A753YB
-# McyzNxID7LbFwW+63N5Oe3RoJeosK08eDtQ9XA1IaGslSUVVEf366pw6YV7wJaUZ
-# T7nAMv0z97ZXw7wJ13ZrPRG9N7PGNqzQ+OQ4PW/otNFiydM7qQAxggQNMIIECQIB
+# hqAwDQYJKoZIhvcNAQELBQADggEBAKQxFy5eeke+nFbAAvV8mCwhmsGiGm91zHKh
+# YXp8CIeclPGsI3vP1+5tD/Oz97dmfBBkOe+BQkrsBiTBdFXSz6dbAIQKygcPXXsQ
+# 9Lpq35wWDhiekLVyRz32Fe/OpujG6uBEOVAM+Ydi3Qze8gg/aml+b8ags1UhVeiM
+# 8oR63K3TD0EjVjpswSamxMwUMDQzLC2NViaHZp0OmltL8oVtFGGruZ3HglgBz26f
+# aXsVCm4Jlz0z8GeDkro6lxl7FIVLbg6j9UwHBFbKBNFemt5rQamvzGwCvQbGaJaM
+# pqRVlLApbEme4jGZ9vG4g7k/IxEYTFbjHB3+qLls0oOlufDZTjwxggQNMIIECQIB
 # ATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UE
 # BxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYD
-# VQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQQ0EgMjAxMAITMwAAAhdx+y6lrwEd
-# 6gABAAACFzANBglghkgBZQMEAgEFAKCCAUowGgYJKoZIhvcNAQkDMQ0GCyqGSIb3
-# DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCDr1CdCew9+LcPCaZhLAh/GilRMIqphdgt6
-# 7M13DPLD2jCB+gYLKoZIhvcNAQkQAi8xgeowgecwgeQwgb0EINDyUGA+XbfJnRLN
-# RK3mmE4h6Ac/LCuQ3B6/F7aT5FpbMIGYMIGApH4wfDELMAkGA1UEBhMCVVMxEzAR
+# VQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQQ0EgMjAxMAITMwAAAhOwQzVmz6+V
+# 6AABAAACEzANBglghkgBZQMEAgEFAKCCAUowGgYJKoZIhvcNAQkDMQ0GCyqGSIb3
+# DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCBKew6oUqNmNEaIMJwLDaKG7M6epQx4OO6s
+# tlaJLmaucTCB+gYLKoZIhvcNAQkQAi8xgeowgecwgeQwgb0EIMzhCW0UhTPwngOM
+# DM/idWh1m9DFgaV5Qh+nzo5rnFhoMIGYMIGApH4wfDELMAkGA1UEBhMCVVMxEzAR
 # BgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1p
 # Y3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3Rh
-# bXAgUENBIDIwMTACEzMAAAIXcfsupa8BHeoAAQAAAhcwIgQgEvIcy+1KM17fj/et
-# DZ0OWkTVrveCPneXUkxYKlWsDwUwDQYJKoZIhvcNAQELBQAEggIAtPNjwfCDU6yH
-# Fe6jv6K75DDUofTSKcBst9M5nPZ6CxxbtpHTUW7DYBORprv1cuATEiq2nuOZKggE
-# jzpr5p8kx48lk8ajqQPB2yeq7/fdsKPsBV1HD1fXcP+70aOekfT6YKYRvXisn9lj
-# IxO73y1K19yHmFUeDEoiSKPOFH5mG5NVqr0Ns4YNDb2BJayW+y7FP6Ac6kuctiAw
-# BRw2RNuEyK39VvM2jnZukKXLA4vPzbRaztmLST9Da4wXgKLV/ZTfOFvJ6j4NHgsY
-# MEX9EthyGb885vh7kugLXN8SyMl4d0TVdLFzmkZ9m1Thg6wBY6jcaEbW6Bf3yPqg
-# moz37+DZTazFOROy3S2O+N7K+ufqUKK49UdKgp5x2ofbr5QQ7+772bdEVT/IhTwg
-# tZ/MkHTxediQbzYdGSidHN6IH+QS26GNyszhFfm7GSKdD8qt9D5lHtT79igEJU5M
-# EQZHg3WZabZNq7Hz9lkIDb6LV7cufH5tWSGNTqlS42ghxarqFVkS8UpkCn/VZ+7y
-# 5z9NVoI1VKxhi2O15eDYS/Xbp0oH5+FpglB3mSepULjMZucB/+/qQj0zpWLEF4V3
-# u2iAdi2ltXqVBKkGp7nIA4WpQ4f22v8mGtqtHz64aJHIdu0srJ2xSYiTXRPAma2c
-# zPwEnyDNJ05zLo/6sP+iN6DOp+cG5ko=
+# bXAgUENBIDIwMTACEzMAAAITsEM1Zs+vlegAAQAAAhMwIgQgDctAp1Gx6bH1Om+P
+# ivpbypFcRKe3+VIQkMIofgE9wbUwDQYJKoZIhvcNAQELBQAEggIA1SqOCFn2FxYH
+# d1Jn11dAfCeqUHJB0CU9seU0qdew/M8J4LdyUx1whexylNQKUCd6McyXeyjyDqPg
+# rIAuFVvwo/y91/NgbHJkYSgxAUaDInfonyffBMb+t2XMhDdm2M7mGQavMiKpJ5wZ
+# /SG6amteCll4eISj6EqZvxEBNTe/ibeCJsY0pSsXQZkA+pFPwHOTRFIVlkGSW44f
+# bpRtjZaugjL6irnXfgrJFYRWRv7ldvKS//8pSUIPY0N8p1pGQOx082KQaAjMQIUg
+# JCWNsxEc8I9vGC1Fbv8e93J8IRxdbb6Hf6xfhuQFFVzn9Ewi23A6PRDc5VSQ4XQl
+# ANRI/aSsMhNlmT7BpeWrrZ+SdFF3T3DsJsMvTqtIF/SdGgKw84V7R57C5GSm69Eq
+# cSB04bo2a5wnLY+KFRflhzs2bKNipHNct1MK/szSDDPUsw/bkTSvnST5hHN+GSvw
+# 2TBZCViupQP6VTKZk+jS7tRlfkOjPGw4a+Yb3DAjH6iBeTdid0O9IhUls9+/Cs6P
+# VeSWsrEtUGfcr8hzrbBj4JdyEhcTlVZPalKvSsUz2oy6BVQwhjxbHWDp2UEUmO9s
+# glB5f0qW4mgCvgX+4BNiqWd7o3FI/VXqBdxj2vO95L3rqHT45TkNDX4FKRpArg+P
+# uWGaIvYsIALT/BkyZFr5NWrGNFoaDA0=
 # SIG # End signature block

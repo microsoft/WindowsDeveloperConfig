@@ -16,6 +16,10 @@
   To select a branch or tag:
 
       & ([scriptblock]::Create((irm <url>))) -Ref 'v1.2.3'
+
+  To apply one workload from workloads\ instead of the full Windows Dev Config setup:
+
+      & ([scriptblock]::Create((irm <url>))) -Workload winui
 #>
 
 [CmdletBinding()]
@@ -24,7 +28,8 @@ param(
     [string] $InstallRoot,
     [switch] $AllowUnsigned,
     [switch] $NoLaunch,
-    [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+    [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
 )
 
 function Invoke-CalmOsBootstrap {
@@ -34,7 +39,8 @@ function Invoke-CalmOsBootstrap {
         [string] $InstallRoot,
         [switch] $AllowUnsigned,
         [switch] $NoLaunch,
-        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
     )
 
     $ErrorActionPreference = 'Stop'
@@ -42,6 +48,9 @@ function Invoke-CalmOsBootstrap {
 
     $repo = 'microsoft/WindowsDeveloperConfig'
     $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    $Workload = $Workload.ToLowerInvariant()
+    # The default workload is omitted from command lines so refs that predate workloads still accept them.
+    $workloadSuffix = if ($Workload -ne 'devconfig') { " -Workload $Workload" } else { '' }
 
     # Reject refs that could escape the repository path.
     if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
@@ -79,7 +88,8 @@ function Invoke-CalmOsBootstrap {
             [Parameter(Mandatory)] [string] $InstallRoot,
             [switch] $AllowUnsigned,
             [switch] $NoLaunch,
-            [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+            [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+            [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
         )
 
         $launcher = {
@@ -88,7 +98,8 @@ function Invoke-CalmOsBootstrap {
                 [string] $InstallRoot,
                 [switch] $AllowUnsigned,
                 [switch] $NoLaunch,
-                [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+                [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
+                [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
             )
 
             $ErrorActionPreference = 'Stop'
@@ -132,6 +143,7 @@ function Invoke-CalmOsBootstrap {
             $arguments = @('-NoProfile')
             if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
             $arguments += '-File', $target, '-Ref', $Ref, '-InstallRoot', $InstallRoot, '-Action', $Action
+            if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
             if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
             if ($NoLaunch) { $arguments += '-NoLaunch' }
             & (Join-Path $PSHOME $shellName) @arguments
@@ -144,6 +156,7 @@ function Invoke-CalmOsBootstrap {
         $escapedRef = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Ref)
         $escapedRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($InstallRoot)
         $command = "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot' -Action '$Action'"
+        if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
         if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
         if ($NoLaunch) { $command += ' -NoLaunch' }
         # Start-Process joins arguments; Windows quoting keeps the command intact.
@@ -157,6 +170,7 @@ function Invoke-CalmOsBootstrap {
         Write-Verbose "Could not raise the TLS version: $($_.Exception.Message)"
     }
 
+    $refName = $Ref
     if ($Ref -notmatch '^[a-fA-F0-9]{40}$') {
         $resolvedRef = (Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/commits/$([Uri]::EscapeDataString($Ref))" -UseBasicParsing -TimeoutSec 60).sha
         if ($resolvedRef -isnot [string] -or $resolvedRef -notmatch '^[a-fA-F0-9]{40}$') {
@@ -164,11 +178,24 @@ function Invoke-CalmOsBootstrap {
         }
         $Ref = $resolvedRef
     }
+    $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch -Action $Action
+        # The elevated window closes on errors, so a ref without the workload is reported here, before UAC.
+        if ($Workload -ne 'devconfig') {
+            try {
+                $null = Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$repo/$Ref/$flow/workloads/$Workload.ps1" -Method Head -UseBasicParsing -TimeoutSec 60
+            } catch {
+                $failure = $_
+                $status = $null
+                try { $status = [int]$failure.Exception.Response.StatusCode } catch { }
+                if ($status -ne 404) { throw $failure }
+                throw "'$refName' doesn't contain the '$Workload' workload under $flow. Check the workload name, or pick a newer -Ref."
+            }
+        }
+        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch -Action $Action -Workload $Workload
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
         $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait -PassThru
         if ($proc.ExitCode -ne 0) {
@@ -176,7 +203,7 @@ function Invoke-CalmOsBootstrap {
         }
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
-            Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+            Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
         }
         return
     }
@@ -219,10 +246,13 @@ function Invoke-CalmOsBootstrap {
     }
 
     Write-Host ''
-    Write-Host 'Calm OS setup' -ForegroundColor Cyan
+    if ($Workload -eq 'devconfig') {
+        Write-Host 'Calm OS setup' -ForegroundColor Cyan
+    } else {
+        Write-Host "Windows Developer Config: $Workload workload" -ForegroundColor Cyan
+    }
     Write-Host "  Fetching '$Ref' from $repo..." -ForegroundColor DarkGray
 
-    $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
     $securityCode = (Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$repo/$Ref/$flow/steps/_security.ps1" -UseBasicParsing -TimeoutSec 60).TrimStart([char]0xFEFF)
     if (-not $AllowUnsigned) {
         # Windows PowerShell requires UTF-16LE for in-memory signature verification.
@@ -252,6 +282,11 @@ function Invoke-CalmOsBootstrap {
         if (-not ((Test-Path (Join-Path $setupDir 'bootstrap.ps1')) -and (Test-Path (Join-Path $setupDir 'dev-config.ps1')) -and (Test-Path (Join-Path $setupDir 'steps\_security.ps1')))) {
             throw "'$Ref' doesn't contain the requested setup under $flow. Use -AllowUnsigned only for the source copy."
         }
+        # Refs that predate workloads have no workloads folder but still run the default setup.
+        $workloadsDir = Join-Path $setupDir 'workloads'
+        if ($Workload -ne 'devconfig' -and -not (Test-Path -LiteralPath (Join-Path $workloadsDir "$Workload.ps1") -PathType Leaf)) {
+            throw "'$Ref' doesn't contain the '$Workload' workload under $flow. Check the workload name, or pick a newer -Ref."
+        }
         Assert-DevConfigProtectedTree -Directory $setupDir
         if ($AllowUnsigned) {
             Write-Host '  Using the unsigned source copy because -AllowUnsigned was passed.' -ForegroundColor Yellow
@@ -265,6 +300,9 @@ function Invoke-CalmOsBootstrap {
         # Keep logs and progress when replacing setup scripts.
         Copy-Item -LiteralPath (Join-Path $setupDir 'bootstrap.ps1'), (Join-Path $setupDir 'dev-config.ps1') -Destination $InstallRoot -Force
         Copy-Item -LiteralPath (Join-Path $setupDir 'steps') -Destination $InstallRoot -Recurse -Force
+        if (Test-Path -LiteralPath $workloadsDir) {
+            Copy-Item -LiteralPath $workloadsDir -Destination $InstallRoot -Recurse -Force
+        }
         Assert-DevConfigProtectedTree -Directory $InstallRoot
         if (-not $AllowUnsigned) {
             Assert-DevConfigMicrosoftSigned -Directory $InstallRoot
@@ -278,13 +316,14 @@ function Invoke-CalmOsBootstrap {
 
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($target)
-            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action"
+            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix"
             if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
             Write-Host "Run when ready: $command" -ForegroundColor Cyan
             return
         }
 
         $arguments += '-File', "`"$target`"", '-Action', $Action
+        if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
         if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
         $start = @{ FilePath = $shell; ArgumentList = $arguments; Wait = $true; PassThru = $true }
         if ($Action -ne 'Uninstall') { $start.NoNewWindow = $true }
@@ -304,10 +343,10 @@ function Invoke-CalmOsBootstrap {
 Invoke-CalmOsBootstrap @PSBoundParameters
 
 # SIG # Begin signature block
-# MIInRAYJKoZIhvcNAQcCoIInNTCCJzECAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIInKAYJKoZIhvcNAQcCoIInGTCCJxUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCATQDfyyJZ4YKMa
-# VoQhCdw/NSp/bMqgnjdUlISq1FVpcaCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAUuvtEY+m8+jAD
+# S9LZWacUC/imAH0YiinS4+TCIK506KCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
 # yE7XD1dIAAAAAAIdMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQzWhcNMjcwNDE1MTg1
@@ -375,143 +414,142 @@ Invoke-CalmOsBootstrap @PSBoundParameters
 # vZGtqa9FSL2RazArA+rDPuf6JGYz4HpgMZHB4S6szWSKYBv0VisCzfxgeU+dquXW
 # 9bd0auYlOB58DPcOYKdc3Se94g+xL4pcEhbB54JOgAkwYTu/9dLeH2pDqeJZAABV
 # DWRQCaXfO5LgyKwKCLYXpigrZYCjUSBcr+Ve8PFWMhVTQl0v4q8J/AUmQN5W4n10
-# 1cY2L4A7GTQG1h32HHAvfQESWP0xghngMIIZ3AIBATBuMFcxCzAJBgNVBAYTAlVT
+# 1cY2L4A7GTQG1h32HHAvfQESWP0xghnEMIIZwAIBATBuMFcxCzAJBgNVBAYTAlVT
 # MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jv
 # c29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIdTRnITtcPV0gAAAAAAh0w
 # DQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwLwYJ
-# KoZIhvcNAQkEMSIEIK6OPgQTRzvSI5j5obttAURqhxSQ+qdbNxqwHAF6RH1dMEIG
+# KoZIhvcNAQkEMSIEIHQa4D9fG1Hl5kQPcA1oV5qxRgwzn6zCj+bdm6iewHjHMEIG
 # CisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBvAGYAdKEagBhodHRwOi8v
-# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAR3DEIqiRFr2IaduP
-# waMkT0CllV6U8a4loPjgvfqdgceqzVcrjmtwW1KXcHkrhXcHk0tHXF8C2bVXNtU1
-# KBjXz4sLDx6cNlIFcZDz9WlltkKAgv+NzYjqzdwAgccmuUr5zj46vwUcfq5ILf6f
-# ew66SSa73YsygBwcxrlxeIxOxfvj4UFHNyOqU9DBQqSgGV02Mt1a2dnmVgyQv3Fp
-# 86jJgRujmH9gphE/yH+Z/AzkXMfewAVf6MMkyv4rK31g30wYB2EikbGOvo7Pt++U
-# ISsDenrcCVAn1NRbfZQZRfFfU7SvJI8XNiwiPMb+iS9iySEVXlCgux6tgXqzZky0
-# eKOMs6GCF7AwghesBgorBgEEAYI3AwMBMYIXnDCCF5gGCSqGSIb3DQEHAqCCF4kw
-# gheFAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFaBgsqhkiG9w0BCRABBKCCAUkEggFF
-# MIIBQQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCAfSzCLXsFb9T4d
-# QfXcwiZNOs0qvp58DMeSWKEeYhUpwwIGaq5gawKKGBMyMDI2MDkyNTIyNDc1Ny41
-# MzdaMASAAgH0oIHZpIHWMIHTMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
+# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAI4LWQYIZuYqgA6gt
+# OR4xcjPG7G0T+P8uNkmbTttkgRu4sYVVh2aHXpuc/uGScf8BAIhjI9hu8bT51tAi
+# OMJiL7fKShi4Ws8ytBRjdnByyTm19Z74ssETE24UsH+MG5Y+JSo80WzrhwvLQckQ
+# xi4X5OO4ALiiNBT+vFK7rvd1GcPiuAc3PRt6Ds4E1/lOe9NwXBRYddBITOqPxiE4
+# gRxPDDz8xCMN4yxbax4hMsXzWn9L7MtVKNAK1251fTsRrFid5MC2G56IZGrE2zAy
+# zKmR+JvgMLm3JUhje2cjmvLO6XRd4vCfR6EoT76OfUgtcPxnmmKaJ9WRKvkPt5i8
+# MIOxF6GCF5QwgheQBgorBgEEAYI3AwMBMYIXgDCCF3wGCSqGSIb3DQEHAqCCF20w
+# ghdpAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG9w0BCRABBKCCAUEEggE9
+# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCD7PJVtuGkTtNE2
+# egWAPsjCzkjNSlAqKOkhGlrRe27ipQIGaqql2XzbGBMyMDI2MTAwMTA0NTI0NS43
+# NzNaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
 # Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
-# cmF0aW9uMS0wKwYDVQQLEyRNaWNyb3NvZnQgSXJlbGFuZCBPcGVyYXRpb25zIExp
-# bWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjo0QzFBLTA1RTAtRDk0NzEl
-# MCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2VydmljZaCCEf4wggcoMIIF
-# EKADAgECAhMzAAACGCXZkgXi5+XkAAEAAAIYMA0GCSqGSIb3DQEBCwUAMHwxCzAJ
-# BgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25k
-# MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jv
-# c29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMB4XDTI1MDgxNDE4NDgyNVoXDTI2MTEx
-# MzE4NDgyNVowgdMxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
-# DgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
-# LTArBgNVBAsTJE1pY3Jvc29mdCBJcmVsYW5kIE9wZXJhdGlvbnMgTGltaXRlZDEn
-# MCUGA1UECxMeblNoaWVsZCBUU1MgRVNOOjRDMUEtMDVFMC1EOTQ3MSUwIwYDVQQD
-# ExxNaWNyb3NvZnQgVGltZS1TdGFtcCBTZXJ2aWNlMIICIjANBgkqhkiG9w0BAQEF
-# AAOCAg8AMIICCgKCAgEAsdzo6uuQJqAfxLnvEBfIvj6knK+p6bnMXEFZ/QjPOFyw
-# lcjDfzI8Dg1nzDlxm7/pqbvjWhyvazKmFyO6qbPwClfRnI57h5OCixgpOOCGJJQI
-# ZSTiMgui3B8DPiFtJPcfzRt3FsnxjLXwBIjGgnjGfmQl7zejA1WoYL/qBmQhw/FD
-# FTWebxfo4m0RCCOxf2qwj31aOjc2aYUePtLMXHsXKPFH0tp5SKIF/9tJxRSg0NYE
-# vQqVilje8aQkPd3qzAux2Mc5HMSK4NMTtVVCYAWDUZ4p+6iDI9t5BNCBIsf5ooFN
-# UWtxCqnpFYiLYkHfFfxhVUBZ8LGGxYsA36snD65s2Hf4t86k0e8WelH/usfhYqOM
-# 3z2yaI8rg08631IkwqUzyQoEPqMsHgBem1xpmOGSIUnVvTsAv+lmECL2RqrcOZlZ
-# ax8K0aiij8h6UkWBN2IA/ikackTSGVRBQmWWZuLFWV/T4xuNzscC0X7xo4fetgps
-# qaEA0jY/QevkTvLv4OlNN9eOL8LNh7Vm0R65P7oabOQDqtUFAwCgjgPJ0iV/jQCa
-# MAcO3SYpG5wSAYiJkk4XLjNSlNxU2Idjs1sORhl7s7LC6hOb7bVAHVwON74GxfFN
-# iEIA6BfudANjpQJ0nUc/ppEXpT4pgDBHsYtV8OyKSjKsIxOdFR7fIJIjDc8DvUkC
-# AwEAAaOCAUkwggFFMB0GA1UdDgQWBBQkLqHEXDobY7dHuoQCBa4sX7aL0TAfBgNV
-# HSMEGDAWgBSfpxVdAF5iXYP05dJlpxtTNRnpcjBfBgNVHR8EWDBWMFSgUqBQhk5o
-# dHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpb3BzL2NybC9NaWNyb3NvZnQlMjBU
-# aW1lLVN0YW1wJTIwUENBJTIwMjAxMCgxKS5jcmwwbAYIKwYBBQUHAQEEYDBeMFwG
-# CCsGAQUFBzAChlBodHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpb3BzL2NlcnRz
-# L01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0ElMjAyMDEwKDEpLmNydDAMBgNV
-# HRMBAf8EAjAAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMIMA4GA1UdDwEB/wQEAwIH
-# gDANBgkqhkiG9w0BAQsFAAOCAgEAnkjRhjwPgdoIpvt4YioT/j0LWuBxF3ARBKXD
-# ENggraKvC0oRPwbjAmsXnPEmtuo5MD8uJ9Xw9eYrxqqkK4DF9snZMrHMfooxCa++
-# 1irLz8YoozC4tci+a4N37Sbke1pt1xs9qZtvkPgZGWn5BcwVfmAwSZLHi2CuZ06Y
-# 0/X+t6fNBnrbMVovNaDX4WPdyI9GEzxfIggDsck2Ipo4VXL/Arcz7p2F7bEZGRuy
-# xjgMC+woCkDJaH/yk/wcZpAsixe4POdN0DW6Zb35O3Dg3+a6prANMc3WIdvfKDl7
-# 5P0aqcQbQAR7b0f4gH4NMkUct0Wm4GN5KhsE1YK7V/wAqDKmK4jx3zLz3a8Hsxa9
-# HB3GyitlmC5sDhOl4QTGN5kRi6oCoV4hK+kIFgnkWjHhSRNomz36QnbCSG/BHLEm
-# 2GRU9u3/I4zUd9E1AC97IJEGfwb+0NWb3QEcrkypdGdWwl0LEObhrQR9B1V7+edc
-# yNmsX0p2BX0rFpd1PkXJSbxf8IcEiw/bkNgagZE+VlDtxXeruLdo5k3lGOv7rPYu
-# OEaoZYxDvZtpHP9P36wmW4INjR6NInn2UM+krP/xeLnRbDBkm9RslnoDhVraliKD
-# H62BxhcgL9tiRgOHlcI0wqvVWLdv8yW8rxkawOlhCRqT3EKECW8ktUAPwNbBULkT
-# +oWcvBcwggdxMIIFWaADAgECAhMzAAAAFcXna54Cm0mZAAAAAAAVMA0GCSqGSIb3
-# DQEBCwUAMIGIMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4G
-# A1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMTIw
-# MAYDVQQDEylNaWNyb3NvZnQgUm9vdCBDZXJ0aWZpY2F0ZSBBdXRob3JpdHkgMjAx
-# MDAeFw0yMTA5MzAxODIyMjVaFw0zMDA5MzAxODMyMjVaMHwxCzAJBgNVBAYTAlVT
-# MRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQK
-# ExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1l
-# LVN0YW1wIFBDQSAyMDEwMIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA
-# 5OGmTOe0ciELeaLL1yR5vQ7VgtP97pwHB9KpbE51yMo1V/YBf2xK4OK9uT4XYDP/
-# XE/HZveVU3Fa4n5KWv64NmeFRiMMtY0Tz3cywBAY6GB9alKDRLemjkZrBxTzxXb1
-# hlDcwUTIcVxRMTegCjhuje3XD9gmU3w5YQJ6xKr9cmmvHaus9ja+NSZk2pg7uhp7
-# M62AW36MEBydUv626GIl3GoPz130/o5Tz9bshVZN7928jaTjkY+yOSxRnOlwaQ3K
-# Ni1wjjHINSi947SHJMPgyY9+tVSP3PoFVZhtaDuaRr3tpK56KTesy+uDRedGbsoy
-# 1cCGMFxPLOJiss254o2I5JasAUq7vnGpF1tnYN74kpEeHT39IM9zfUGaRnXNxF80
-# 3RKJ1v2lIH1+/NmeRd+2ci/bfV+AutuqfjbsNkz2K26oElHovwUDo9Fzpk03dJQc
-# NIIP8BDyt0cY7afomXw/TNuvXsLz1dhzPUNOwTM5TI4CvEJoLhDqhFFG4tG9ahha
-# YQFzymeiXtcodgLiMxhy16cg8ML6EgrXY28MyTZki1ugpoMhXV8wdJGUlNi5UPkL
-# iWHzNgY1GIRH29wb0f2y1BzFa/ZcUlFdEtsluq9QBXpsxREdcu+N+VLEhReTwDwV
-# 2xo3xwgVGD94q0W29R6HXtqPnhZyacaue7e3PmriLq0CAwEAAaOCAd0wggHZMBIG
-# CSsGAQQBgjcVAQQFAgMBAAEwIwYJKwYBBAGCNxUCBBYEFCqnUv5kxJq+gpE8RjUp
-# zxD/LwTuMB0GA1UdDgQWBBSfpxVdAF5iXYP05dJlpxtTNRnpcjBcBgNVHSAEVTBT
-# MFEGDCsGAQQBgjdMg30BATBBMD8GCCsGAQUFBwIBFjNodHRwOi8vd3d3Lm1pY3Jv
-# c29mdC5jb20vcGtpb3BzL0RvY3MvUmVwb3NpdG9yeS5odG0wEwYDVR0lBAwwCgYI
-# KwYBBQUHAwgwGQYJKwYBBAGCNxQCBAweCgBTAHUAYgBDAEEwCwYDVR0PBAQDAgGG
-# MA8GA1UdEwEB/wQFMAMBAf8wHwYDVR0jBBgwFoAU1fZWy4/oolxiaNE9lJBb186a
-# GMQwVgYDVR0fBE8wTTBLoEmgR4ZFaHR0cDovL2NybC5taWNyb3NvZnQuY29tL3Br
-# aS9jcmwvcHJvZHVjdHMvTWljUm9vQ2VyQXV0XzIwMTAtMDYtMjMuY3JsMFoGCCsG
-# AQUFBwEBBE4wTDBKBggrBgEFBQcwAoY+aHR0cDovL3d3dy5taWNyb3NvZnQuY29t
-# L3BraS9jZXJ0cy9NaWNSb29DZXJBdXRfMjAxMC0wNi0yMy5jcnQwDQYJKoZIhvcN
-# AQELBQADggIBAJ1VffwqreEsH2cBMSRb4Z5yS/ypb+pcFLY+TkdkeLEGk5c9MTO1
-# OdfCcTY/2mRsfNB1OW27DzHkwo/7bNGhlBgi7ulmZzpTTd2YurYeeNg2LpypglYA
-# A7AFvonoaeC6Ce5732pvvinLbtg/SHUB2RjebYIM9W0jVOR4U3UkV7ndn/OOPcbz
-# aN9l9qRWqveVtihVJ9AkvUCgvxm2EhIRXT0n4ECWOKz3+SmJw7wXsFSFQrP8DJ6L
-# GYnn8AtqgcKBGUIZUnWKNsIdw2FzLixre24/LAl4FOmRsqlb30mjdAy87JGA0j3m
-# Sj5mO0+7hvoyGtmW9I/2kQH2zsZ0/fZMcm8Qq3UwxTSwethQ/gpY3UA8x1RtnWN0
-# SCyxTkctwRQEcb9k+SS+c23Kjgm9swFXSVRk2XPXfx5bRAGOWhmRaw2fpCjcZxko
-# JLo4S5pu+yFUa2pFEUep8beuyOiJXk+d0tBMdrVXVAmxaQFEfnyhYWxz/gq77EFm
-# PWn9y8FBSX5+k77L+DvktxW/tM4+pTFRhLy/AsGConsXHRWJjXD+57XQKBqJC482
-# 2rpM+Zv/Cuk0+CQ1ZyvgDbjmjJnW4SLq8CdCPSWU5nR0W2rRnj7tfqAxM328y+l7
-# vzhwRNGQ8cirOoo6CGJ/2XBjU02N7oJtpQUQwXEGahC0HVUzWLOhcGbyoYIDWTCC
-# AkECAQEwggEBoYHZpIHWMIHTMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
-# Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
-# cmF0aW9uMS0wKwYDVQQLEyRNaWNyb3NvZnQgSXJlbGFuZCBPcGVyYXRpb25zIExp
-# bWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjo0QzFBLTA1RTAtRDk0NzEl
-# MCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2VydmljZaIjCgEBMAcGBSsO
-# AwIaAxUAnWtGrXWiuNE8QrKfm4CtGr57z+mggYMwgYCkfjB8MQswCQYDVQQGEwJV
+# cmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScw
+# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046RTAwMi0wNUUwLUQ5NDcxJTAjBgNVBAMT
+# HE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZpY2WgghHqMIIHIDCCBQigAwIBAgIT
+# MwAAAikO1WQqtJfyGgABAAACKTANBgkqhkiG9w0BAQsFADB8MQswCQYDVQQGEwJV
 # UzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UE
 # ChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGlt
-# ZS1TdGFtcCBQQ0EgMjAxMDANBgkqhkiG9w0BAQsFAAIFAO5hb/kwIhgPMjAyNjA5
-# MjUyMjExMDVaGA8yMDI2MDkyNjIyMTEwNVowdzA9BgorBgEEAYRZCgQBMS8wLTAK
-# AgUA7mFv+QIBADAKAgEAAgIU9AIB/zAHAgEAAgIcPTAKAgUA7mLBeQIBADA2Bgor
-# BgEEAYRZCgQCMSgwJjAMBgorBgEEAYRZCgMCoAowCAIBAAIDB6EgoQowCAIBAAID
-# AYagMA0GCSqGSIb3DQEBCwUAA4IBAQAeo4hcBkDHJvMqnXMBPQa9Yk9gxdpiG722
-# TrK829CA+jmOSrw7n/rUoAv6kBvPRFTuGQQLU3RNXUvHKYUfTMFdZwz943MSY24M
-# cEjZkqGEnEA1cIWJioY+L+ykw6h/7tGCMhsnKx9gvfU94HE52RBOFRgruZ7ZMPnx
-# pof9SXmBzPh0n55gcZTTe7bWtghutbuTwRcIrC0yrLZ7ZC4JWJRCAlBEh2axSSsi
-# AcUDqtXIeyu0FYID2UQeIeTjw13Iuoqcg5bFcCpJusPXsc4essdEA5hZ5if98I/u
-# 56K9m9E3BV79ibDdtTalQobtqym8CfNtnhekCK99GZw913SE3u4wMYIEDTCCBAkC
-# AQEwgZMwfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNV
-# BAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQG
-# A1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIYJdmSBeLn
-# 5eQAAQAAAhgwDQYJYIZIAWUDBAIBBQCgggFKMBoGCSqGSIb3DQEJAzENBgsqhkiG
-# 9w0BCRABBDAvBgkqhkiG9w0BCQQxIgQgmZ64t1en8EfyjlQKL33LsyIA86knQdZy
-# VmNJcv1YE0owgfoGCyqGSIb3DQEJEAIvMYHqMIHnMIHkMIG9BCCZE9yJuOTItIwW
-# aES6lzGKK1XcSoz1ynRzaOVzx9eFajCBmDCBgKR+MHwxCzAJBgNVBAYTAlVTMRMw
-# EQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVN
-# aWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0
-# YW1wIFBDQSAyMDEwAhMzAAACGCXZkgXi5+XkAAEAAAIYMCIEILSWr2K7u3iGEqAe
-# owrZ5NRbyn0zTVL5I0fnbvc2KtvvMA0GCSqGSIb3DQEBCwUABIICAJPzT10CRc5U
-# ktww3NcrwtnkLBJspnEmkxoAxgMkMtMyGWFYOIjrZtHhk4iAymPjostjK907W731
-# QlajUs9fOXDv2hTPT9dKcaEHLc8NfnJQFHK9WMvUDUcbmqiHxLqanJwJemEPHV60
-# qjL4A6VhzUJXR3BlJU9MbWu85wihwuAQp2cNfa6ef9gn5AZUorCfBl5JUt25X4Gl
-# /LQP4Lp2nOD3kDHaaKbFsjKkINYEVfLVQwRHQJYAarvB80NSC+HDr+u8dqy757ZH
-# cMQo5NgRrH9UpLsG/tWUm4uKWFO0Eg0pdsx8IqrMa1DUKArkki0ov6QMILgDx638
-# s6c7mbeKyh1k1YHquD3gYh2xUpHnIBHb3mN0ilXomM6JYh2FIyaO7ooNRKpdpr9P
-# JrCX2t3eoWBC7VpSofq14Eosdl1dV0cGwlHhH1WexC6Ehzjw+zDzuB0wpd72LP3/
-# 41/DcnbUjuLS034SH5Cvv2YQYo8v+ak9eKsWRzNvBjmAN9zZXCY3XoHyuUnHMUy5
-# 7/ijoq0tQA0HVEm1GqK+La8vSF4hLj+He5KjU98d8dNcc59RYZSQece6J9Rf4dNB
-# 4I9gvhr1QKRfHVScFAtJoxV/FAZa1Hbnj31MqKgegu/NrwpAGd5uKufo6JkfQZZS
-# T3yGP56I7//hXw/0IsW+R/tQ9OBWzikr
+# ZS1TdGFtcCBQQ0EgMjAxMDAeFw0yNjAyMTkxOTQwMDdaFw0yNzA1MTcxOTQwMDda
+# MIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMH
+# UmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSUwIwYDVQQL
+# ExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScwJQYDVQQLEx5uU2hpZWxk
+# IFRTUyBFU046RTAwMi0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1l
+# LVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCe
+# ItFq4z1oCYSmUZmpYDsbJWEu++1bbc/Mz7Pa3I0ZX5EON+WirB0FvnGlyFRUylzO
+# 5TJXZfU8QFPOU95P1Y1OZ8J+quA5G+AWSBOr/48scl0s9RBpqgTMq/lbyqBz4CMm
+# vVR2QevAgVp4a1hbmOm9G7YWey68N5F5rSDYV0wMlg4Iy8YRuFgRN2eBpVXt9IvF
+# aFmBnQLZfo22KZ3L8PWEHUhXU5dLOSZoTfqqQ/B+deW56ACMnnHjPxZu+szHhZML
+# UrMWTgs9J7Cn8DtelcKj9aM+0Zq7tkSDHCrwo6eCSfw3clktXRRrdmsccal8RCDi
+# NFFgZsypwF2aGAF6kg41+Ql+thXpnOMUH4mPCAJZWp0zDWowsK/Yo5jHL1pT/Agb
+# L3FoAy4cbhOI4Pb1eQFG+jT7skS2F/b+ZACUA1EDZ830K+Bu0yw+FpSGy8tpd1sz
+# k3cUYjIpzIG4z3oFNmiSJN8YdNd4SHsER5Dks5bxiKbpvmfrOA39jTb7EW2TT7yS
+# WgJISfvTezuLmQsTVSzNsvapVlHhE2zBqDw409nvOtitCFbnhhXNfatzb2+Gf2tX
+# 2s6YBa151CC/8+emJvvegXbWNudzYt8cFRom0PZ+fJRhhBfdSqCqr8QeOGJ8VYlm
+# xFXqx1SdDSkTCSgpsskGqZwh/6umA1g4L7zeGBNngQIDAQABo4IBSTCCAUUwHQYD
+# VR0OBBYEFCdNRaSL9AW8QvaQ21WjRAXKN4M7MB8GA1UdIwQYMBaAFJ+nFV0AXmJd
+# g/Tl0mWnG1M1GelyMF8GA1UdHwRYMFYwVKBSoFCGTmh0dHA6Ly93d3cubWljcm9z
+# b2Z0LmNvbS9wa2lvcHMvY3JsL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0El
+# MjAyMDEwKDEpLmNybDBsBggrBgEFBQcBAQRgMF4wXAYIKwYBBQUHMAKGUGh0dHA6
+# Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvY2VydHMvTWljcm9zb2Z0JTIwVGlt
+# ZS1TdGFtcCUyMFBDQSUyMDIwMTAoMSkuY3J0MAwGA1UdEwEB/wQCMAAwFgYDVR0l
+# AQH/BAwwCgYIKwYBBQUHAwgwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUA
+# A4ICAQA9wc72lf/czDhp09T3PGAMOQhxl/x04jpE7t39FeqQSn2Up6DVzhgwnzCq
+# Y3NIhLtUaWrd7NxvrhZDca+J4xzvrRQNPHeRQpnJVeHsyTu53gTBlUB1TRI6OnZt
+# /AVmR9oMJ/NBOqB+d+SOb8Px6zRgRwk62sFkOkB5lig/DMnYEeR/amW9Hdo8vXcK
+# maa/DbSOAHSdfZFt+iqMZfNlkEOn71/RAKTNv4Qpq/2FhcjMMmSkIhshBdBVB0Vj
+# mkwFfhVUf5TTuLJ9sDR4EyCvOZJ3B6g7Iw6WjQxycjwkfzsVMTpfusJ5SwdOHL8y
+# GPWZOePjwa8ISXWs6kiVK/6S0/JVb1LpxpyYKREQjnU/5OecKt2OXlHdwFWZrwAi
+# 98RPZa6EExcb/LGLf10tNHju1eTlohY0jzNZQ0BDgSuMZgMU+8EEjtMQMIDnlPGE
+# UON7LHXHH0KL0FA01PEWVZKrr/LUOuuDTNFzw543FPMp4gkCIFlKdRuciR1IXOk+
+# Xse6rj9tJFYgVn+44BHou2XQe5RX30ef3AQWa0mxyGDqJzGsV3X5+bNQeMV88iWu
+# lJPq5sgnGG9O/H1/HH4HsO9ZKGX/WrJpQmFuQrTOR49XjveaC0xaFmGsNg+RhbtD
+# 5qTkn+ISDvw0IJ/E/VXNdz/yWgol6r507hT8sAMupnhkF2uw1DCCB3EwggVZoAMC
+# AQICEzMAAAAVxedrngKbSZkAAAAAABUwDQYJKoZIhvcNAQELBQAwgYgxCzAJBgNV
+# BAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4w
+# HAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xMjAwBgNVBAMTKU1pY3Jvc29m
+# dCBSb290IENlcnRpZmljYXRlIEF1dGhvcml0eSAyMDEwMB4XDTIxMDkzMDE4MjIy
+# NVoXDTMwMDkzMDE4MzIyNVowfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hp
+# bmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jw
+# b3JhdGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAw
+# ggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDk4aZM57RyIQt5osvXJHm9
+# DtWC0/3unAcH0qlsTnXIyjVX9gF/bErg4r25PhdgM/9cT8dm95VTcVrifkpa/rg2
+# Z4VGIwy1jRPPdzLAEBjoYH1qUoNEt6aORmsHFPPFdvWGUNzBRMhxXFExN6AKOG6N
+# 7dcP2CZTfDlhAnrEqv1yaa8dq6z2Nr41JmTamDu6GnszrYBbfowQHJ1S/rboYiXc
+# ag/PXfT+jlPP1uyFVk3v3byNpOORj7I5LFGc6XBpDco2LXCOMcg1KL3jtIckw+DJ
+# j361VI/c+gVVmG1oO5pGve2krnopN6zL64NF50ZuyjLVwIYwXE8s4mKyzbnijYjk
+# lqwBSru+cakXW2dg3viSkR4dPf0gz3N9QZpGdc3EXzTdEonW/aUgfX782Z5F37Zy
+# L9t9X4C626p+Nuw2TPYrbqgSUei/BQOj0XOmTTd0lBw0gg/wEPK3Rxjtp+iZfD9M
+# 269ewvPV2HM9Q07BMzlMjgK8QmguEOqEUUbi0b1qGFphAXPKZ6Je1yh2AuIzGHLX
+# pyDwwvoSCtdjbwzJNmSLW6CmgyFdXzB0kZSU2LlQ+QuJYfM2BjUYhEfb3BvR/bLU
+# HMVr9lxSUV0S2yW6r1AFemzFER1y7435UsSFF5PAPBXbGjfHCBUYP3irRbb1Hode
+# 2o+eFnJpxq57t7c+auIurQIDAQABo4IB3TCCAdkwEgYJKwYBBAGCNxUBBAUCAwEA
+# ATAjBgkrBgEEAYI3FQIEFgQUKqdS/mTEmr6CkTxGNSnPEP8vBO4wHQYDVR0OBBYE
+# FJ+nFV0AXmJdg/Tl0mWnG1M1GelyMFwGA1UdIARVMFMwUQYMKwYBBAGCN0yDfQEB
+# MEEwPwYIKwYBBQUHAgEWM2h0dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMv
+# RG9jcy9SZXBvc2l0b3J5Lmh0bTATBgNVHSUEDDAKBggrBgEFBQcDCDAZBgkrBgEE
+# AYI3FAIEDB4KAFMAdQBiAEMAQTALBgNVHQ8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB
+# /zAfBgNVHSMEGDAWgBTV9lbLj+iiXGJo0T2UkFvXzpoYxDBWBgNVHR8ETzBNMEug
+# SaBHhkVodHRwOi8vY3JsLm1pY3Jvc29mdC5jb20vcGtpL2NybC9wcm9kdWN0cy9N
+# aWNSb29DZXJBdXRfMjAxMC0wNi0yMy5jcmwwWgYIKwYBBQUHAQEETjBMMEoGCCsG
+# AQUFBzAChj5odHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpL2NlcnRzL01pY1Jv
+# b0NlckF1dF8yMDEwLTA2LTIzLmNydDANBgkqhkiG9w0BAQsFAAOCAgEAnVV9/Cqt
+# 4SwfZwExJFvhnnJL/Klv6lwUtj5OR2R4sQaTlz0xM7U518JxNj/aZGx80HU5bbsP
+# MeTCj/ts0aGUGCLu6WZnOlNN3Zi6th542DYunKmCVgADsAW+iehp4LoJ7nvfam++
+# Kctu2D9IdQHZGN5tggz1bSNU5HhTdSRXud2f8449xvNo32X2pFaq95W2KFUn0CS9
+# QKC/GbYSEhFdPSfgQJY4rPf5KYnDvBewVIVCs/wMnosZiefwC2qBwoEZQhlSdYo2
+# wh3DYXMuLGt7bj8sCXgU6ZGyqVvfSaN0DLzskYDSPeZKPmY7T7uG+jIa2Zb0j/aR
+# AfbOxnT99kxybxCrdTDFNLB62FD+CljdQDzHVG2dY3RILLFORy3BFARxv2T5JL5z
+# bcqOCb2zAVdJVGTZc9d/HltEAY5aGZFrDZ+kKNxnGSgkujhLmm77IVRrakURR6nx
+# t67I6IleT53S0Ex2tVdUCbFpAUR+fKFhbHP+CrvsQWY9af3LwUFJfn6Tvsv4O+S3
+# Fb+0zj6lMVGEvL8CwYKiexcdFYmNcP7ntdAoGokLjzbaukz5m/8K6TT4JDVnK+AN
+# uOaMmdbhIurwJ0I9JZTmdHRbatGePu1+oDEzfbzL6Xu/OHBE0ZDxyKs6ijoIYn/Z
+# cGNTTY3ugm2lBRDBcQZqELQdVTNYs6FwZvKhggNNMIICNQIBATCB+aGB0aSBzjCB
+# yzELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1Jl
+# ZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjElMCMGA1UECxMc
+# TWljcm9zb2Z0IEFtZXJpY2EgT3BlcmF0aW9uczEnMCUGA1UECxMeblNoaWVsZCBU
+# U1MgRVNOOkUwMDItMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1T
+# dGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQC3v9iSO22xob7ZxN5dXCEq+9Iv
+# /6CBgzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
+# DgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
+# JjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3
+# DQEBCwUAAgUA7mg/zzAiGA8yMDI2MTAwMTAyMTEyN1oYDzIwMjYxMDAyMDIxMTI3
+# WjB0MDoGCisGAQQBhFkKBAExLDAqMAoCBQDuaD/PAgEAMAcCAQACAiIWMAcCAQAC
+# AhJSMAoCBQDuaZFPAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKg
+# CjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAL4OElMO
+# hrn4n9WbuZKlyxqnt34YOfh6d/aq5D/weE67gy9Ui0t7BqqN6EBn468Hr0LV6OE0
+# wmoR8vw3vEGgYiWmIsu4oPZs+jK1BU6A2G7QwFEjIgz7+BYodFoKdcU+si9RVCq2
+# qZDI1XhE6B3V07eE2uHw01hazVXTl/BwPsBDwmWo0v1ehgNM8ZCn2aUHtW0dVBGC
+# dIFAIVf0q2UTYu5z5PXTlXRa72MpMitug7JbjWt90ztubM/dJ4QpFj6miQFGp8xg
+# Bmi9Ekf4t5GMD4mhXZ4+bLDJwyzmxaex2WIJKYn2p/k/ZMcpk8PgfsbM9mMg0Lh5
+# e8IT6DUUkdlngfcxggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UE
+# CBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9z
+# b2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQ
+# Q0EgMjAxMAITMwAAAikO1WQqtJfyGgABAAACKTANBglghkgBZQMEAgEFAKCCAUow
+# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCB+M+kW
+# BfAnHMe52Y4UQpreBQ0xLkvStT/stYmOvM7xyzCB+gYLKoZIhvcNAQkQAi8xgeow
+# gecwgeQwgb0EILfKPfEitvD/lSvEumxqPkkeOEtgkmKFEVMuel9oOrqSMIGYMIGA
+# pH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcT
+# B1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UE
+# AxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIpDtVkKrSX8hoA
+# AQAAAikwIgQgsreXgLXcrUjVXOj/6ZuLaXMbCh3KaAQt/pXnqTlheFMwDQYJKoZI
+# hvcNAQELBQAEggIAhrylMJmrKejj695MIcfXmX4Ud6pcctvyTmWnGnurHqEvixyg
+# 2S8I2HYMT0WR2+o8V1ZpUEFECu7mBdliQ/3hPo10wB9ekT/pUKkpOu2cypCHcZky
+# t/jPWRaBUQ0nO7P2Nda9Q+rKtySh103Tn6lXix+4A77be4Uy3JMDZp9K6YPeD7Dx
+# JaAXAS+VO74DUaPK1WmtMdNHTKQAR3owLw+UshvBp92l5LvhUFdTbVQW5mpxoDn4
+# gUPBFrVHbw2Clr+8dv55JGLohrl2Ee96/0PyG3RVn0OMh2LpekK8zRKtst4YUSDA
+# jOT4vFTKfJIveeh9O2nHpkQ5HsnXzAtfR6ZuiHXS1IfaNb+yP3RHILCP0Km39716
+# XQbRGrVVdgahhYW6oaBz/rRbWObB6kMsBMLVtqHgO7htmVebgnNlxX1iIoJo6Tw6
+# k0u/+cAobVJ3aatv5JheJUyJDN63ME6+ReOPIJi4o9rqDTUqROg+N9/yahOmfx3u
+# TZAsqkr00ZfKoyQzle+88H0fa5CSYURT7JntmTmtsFuGw5SiooBjlnIBQBifti/j
+# LrkGkJ4IJTbzZTPpGAJQ2BUbjV+6U4/+Ps76Q7i8xvmDfkUL70gOJKbggF5zQNA1
+# GMIKUGXM0aL7ZsvYpWgPEGd/Xq76gGRHrPrT3XlVvKq1tVDyHa4d0wgdtow=
 # SIG # End signature block

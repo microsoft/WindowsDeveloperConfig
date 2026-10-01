@@ -1,164 +1,170 @@
 <#
 .SYNOPSIS
-  Shared helpers for PATH refresh, TLS, native process execution, and UTF-8 text I/O.
+  Adds workloads and components to Visual Studio Community with the Visual Studio Installer.
 #>
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-function Update-DevConfigSessionPath {
-    $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-    $userPath    = [System.Environment]::GetEnvironmentVariable('Path', 'User')
-    # A missing per-user PATH is normal, so empty values are filtered before joining.
-    $env:Path    = (@($machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'
+# Matches the Microsoft.VisualStudio.Community winget package in steps\packages.ps1 (Visual Studio 2026, 18.x).
+$Script:DevConfigVsProductId    = 'Microsoft.VisualStudio.Product.Community'
+$Script:DevConfigVsVersionRange = '[18.0,19.0)'
+$Script:DevConfigVsProductName  = 'Visual Studio Community 2026'
+
+# Installer exit codes for success that needs a restart: 1641 (started), 3010 (required), 862968 (recommended).
+$Script:DevConfigVsRestartCodes = @(1641, 3010, 862968)
+
+function Get-DevConfigVsInstallerDirectory {
+    Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
 }
 
-# Normalize native failures to exit codes so callers are not tied to shell-specific error behavior.
-function Invoke-DevConfigNativeCommand {
+# vswhere reports only complete instances unless -all is passed, so a half-finished install never passes the check.
+function Get-DevConfigVisualStudioPath {
     param(
-        [Parameter(Mandatory)] [string] $FilePath,
-        [string[]] $Arguments = @(),
-        [ValidateRange(0, 86400)] [int] $TimeoutSeconds = 0
+        [string[]] $Requires = @(),
+        [switch] $IncludeIncomplete
     )
-    $invoke = {
-        param($FilePath, $Arguments)
-        $ErrorActionPreference = 'Continue'
-        $PSNativeCommandUseErrorActionPreference = $false
-        $output = & $FilePath @Arguments 2>&1 | Out-String
-        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
-    }
-    if ($TimeoutSeconds -eq 0) {
-        return & $invoke $FilePath $Arguments
-    }
-
-    $pipeline = [PowerShell]::Create().AddScript($invoke.ToString()).AddArgument($FilePath).AddArgument($Arguments)
-    try {
-        $pending = $pipeline.BeginInvoke()
-        $timer = [Diagnostics.Stopwatch]::StartNew()
-        $nextProgress = 60
-        while (-not $pending.IsCompleted) {
-            if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
-                $pipeline.Stop()
-                throw [TimeoutException]::new("The command timed out and was stopped: $FilePath $($Arguments -join ' ').")
-            }
-            if ($timer.Elapsed.TotalSeconds -ge $nextProgress) {
-                Write-Host "  still working -- $([int]$timer.Elapsed.TotalMinutes)m so far" -ForegroundColor DarkGray
-                $nextProgress += 60
-            }
-            Start-Sleep -Milliseconds 500
-        }
-        $result = $pipeline.EndInvoke($pending)
-        # A command that cannot start fails inside the runspace, not here; surface it like the in-process path does.
-        if ($pipeline.Streams.Error.Count -gt 0) {
-            throw $pipeline.Streams.Error[0].Exception
-        }
-        return $result
-    } finally {
-        $pipeline.Dispose()
-    }
-}
-
-function Invoke-DevConfigCleanupCommand {
-    param(
-        [Parameter(Mandatory)] [string] $FilePath,
-        [string[]] $Arguments = @(),
-        [int[]] $SuccessCodes = @(0),
-        [switch] $Unelevated,
-        [ValidateRange(1, 86400)] [int] $TimeoutSeconds = 900
-    )
-    $command = Get-Command $FilePath -CommandType Application -ErrorAction Stop | Select-Object -First 1
-    $result = if ($Unelevated) {
-        Invoke-DevConfigUnelevatedCommand -FilePath $command.Source -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
-    } else {
-        Invoke-DevConfigNativeCommand -FilePath $command.Source -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds
-    }
-    if ($null -eq $result.ExitCode -or $result.ExitCode -notin $SuccessCodes) {
-        throw "$FilePath $($Arguments -join ' ') failed ($($result.ExitCode)): $(([string]$result.Output).Trim())"
-    }
-    return $result
-}
-
-# Some installers can wait indefinitely, so process waits are bounded and emit periodic progress.
-function Invoke-DevConfigProcess {
-    param(
-        [Parameter(Mandatory)] [string] $FilePath,
-        [string[]] $Arguments = @(),
-        [Parameter(Mandatory)] [int] $TimeoutSeconds,
-        [switch] $NoNewWindow,
-        [string] $RedirectStandardOutput,
-        [string] $RedirectStandardError
-    )
-    $start = @{ FilePath = $FilePath; PassThru = $true }
-    if ($Arguments.Count)         { $start.ArgumentList           = $Arguments }
-    if ($NoNewWindow)             { $start.NoNewWindow            = $true }
-    if ($RedirectStandardOutput)  { $start.RedirectStandardOutput = $RedirectStandardOutput }
-    if ($RedirectStandardError)   { $start.RedirectStandardError  = $RedirectStandardError }
-
-    $process   = Start-Process @start
-    # Cache the process handle before exit so Windows PowerShell can still report ExitCode.
-    try { $null = $process.Handle } catch { Write-Verbose "Could not hold a handle on $FilePath." }
-    $startedAt = Get-Date
-    $deadline  = $startedAt.AddSeconds($TimeoutSeconds)
-    $nextBeat  = $startedAt.AddSeconds(60)
-    while (-not $process.HasExited) {
-        $now = Get-Date
-        if ($now -ge $deadline) {
-            try { $process.Kill() } catch { Write-Verbose "Could not stop $FilePath : $($_.Exception.Message)" }
-            $minutes = [Math]::Round($TimeoutSeconds / 60)
-            # TimeoutException lets retry logic distinguish a bounded wait from retryable install failures.
-            throw [System.TimeoutException]::new("$FilePath did not finish within $minutes minutes, so it was stopped.")
-        }
-        if ($now -ge $nextBeat) {
-            Write-Host "  still working -- $([int]($now - $startedAt).TotalMinutes)m so far" -ForegroundColor DarkGray
-            $nextBeat = $now.AddSeconds(60)
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    $process.WaitForExit()
-    return $process.ExitCode
-}
-
-# TLS 1.2 is enabled once so downloads work on Windows PowerShell 5.1 defaults.
-function Enable-DevConfigModernTls {
-    try {
-        [Net.ServicePointManager]::SecurityProtocol =
-            [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    } catch {
-        Write-Verbose "Could not raise the TLS version: $($_.Exception.Message)"
-    }
-}
-
-# ReadAllText preserves UTF-8 files without relying on Windows PowerShell 5.1 ANSI decoding.
-function Read-DevConfigTextFile {
-    param(
-        [Parameter(Mandatory)] [string] $Path
-    )
-    if (-not (Test-Path -LiteralPath $Path)) {
+    $vswhere = Join-Path (Get-DevConfigVsInstallerDirectory) 'vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere)) {
         return $null
     }
-    return [System.IO.File]::ReadAllText($Path)
+
+    $arguments = @('-products', $Script:DevConfigVsProductId, '-version', $Script:DevConfigVsVersionRange,
+        '-latest', '-property', 'installationPath', '-utf8')
+    if ($IncludeIncomplete) {
+        $arguments += '-all'
+    }
+    if ($Requires.Count -gt 0) {
+        # vswhere matches only instances that have every listed workload or component.
+        $arguments += '-requires'
+        $arguments += $Requires
+    }
+    $result = Invoke-DevConfigNativeCommand -FilePath $vswhere -Arguments $arguments
+    if ($result.ExitCode -ne 0) {
+        throw "vswhere could not list Visual Studio instances (exit code $($result.ExitCode))."
+    }
+    return @($result.Output -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Select-Object -First 1
 }
 
-# Write through a UTF-8 no-BOM temp file to avoid truncation and edition-specific encoding behavior.
-function Write-DevConfigTextFile {
+function Test-DevConfigVisualStudioComponents {
     param(
-        [Parameter(Mandatory)] [string] $Path,
-        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Content
+        [Parameter(Mandatory)] [string[]] $Components
     )
-    $parent = Split-Path -Parent $Path
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    return [bool](Get-DevConfigVisualStudioPath -Requires $Components)
+}
+
+# The installer can update itself and continue in a new setup.exe, so every running copy counts.
+function Get-DevConfigVisualStudioInstallerProcess {
+    $directory = (Get-DevConfigVsInstallerDirectory).TrimEnd('\') + '\'
+    @(Get-Process -Name 'setup' -ErrorAction SilentlyContinue | Where-Object {
+        $process = $_
+        $path = $null
+        try { $path = $process.Path } catch { Write-Verbose "Could not read the path of process $($process.Id)." }
+        $path -and $path.StartsWith($directory, [StringComparison]::OrdinalIgnoreCase)
+    })
+}
+
+function Wait-DevConfigVisualStudioInstaller {
+    param(
+        [int] $TimeoutSeconds = 14400
+    )
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $nextProgress = 60
+    while (@(Get-DevConfigVisualStudioInstallerProcess).Count -gt 0) {
+        if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            throw 'The Visual Studio Installer is still running. Close it or let it finish, then run this again.'
+        }
+        if ($timer.Elapsed.TotalSeconds -ge $nextProgress) {
+            Write-Host "  still working -- $([int]$timer.Elapsed.TotalMinutes)m so far" -ForegroundColor DarkGray
+            $nextProgress += 60
+        }
+        Start-Sleep -Seconds 2
     }
-    $temp = "$Path.new"
-    [System.IO.File]::WriteAllText($temp, $Content, [System.Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temp -Destination $Path -Force
+}
+
+function Add-DevConfigVisualStudioComponents {
+    param(
+        [Parameter(Mandatory)] [string[]] $Components
+    )
+    # The installer can still be finishing the Visual Studio install or an update, so wait before reading the instance.
+    if (@(Get-DevConfigVisualStudioInstallerProcess).Count -gt 0) {
+        Write-Host '  (The Visual Studio Installer is running -- waiting up to 5 minutes for it to finish or close.)' -ForegroundColor DarkGray
+        Wait-DevConfigVisualStudioInstaller -TimeoutSeconds 300
+    }
+    $installPath = Get-DevConfigVisualStudioPath
+    if (-not $installPath) {
+        if (Get-DevConfigVisualStudioPath -IncludeIncomplete) {
+            throw "$Script:DevConfigVsProductName did not finish installing. Open the Visual Studio Installer to resume or repair it, then run this again."
+        }
+        throw "$Script:DevConfigVsProductName is not installed yet, so its workloads cannot be added. Run this again once it is installed."
+    }
+    $setup = Join-Path (Get-DevConfigVsInstallerDirectory) 'setup.exe'
+    if (-not (Test-Path -LiteralPath $setup)) {
+        throw 'The Visual Studio Installer is missing. Repair Visual Studio from Settings > Apps, then run this again.'
+    }
+
+    Write-Host '  (Several GB -- the Visual Studio Installer works quietly for a while.)' -ForegroundColor DarkGray
+    # Start-Process joins arguments with spaces, so the install path is quoted here.
+    $arguments = @('modify', '--installPath', "`"$installPath`"")
+    foreach ($component in $Components) {
+        $arguments += '--add', $component
+    }
+    $arguments += '--quiet', '--norestart'
+    # The installer echoes its log into this window; the full log is in its dd_*.log files.
+    $stdout = [System.IO.Path]::GetTempFileName()
+    $stderr = [System.IO.Path]::GetTempFileName()
+    try {
+        $exitCode = Invoke-DevConfigProcess -FilePath $setup -Arguments $arguments -TimeoutSeconds 14400 -NoNewWindow `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        Wait-DevConfigVisualStudioInstaller
+    } finally {
+        Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($exitCode -eq 0) {
+        return
+    }
+    if ($exitCode -in $Script:DevConfigVsRestartCodes) {
+        Add-DevConfigNote -Warning -Message 'Restart Windows before opening Visual Studio; its installer asked for a restart.'
+        return
+    }
+    if ($exitCode -in @(1003, 8006)) {
+        throw 'Visual Studio is open. Save your work, close it, then run this again.'
+    }
+    if ($exitCode -in @(1001, 1618)) {
+        throw 'Another installation is running. Let it finish, then run this again.'
+    }
+    if ($exitCode -eq -1073720687) {
+        throw 'The Visual Studio Installer could not download what it needs. Check your internet connection or proxy, then run this again.'
+    }
+    throw "The Visual Studio Installer failed with exit code $exitCode. Its logs are the newest dd_*.log files in $env:TEMP."
+}
+
+function Invoke-VisualStudioPhase {
+    param(
+        [Parameter(Mandatory)] [string[]] $Components
+    )
+    if ($Script:DevConfigAction -eq 'Uninstall') {
+        throw 'The Visual Studio phase has no cleanup steps yet, so no workload can include it in Uninstall.'
+    }
+
+    $shortNames = @($Components | ForEach-Object { $_ -replace '^Microsoft\.VisualStudio\.(Workload|ComponentGroup|Component)\.', '' })
+    # BestEffort lets later phases run when Visual Studio itself could not be installed.
+    $steps = @(
+        New-DevConfigStep -Name 'VisualStudioWorkloads' -Description "Add to Visual Studio: $($shortNames -join ', ')" -BestEffort `
+            -Check { param($Components) Test-DevConfigVisualStudioComponents -Components $Components } `
+            -Apply { param($Components) Add-DevConfigVisualStudioComponents -Components $Components } `
+            -ArgumentList @(, $Components)
+    )
+
+    Invoke-DevConfigSteps -Steps $steps
 }
 
 # SIG # Begin signature block
 # MIInKAYJKoZIhvcNAQcCoIInGTCCJxUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCaNP5twC1cskTX
-# /FlBJy78O4SxvC+G4mg3ZqN61m2RfqCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBmXt9gKBcEj9cz
+# oFU/dpN4WXoR8UoXNZRKVueQjZyfQaCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
 # yE7XD1dIAAAAAAIdMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQzWhcNMjcwNDE1MTg1
@@ -230,19 +236,19 @@ function Write-DevConfigTextFile {
 # MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jv
 # c29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIdTRnITtcPV0gAAAAAAh0w
 # DQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwLwYJ
-# KoZIhvcNAQkEMSIEIJ9ohEcDXfLurbV7c2/ZDv8Gdq9WfQbHzdQagrTVArsvMEIG
+# KoZIhvcNAQkEMSIEIEyj8a7s0+r0vEVaUq5Jx2bi2jFG8qlIwkB8Qohbwax3MEIG
 # CisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBvAGYAdKEagBhodHRwOi8v
-# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAGZ5WWu31pETfrkDr
-# wrkCus44f5ZoE1NdRDCCXsSPfNh0ZekWB4JPIwQjmlvT3Qs9X15eByaMvG0a84jf
-# p+9iKX0hZQi/ce4CCgcMVZBFy7i1jUBntJTkThMPZzpFGS3kb0oS2PMMkNOR6BZz
-# kvzGnU/geWnUlbrRIcUsvECv9ojytw6tiI0Qxde4PS3vTYSq7jxolM7cUdN8nHI4
-# gK8rJkbrNBaZXNS+K8kF9mYPrNfu7Xd+4dWTpFZZ7U8lQOjIw8DQ9/S1PTkr/r5J
-# 2329U09U15w2CdF1v5zYeAN7i95Pi35N67g13uQnfyKgL1c8fm95Nd4kvSbr/Gkb
-# sx9abKGCF5QwgheQBgorBgEEAYI3AwMBMYIXgDCCF3wGCSqGSIb3DQEHAqCCF20w
+# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAIn1YWhAC78eYDPrK
+# NxO3L4g9C88SarFCwTEcNJdpb015JFdNc+nipRB7ONXCLRyn81SVM/oqJmxVpoP9
+# +5kjY/P874Uw690rKHJULyMwucLtEZdfk5rydg2B37QjK4IpgteJl4P+ChBPPwrV
+# 8WLYFGvI/Tfwbi4NbnLNB2OrHhRG9OvIwLgIW+DjKp/jSX7CeI+cFgm2V9Vblr8d
+# EtQEbwCZ8Cusck2PIg+qfGk+AaG5jGADvolKs8r9U69MuoIWqShKU7aklle55FlA
+# fWpOmlKzvq0RtXVZsaEMHTGBrZEc3xd9qbvOyeZhnUvrd1eaaseIisQwt5sO5iHV
+# mEvJ86GCF5QwgheQBgorBgEEAYI3AwMBMYIXgDCCF3wGCSqGSIb3DQEHAqCCF20w
 # ghdpAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG9w0BCRABBKCCAUEEggE9
-# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCDWBhBaBGLKnvaH
-# ZwHTm8WJ4JcjREKBeCqIuQUPq9IAXwIGaqql2XucGBMyMDI2MTAwMTA0NTIzOC45
-# MTdaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
+# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCBM7h/1cmMw9OJX
+# nUaV9JHhd4y4ebVn3YmSBNNGKwWGKgIGaqql2YRDGBMyMDI2MTAwMTA0NTMyNi42
+# MjJaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
 # Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
 # cmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScw
 # JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046RTAwMi0wNUUwLUQ5NDcxJTAjBgNVBAMT
@@ -346,22 +352,22 @@ function Write-DevConfigTextFile {
 # CBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9z
 # b2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQ
 # Q0EgMjAxMAITMwAAAikO1WQqtJfyGgABAAACKTANBglghkgBZQMEAgEFAKCCAUow
-# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCCpScJ4
-# uujYkLgRiAvphH/WZESBShIjq1U3mg0MXbyHBTCB+gYLKoZIhvcNAQkQAi8xgeow
+# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCBCA+Sa
+# iITjzqcdbLlUxYEnSsk6WJSUyrBO1Ac7oai0YTCB+gYLKoZIhvcNAQkQAi8xgeow
 # gecwgeQwgb0EILfKPfEitvD/lSvEumxqPkkeOEtgkmKFEVMuel9oOrqSMIGYMIGA
 # pH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcT
 # B1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UE
 # AxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIpDtVkKrSX8hoA
 # AQAAAikwIgQgsreXgLXcrUjVXOj/6ZuLaXMbCh3KaAQt/pXnqTlheFMwDQYJKoZI
-# hvcNAQELBQAEggIAmsanvI0QAbzJs0VD8ud8N3Cg6WciO508/v0VXdb/0A0K4q9h
-# ir5TwayCc8/6ES3ywHp4pAkNXEC1aF9y2+SBgLo0cS+ZRH45DTeB7nr7BYCGE/sW
-# YE/BT6UlvgLQCPRwhjHoOItassNVrdR2G9KaOM5bd2u8CuRCqSZ8CBurmPb+WOw3
-# dTOCyKfG24JvTnJXE+27CwDPiQmCI+YmqSxUYAl+CvvI+ZM9+DwfBY7aFYpBgMaq
-# BdrHfMWsDWrMPpBSd6jTLX0daKCciF2saok9hl06E1O/q8RoEqh72cR3S22rj22i
-# QlLwVFhx6inOUa2awNQHl39l9DxbeQ/IRAOYCfYEFJK2Hc/irCseDpimpKPWBDnV
-# Kqh1u8o3HtqoQmyubQlD1Fa4rBO3Pk0uhhSbFBy+9s7wgMkNyJbU3l2UFbq1u4r7
-# GcpkF4dHznq4UPFgO003VclQQ5wrJ8dRCeeXuFKUCl8/RX4iUmVTT2HszwP+PAN1
-# 6zVvzt8CTZbQu1QLXUHgPpiyQLIpGfGtN597V6Gg2NMuKTeO2bD8E5+9y7QtyU/9
-# /A6upb+9aBN9wwJ6ToxLXH/2tdfn0HLv/pzxRy0VdiFa5El2qsi4rZP5eMiqh4oO
-# fADVW7wFdoqpkLPN8Bx/SvoSRBzogLQLZHjiOpASWZi//wVjSWJDSDSZSRk=
+# hvcNAQELBQAEggIARxUjpKFTc+oUvQUctrmtx3wln9UeGIbazqD1JbUGAeNkqCyt
+# BvorwQJF9+TYraI/TgZCbzYMDLnMMLWdEdOQCSyEZOE6cBHGevLgp1u0WJ3uHGin
+# TQzToEejDBB1hfcGDXN6T8hhpjnyNP8aS6siiuM1MQH+WlLFlAm10vFE471hRgSs
+# CUqU1zPGWv/29lFXBQXuOsLli9Tepu605N7RbH8hM6iJsu94E2qHSWLueFHmDV4Z
+# Olzx8wpId4h89SOYEcbgnExLFXy4bF1LvVpZ2op8zgMDwlyxQMoO1Elt7W7B738W
+# baHrqo+7g8A5IrSeut9ly+1Jc3EhePsrBJrGnuMAtAjOH5aFmC6hLOrlqoK7Ch4Y
+# cn1JhgvUTJxsw6ntPb80b4ruibr8VjzMbABoYFinRqmIrW4Q8LMdhhQSy7O1imV/
+# GRMabfxL6ZMcQ6LAGQq60sd2aGevfRsUgcT3C0yjnSldSvyEMgMXmZKL912X8bCW
+# qgyTen+U3jswR1ZXAGYe9QLE6mwiU76VXKTT4ue8F4/wYqur3HVtJOtV94bT/IJW
+# OrgdqVJLN3j9UU4zhOR/413+5rag+U/SLm7iM4GNsgkQo02z7HU2Xx4WSl8QsqYc
+# m3ngacoa0DS3pW15q/s5Wb60jbiu8dPN+lomErOUvGUqG3zCJ6PDFc5EFZk=
 # SIG # End signature block

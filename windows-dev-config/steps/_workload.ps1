@@ -1,241 +1,166 @@
 <#
 .SYNOPSIS
-  Configures or cleans up a Windows developer workstation, or applies one developer workload.
-
-.DESCRIPTION
-  -Workload picks a definition from workloads\. The default, devconfig, is the complete
-  Windows Dev Config setup; other workloads, such as winui, reuse the same phases, helpers,
-  elevation, logging, and summary.
+  Loads a workload definition from workloads\ and runs its phases.
 #>
-
-[CmdletBinding()]
-param(
-    [switch] $NoElevate,
-    [switch] $Resumed,
-    [switch] $AllowUnsigned,
-    [switch] $ApplyTerminalFont,
-    [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
-)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$stepsDir = Join-Path $PSScriptRoot 'steps'
-$securityCode = [IO.File]::ReadAllText((Join-Path $stepsDir '_security.ps1'))
-if (-not $AllowUnsigned) {
-    # Verify and execute the same text to avoid a file-swap race.
-    $signature = Get-AuthenticodeSignature -Content ([Text.Encoding]::Unicode.GetBytes($securityCode)) -SourcePathOrExtension '.ps1'
-    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
-        $signature.SignerCertificate.Subject -ne 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') {
-        throw 'The setup security helper failed Microsoft signature verification. Run bootstrap.ps1 to reinstall; use -AllowUnsigned only for development.'
+# Unknown keys fail the run so a misspelled setting is not silently ignored.
+$Script:DevConfigWorkloadKeys = @('Name', 'Actions', 'Phases', 'MinimumOSVersion', 'SetupNote', 'UninstallWarning', 'Notes')
+$Script:DevConfigPhaseKeys    = @('File', 'Function', 'Title', 'Parameters', 'Steps', 'Uninstall')
+
+function Assert-DevConfigWorkloadDefinition {
+    param(
+        [Parameter(Mandatory)] [AllowNull()] $Definition,
+        [Parameter(Mandatory)] [string] $Workload
+    )
+    if ($Definition -isnot [hashtable]) {
+        throw "workloads\$Workload.ps1 must return a hashtable."
     }
-}
-. ([scriptblock]::Create($securityCode))
-if (-not $AllowUnsigned) {
-    Assert-DevConfigProtectedTree -Directory $PSScriptRoot
-    Assert-DevConfigMicrosoftSigned -Directory $PSScriptRoot
-}
 
-# Windows PowerShell 5.1 defaults to ANSI; force UTF-8 for console symbols.
-try {
-    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-    [Console]::OutputEncoding = $utf8NoBom
-    $OutputEncoding           = $utf8NoBom
-} catch {
-    Write-Verbose "Could not force UTF-8 console encoding: $($_.Exception.Message)"
-}
-
-. (Join-Path $stepsDir '_console.ps1')
-. (Join-Path $stepsDir '_step-runner.ps1')
-. (Join-Path $stepsDir '_elevation.ps1')
-. (Join-Path $stepsDir '_reboot-resume.ps1')
-. (Join-Path $stepsDir '_registry.ps1')
-. (Join-Path $stepsDir '_environment.ps1')
-. (Join-Path $stepsDir '_retry.ps1')
-. (Join-Path $stepsDir '_terminal.ps1')
-. (Join-Path $stepsDir '_winget.ps1')
-. (Join-Path $stepsDir '_pwsh-bootstrap.ps1')
-. (Join-Path $stepsDir '_workload.ps1')
-
-$Script:DevConfigAllowUnsigned = [bool]$AllowUnsigned
-if ($ApplyTerminalFont) {
-    . (Join-Path $stepsDir 'fonts.ps1')
-    $pendingPath = Get-DevConfigPendingTerminalFontPath
-    if (-not (Test-Path -LiteralPath $pendingPath)) {
-        Write-Host 'No Terminal font update is pending.'
-        exit 0
-    }
-    $logPath = [IO.Path]::ChangeExtension($pendingPath, '.log')
-    Start-DevConfigLog -Path $logPath
-    $failure = $null
-    try {
-        Invoke-DevConfigPendingTerminalFont
-    } catch {
-        $failure = $_
-        Write-Host "The Terminal font update failed: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "Full log: $logPath" -ForegroundColor DarkGray
-    } finally {
-        Stop-DevConfigLog
-    }
-    if ($failure) {
-        Wait-DevConfigKeyPress -TimeoutSeconds 60
-        exit 1
-    }
-    exit 0
-}
-
-# The workload decides which phases run; everything else in this script is shared by every workload.
-$Workload = $Workload.ToLowerInvariant()
-$Script:DevConfigWorkload = $Workload
-try {
-    $definition = Get-DevConfigWorkload -Directory (Join-Path $PSScriptRoot 'workloads') -Workload $Workload -Action $Action
-} catch {
-    # Pause so the reason stays readable when this runs in a window that closes on exit.
-    Write-Host $_.Exception.Message -ForegroundColor Red
-    Wait-DevConfigKeyPress
-    exit 1
-}
-$workloadName = $definition['Name']
-
-# TLS is configured before any download step runs.
-Enable-DevConfigModernTls
-
-Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
-
-if ($Action -eq 'Uninstall') {
-    Invoke-DevConfigEnsureCleanupShell -ScriptPath $PSCommandPath -AllowUnsigned:$AllowUnsigned -Workload $Workload
-} else {
-    # WinGet module behavior is more consistent in PowerShell 7 than in Windows PowerShell 5.1.
-    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
-}
-
-# The lock starts after relaunches so the worker process owns the log file.
-# Workloads share one lock because they install through the same WinGet and registry paths.
-if (-not (Enter-DevConfigSingleInstance)) {
-    Write-Host ''
-    Write-Host 'Setup is already running in another window.' -ForegroundColor Yellow
-    Write-Host 'Switch to it rather than starting a second copy -- they would fight over the same installs.' -ForegroundColor DarkGray
-    Wait-DevConfigKeyPress
-    exit 1
-}
-
-Start-DevConfigLog -Path (Join-Path $PSScriptRoot "$Workload-log.txt") -Append:$Resumed
-
-# Any prior resume task for this workload is stale once this run starts.
-Clear-DevConfigResume
-
-$Script:DevConfigResumed = [bool]$Resumed -and $Action -ne 'Uninstall'
-$Script:DevConfigAction = $Action
-if ($Script:DevConfigResumed) {
-    # Restore the pre-reboot tally so the final summary covers the whole run.
-    Restore-DevConfigTally -Path (Get-DevConfigTallyPath -Directory $PSScriptRoot)
-}
-$phases = @($definition['Phases'])
-
-$operation = if ($Action -eq 'Uninstall') { 'cleanup' } else { 'setup' }
-Write-Host ''
-if ($Action -eq 'Uninstall') {
-    Write-Host "$workloadName cleanup -- resetting settings and removing developer tools" -ForegroundColor Cyan
-    if ($definition['UninstallWarning']) {
-        Write-Host $definition['UninstallWarning'] -ForegroundColor Yellow
-    }
-    Write-Host 'Some uninstallers may request Administrator approval.' -ForegroundColor DarkGray
-} elseif ($Script:DevConfigResumed) {
-    Write-Host "Welcome back. Resuming $workloadName setup ($Action) after the reboot..." -ForegroundColor Cyan
-} else {
-    $setupNote = if ($definition['SetupNote']) { ", $($definition['SetupNote'])" } else { '' }
-    Write-Host "$workloadName setup ($Action) -- $($phases.Count) phases$setupNote" -ForegroundColor Cyan
-}
-
-$failure = $null
-try {
-    # Load phase files and check function and parameter names before running any phase.
-    foreach ($phase in $phases) {
-        $path = Join-Path $stepsDir $phase.File
-        if (-not (Test-Path -LiteralPath $path)) {
-            $rerun = "bootstrap.ps1 -Action $Action"
-            if ($Workload -ne 'devconfig') { $rerun += " -Workload $Workload" }
-            throw "The $operation script is missing: $path. Run $rerun to reinstall it."
+    $problems = @()
+    foreach ($key in $Definition.Keys) {
+        if ($Script:DevConfigWorkloadKeys -notcontains $key) {
+            $problems += "unknown setting '$key'"
         }
-        . $path
-        $null = Resolve-DevConfigWorkloadPhase -Phase $phase -OrchestratorPath $PSCommandPath
+    }
+    if (-not ($Definition['Name'] -is [string] -and $Definition['Name'])) {
+        $problems += 'Name must be a non-empty string'
+    }
+    $actions = @($Definition['Actions'] | Where-Object { $null -ne $_ })
+    if ($actions.Count -eq 0 -or @($actions | Where-Object { $_ -notin @('Full', 'Partial', 'Uninstall') }).Count -gt 0) {
+        $problems += 'Actions must list Full, Partial, and/or Uninstall'
+    }
+    if ($Definition['MinimumOSVersion'] -and -not ($Definition['MinimumOSVersion'] -as [version])) {
+        $problems += 'MinimumOSVersion must be a version such as 10.0.17763'
     }
 
-    $phaseIndex = 0
+    $phases = @($Definition['Phases'] | Where-Object { $null -ne $_ })
+    if ($phases.Count -eq 0) {
+        $problems += 'Phases must list at least one phase'
+    }
     foreach ($phase in $phases) {
-        $phaseIndex++
-
-        # Script-scoped phase metadata avoids passing header state through every phase file.
-        $Script:DevConfigPhaseIndex       = $phaseIndex
-        $Script:DevConfigPhaseTotal       = $phases.Count
-        $Script:DevConfigPhaseTitle       = $phase.Title
-        $Script:DevConfigPhaseHeaderShown = $false
-
-        Invoke-DevConfigWorkloadPhase -Phase $phase -OrchestratorPath $PSCommandPath
-
-        # New tool locations are visible in this process only after PATH is refreshed.
-        Update-DevConfigSessionPath
+        if ($phase -isnot [hashtable]) {
+            $problems += 'every phase must be a hashtable'
+            continue
+        }
+        $label = if ($phase['Title']) { "phase '$($phase['Title'])'" } else { 'a phase' }
+        foreach ($key in $phase.Keys) {
+            if ($Script:DevConfigPhaseKeys -notcontains $key) {
+                $problems += "$label has unknown setting '$key'"
+            }
+        }
+        # Files starting with _ are shared helpers, which are always loaded and are never phases.
+        if (-not ($phase['File'] -is [string] -and $phase['File'] -match '^[a-z0-9]+(-[a-z0-9]+)*\.ps1$')) {
+            $problems += "$label needs File set to a phase file under steps\"
+        }
+        if (-not ($phase['Function'] -is [string] -and $phase['Function'] -match '^Invoke-\w+Phase$')) {
+            $problems += "$label needs Function set to the phase's Invoke-<Name>Phase function"
+        }
+        if (-not ($phase['Title'] -is [string] -and $phase['Title'])) {
+            $problems += "$label needs a Title"
+        }
+        if ($phase.ContainsKey('Parameters') -and $phase['Parameters'] -isnot [hashtable]) {
+            $problems += "$label Parameters must be a hashtable"
+        }
+        if ($phase.ContainsKey('Steps') -and
+            (@($phase['Steps']).Count -eq 0 -or @($phase['Steps'] | Where-Object { $_ -isnot [string] -or -not $_ }).Count -gt 0)) {
+            $problems += "$label Steps must list step names"
+        }
     }
 
-    Show-DevConfigSilentSkipSummary
-    Write-Host ''
-    Write-Host "$workloadName $operation complete." -ForegroundColor Green
-    $tally = $Script:DevConfigTally
-    $summaryParts = @("$($tally.Done) changed", "$($tally.AlreadyOk) already up to date")
-    if ($tally.Warned -gt 0) {
-        $summaryParts += "$($tally.Warned) flagged"
+    if ($problems.Count -gt 0) {
+        throw "workloads\$Workload.ps1 is not a valid workload: $($problems -join '; ')."
     }
-    Write-Host "  $($summaryParts -join ', ')" -ForegroundColor DarkGray
-    # Names are shown because the detailed flags may have scrolled off screen.
-    if ($tally.Warned -gt 0) {
-        Write-Host "  Flagged: $($Script:DevConfigWarnedSteps -join ', ')" -ForegroundColor Yellow
-        Write-Host '  These were skipped or could not be confirmed. Running this again retries just those.' -ForegroundColor DarkGray
-    }
-    # Notes raised by steps come before the workload's standing notes.
-    foreach ($note in $Script:DevConfigNotes) {
-        $color = if ($note.Warning) { 'Yellow' } else { 'DarkGray' }
-        Write-Host "  $($note.Message)" -ForegroundColor $color
-    }
-    foreach ($note in @($definition['Notes'] | Where-Object { $_ })) {
-        Write-Host "  $note" -ForegroundColor DarkGray
-    }
-} catch {
-    $failure = $_
 }
 
-if ($failure) {
-    Write-Host ''
-    Write-Host "$workloadName $operation stopped early." -ForegroundColor Red
-    Write-Host "  $($failure.Exception.Message)" -ForegroundColor Red
-    $origin = $failure.InvocationInfo
-    if ($origin -and $origin.ScriptName) {
-        Write-Host "  ($(Split-Path -Leaf $origin.ScriptName) line $($origin.ScriptLineNumber))" -ForegroundColor DarkGray
+function Get-DevConfigWorkload {
+    param(
+        [Parameter(Mandatory)] [string] $Directory,
+        [Parameter(Mandatory)] [string] $Workload,
+        [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full'
+    )
+    $path = Join-Path $Directory "$Workload.ps1"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        $available = @(Get-ChildItem -LiteralPath $Directory -Filter '*.ps1' -File -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.BaseName }) -join ', '
+        throw "There is no '$Workload' workload. Available workloads: $available."
     }
-    Write-Host '  Nothing already applied was undone -- running this again picks up where it left off.' -ForegroundColor DarkGray
+
+    # Definitions only describe phases; they are invoked for the requested action and must not change the machine.
+    $definition = & $path -Action $Action
+    Assert-DevConfigWorkloadDefinition -Definition $definition -Workload $Workload
+
+    if (@($definition['Actions']) -notcontains $Action) {
+        throw "The $($definition['Name']) workload supports -Action $(@($definition['Actions']) -join ', ') only."
+    }
+    if ($definition['MinimumOSVersion']) {
+        $current = [Environment]::OSVersion.Version
+        if ($current -lt [version]$definition['MinimumOSVersion']) {
+            throw "The $($definition['Name']) workload needs Windows $($definition['MinimumOSVersion']) or later. This machine runs $current."
+        }
+    }
+    return $definition
 }
 
-$logPath = Get-DevConfigLogPath
-if ($logPath) {
-    Write-Host "  Full log: $logPath" -ForegroundColor DarkGray
+# Parameters come from the workload; phases that can reboot also receive the orchestrator path so resume can relaunch it.
+function Resolve-DevConfigWorkloadPhase {
+    param(
+        [Parameter(Mandatory)] [hashtable] $Phase,
+        [Parameter(Mandatory)] [string] $OrchestratorPath
+    )
+    $scriptPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OrchestratorPath)
+    $phasePath = Join-Path (Split-Path -Parent $scriptPath) "steps\$($Phase['File'])"
+    $command = Get-Command -Name $Phase['Function'] -CommandType Function -ErrorAction SilentlyContinue
+    if (-not $command -or $command.ScriptBlock.File -ne $phasePath) {
+        throw "$($Phase['File']) does not define $($Phase['Function'])."
+    }
+
+    $parameters = @{}
+    if ($Phase['Parameters']) {
+        foreach ($name in $Phase['Parameters'].Keys) {
+            if (-not $command.Parameters.ContainsKey($name)) {
+                throw "$($Phase['Function']) has no -$name parameter, so the workload cannot pass it."
+            }
+            $parameters[$name] = $Phase['Parameters'][$name]
+        }
+    }
+    if ($command.Parameters.ContainsKey('OrchestratorPath')) {
+        $parameters['OrchestratorPath'] = $OrchestratorPath
+    }
+
+    # A missing mandatory value would otherwise stop the run at a parameter prompt.
+    foreach ($parameter in $command.Parameters.Values) {
+        $mandatory = @($parameter.Attributes | Where-Object { $_ -is [Parameter] -and $_.Mandatory }).Count -gt 0
+        if ($mandatory -and -not $parameters.ContainsKey($parameter.Name)) {
+            throw "$($Phase['Function']) requires -$($parameter.Name), so the workload must set it in Parameters."
+        }
+    }
+    return @{ Command = $command; Parameters = $parameters }
 }
 
-# Close the log before releasing the lock so another run can start while this window waits.
-Stop-DevConfigLog
-Exit-DevConfigSingleInstance
+function Invoke-DevConfigWorkloadPhase {
+    param(
+        [Parameter(Mandatory)] [hashtable] $Phase,
+        [Parameter(Mandatory)] [string] $OrchestratorPath
+    )
+    $resolved = Resolve-DevConfigWorkloadPhase -Phase $Phase -OrchestratorPath $OrchestratorPath
+    $parameters = $resolved.Parameters
 
-# The elevated window owns the final pause on both the initial and resumed runs.
-Wait-DevConfigKeyPress
-
-if ($failure) {
-    exit 1
+    $Script:DevConfigPhaseSteps = $Phase['Steps']
+    try {
+        & $resolved.Command @parameters
+    } finally {
+        $Script:DevConfigPhaseSteps = $null
+    }
 }
 
 # SIG # Begin signature block
 # MIInKwYJKoZIhvcNAQcCoIInHDCCJxgCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBDwD016QrboL04
-# uyQauHV9ub53qspoX6kcXpgOwWV+z6CCDLowggX1MIID3aADAgECAhMzAAACHU0Z
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDvkeZSxVpNOc9n
+# YlX2QEv+paA3CYtE9rffj4nyMnZr1qCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
 # yE7XD1dIAAAAAAIdMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQzWhcNMjcwNDE1MTg1
@@ -307,19 +232,19 @@ if ($failure) {
 # MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jv
 # c29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIdTRnITtcPV0gAAAAAAh0w
 # DQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwLwYJ
-# KoZIhvcNAQkEMSIEINP4Y5d5xbwg8CZyPW55SW+qaTKMAAvrSa696Q40bOM/MEIG
+# KoZIhvcNAQkEMSIEIK5wzdsJAJZmePuEJjzSpylO6B09XinLpbD9GDgzZCyzMEIG
 # CisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBvAGYAdKEagBhodHRwOi8v
-# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAEiJHLn8Rd5XdOfZ9
-# pR+cnH0Dqku7X8KRD8TVCxHSk5DWw2X8C4T5+lEbpWVeenJVbNrPT4Ibg3nBfZPk
-# RQxdGE7jx8iln6ni7uWAjJQkfsSkLRkcW9rTJAynUTBUjUaA+kL/1bmUN/QA05KF
-# JDxWnGTvNybONIuLhAkYE7aDqHVCrpiDKrQW136YLd1o//ejVOb+ZuhPVxISoW25
-# 8VGl85tZ2glEMIPi3Z8cxNFNUQH6nLkwqI1WrAfs5EZ2HBq73GzwKD/yzjNEZJi4
-# CkYv9dg7/bkIiaILu5W1zccNohNoyV9FrLYtlglaAE53J9hvAeDJw74kUFwZdqPD
-# kRl0taGCF5cwgheTBgorBgEEAYI3AwMBMYIXgzCCF38GCSqGSIb3DQEHAqCCF3Aw
+# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAct0Jk0hcn7qnNL3O
+# P8qTIohvjUskVkbzodsgm06qZbcKI47S9NfnwOxZNvGzuIQgTcsN8iVJqryKgXSY
+# XzPIjhJfSCT0fWQ7PgaF/Siz4557iLuFQMAOc1UJXBgb3yxc/s+yUiA8OaOrYywb
+# Iv6ZoqpDwWVK5nMP24dZWOWZcGr4oD0dAZ1sltpfyfofP8EiwKgkCFR3ZPdBtNgu
+# w+F+w5VVkNJ/48sB5QczRtQ4FuxYqhdm5qQDJ+35TVnPLa5gVUBa8NK0VVpiDxQD
+# QzH5Y8FHirhU12mxeQFHStk/no0ZazSRF4IXCfaN0bb680Wa2JNI+1Z25SsZnQwL
+# 6W65pKGCF5cwgheTBgorBgEEAYI3AwMBMYIXgzCCF38GCSqGSIb3DQEHAqCCF3Aw
 # ghdsAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG9w0BCRABBKCCAUEEggE9
-# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCBe3S/SqZvaIUfb
-# +ZJ5hj8Y2YAUJcnkXnp6kCL8usyquwIGaqk3XrtHGBMyMDI2MTAwMTA0NTIxOS4z
-# MzdaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
+# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCDiOACw55lBB6s3
+# owexoYdK6rCj+7YtvuDaTleZbRj07AIGaqk3XsWIGBMyMDI2MTAwMTA0NTMwOS4z
+# MzJaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
 # Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
 # cmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScw
 # JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046QTQwMC0wNUUwLUQ5NDcxJTAjBgNVBAMT
@@ -423,22 +348,22 @@ if ($failure) {
 # A1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWlj
 # cm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFt
 # cCBQQ0EgMjAxMAITMwAAAijwpYfX88geQAABAAACKDANBglghkgBZQMEAgEFAKCC
-# AUowGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCAL
-# yllmzeuG511wsBOsTVPgf+ThFk6NxdapHF1CM8fBWTCB+gYLKoZIhvcNAQkQAi8x
+# AUowGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCBn
+# DeeJL6u646sEnfyYWZAikDM968z0Bwzop0iJSEFAujCB+gYLKoZIhvcNAQkQAi8x
 # geowgecwgeQwgb0EIFWxikZRYGNf4oEVZK1eT45H+3GQ3/qxV75VwuBt+iLXMIGY
 # MIGApH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNV
 # BAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQG
 # A1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIo8KWH1/PI
 # HkAAAQAAAigwIgQgQXZIuJkathJ/Fb9fdUzioBI67NCAwuAmvhO1tvQXnjAwDQYJ
-# KoZIhvcNAQELBQAEggIAomabFdclhjU539O/iVQDiyEM5MnKHHOLcggcgyGyOXjD
-# UwG4X0qP3NJyehE0P9WLCuMRSZBm2I6Qr5tRwDhTTHUlXWCFyiH+Dwt3MQdCeI1r
-# 4ZC/IkWNdAv6z2KIqgpAGDYHddCx/PXWIgnG/0ElGWd9vuqQ0/QCdCsMSVreT3B9
-# XxBDR93KpA7skMT2jpPHu7L4leLxTDuVCgQJ/prlCYcWP8XbHrbwUxFvL7WFOI0Q
-# HvGD+E96PmZ1fnCX+1ljp0jpsEe5AqGKnqYtfi6KNCLW5wgmtthE2cX6A4R1ZycZ
-# aZWvIhuPgCBhUm5rgePSjg1l86UUNMUhNfWHH6DcaLuj1r94ZWET5bh+8NiGGUhj
-# xP4iklaT6x+TWHzgUpFhTRk7VR5iOKlV+M4avImxFuUE0pGph7OK42YZgyB2WPfV
-# iWpAtCGPDF5IA2giZaHYmRifAR7JZwF3HmppDbYpJFpvG/bj0FXUoCJ9rHRC7jhl
-# MRcYS3nYFFSwcJiXpBBE3fYDDoZj/wWP7J/oHwDIKlib/DnGIeb4fzhwQUtZWpeZ
-# NmKnfMv/fN8MRSv/McwfLjOGjUn0QwbF8ebanJABPh2lsCs5+2REBVi22FqLxqH4
-# 78wzAO/VVAwxN3ouYAexjpa52M+XE+r3y+7vdc/w3JPpUWBa9d8Ba9/CaQdmClA=
+# KoZIhvcNAQELBQAEggIAkc4ZplQ46JWvNfrcODvSMzJSdx54KLLd84DFGM1HPzhw
+# AS7SU1VzW00Jfdzvu93rq5oYQdbCeaBCZt9O5vlHjnXW2Mgofm1+5CaBQjeC6wee
+# UW3tJ+9rjxcMN5GnrjYpjg4YTPFUGE8KeQj58gs/QWollC6HXCRHO6FA+LqTCUIZ
+# LvFVVOQjtuoRSgaefgMrUuiTosJQZnCgpOSlIJubFAFYQNhuUE98iiA6juShSujk
+# mUBFmyOzwnrVfLJxXv3i4qMCD5f8/3tAa7/z4oRVZ3rkk1cEvbPm6VRP2axyHQf3
+# /tISMh34T7XquXeAhIBm2W28kn2+j8OOCzb9VUfs3Sw2eKr2x817Xgh4KjUwsd6R
+# O5Gmvy0/Ri8f1I+VCa4WAezDYHvw4rVDcai4V3T8F+N9W5lHaMdgYH3IrkdCDdV3
+# MysFHM3mY9lAKGT+VVvlO9m5IbCjBW5IC/IymTZ+hjbacE7rsluV9ALR+/6jGelY
+# 9d/Dd1yq1lZMTHeMlwrSkzLvdljXecoTVYpBum48Oa9JBhDM6wx72mO6vhg3uOP2
+# Ctzr8atp5ffxeZ9BxHetnl2xSrKKFdAPeVcB2cHlbdmyoLL3Ut90NOpzdYvaTIxe
+# ruK4XbFaoGa0fG3VhwMXVy3v0sstzJGwlR/ECxaazpHj4m/Spul8tGL4Z3REzbU=
 # SIG # End signature block
