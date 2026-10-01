@@ -25,7 +25,7 @@ $isClient = (Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Window
     Name             = 'WinUI'
     Actions          = @('Full')
     MinimumOSVersion = if ($isClient) { '10.0.22000' } else { '10.0.17763' }
-    SetupNote        = 'Visual Studio alone is a multi-GB download'
+    SetupNote        = 'Visual Studio is a multi-GB download'
     Notes            = @(
         'Open a new terminal so dotnet and winapp are on PATH.'
         'Create an app with: dotnet new winui -n MyApp, or the WinUI Blank App (Packaged) template in Visual Studio.'
