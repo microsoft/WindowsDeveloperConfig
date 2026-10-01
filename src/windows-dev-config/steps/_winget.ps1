@@ -13,12 +13,12 @@ $Script:DevConfigWinGetMode = 'Module'
 $Script:DevConfigWingetNotFound  = -1978335212   # 0x8A150014 no installed package matched
 $Script:DevConfigWingetNoUpgrade = -1978335189   # 0x8A15002B already at the latest applicable version
 
-# Repair-WinGetPackageManager -Latest installs this release, so it is what "latest" is measured against.
-$Script:DevConfigWinGetLatestReleaseUrl = 'https://api.github.com/repos/microsoft/winget-cli/releases/latest'
-
-# Cached per run so the check and its follow-up verification share one network call.
-$Script:DevConfigWinGetLatestVersion = $null
-$Script:DevConfigWinGetLatestChecked = $false
+# Update the version and both official release asset hashes together.
+$Script:DevConfigWinGetTargetVersion = [version]'1.29.380'
+$Script:DevConfigWinGetAssets = [ordered]@{
+    'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' = '65DEA9C01CE08EE7B763366B27C0E651F97DB857C11CA9B9C301826C10092F2E'
+    'DesktopAppInstaller_Dependencies.zip' = 'BA875AFE9D190F61218985AC0292A99D1DB710BF93E13C68944CA9D89F0D82D1'
+}
 
 function Install-DevConfigWinGetModule {
     Enable-DevConfigModernTls
@@ -78,6 +78,92 @@ function Initialize-DevConfigWinGet {
     $Script:DevConfigWinGetMode = 'Cli'
 }
 
+function Invoke-DevConfigWinGetDeployment {
+    param(
+        [string] $Directory = ''
+    )
+
+    # Keep Appx operations in Windows PowerShell to avoid dependency-array remoting issues.
+    $deployment = {
+        param([string] $Directory)
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            if ($Directory) {
+                $architectures = switch ([Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITECTURE', 'Machine')) {
+                    'AMD64' { 'x64'; 'x86' }
+                    'ARM64' { 'arm64'; 'x64'; 'x86' }
+                    'x86'   { 'x86' }
+                    default { throw 'Unsupported Windows architecture for WinGet deployment.' }
+                }
+                $dependenciesRoot = Join-Path $Directory 'Dependencies'
+                Expand-Archive -LiteralPath (Join-Path $Directory 'DesktopAppInstaller_Dependencies.zip') `
+                    -DestinationPath $dependenciesRoot -ErrorAction Stop
+                $dependencies = @(
+                    foreach ($architecture in $architectures) {
+                        $packages = @(Get-ChildItem -LiteralPath (Join-Path $dependenciesRoot $architecture) -Filter '*.appx' -File)
+                        if (-not $packages.Count) {
+                            throw "WinGet dependencies are missing for $architecture."
+                        }
+                        $packages.FullName
+                    }
+                )
+                $bundle = Join-Path $Directory 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'
+                Add-AppxPackage -Path $bundle -DependencyPath $dependencies -ForceTargetApplicationShutdown -ErrorAction Stop
+            } else {
+                $package = Get-AppxPackage -Name Microsoft.DesktopAppInstaller |
+                    Sort-Object Version -Descending | Select-Object -First 1
+                if (-not $package) {
+                    $package = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -AllUsers |
+                        Sort-Object Version -Descending | Select-Object -First 1
+                }
+                if (-not $package -or -not $package.InstallLocation) {
+                    throw 'No installed App Installer package is available to register.'
+                }
+                Add-AppxPackage -Register (Join-Path $package.InstallLocation 'AppxManifest.xml') `
+                    -DisableDevelopmentMode -ForceTargetApplicationShutdown -ErrorAction Stop
+            }
+            exit 0
+        } catch {
+            [Console]::Error.WriteLine($_.ToString())
+            exit 1
+        }
+    }
+    $escapedDirectory = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Directory)
+    $command = "& { $deployment } '$escapedDirectory'"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $systemDirectory = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' }
+    $shell = Join-Path $env:SystemRoot "$systemDirectory\WindowsPowerShell\v1.0\powershell.exe"
+    $result = Invoke-DevConfigNativeCommand -FilePath $shell `
+        -Arguments @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds 600
+    if ($null -eq $result.ExitCode -or $result.ExitCode -ne 0) {
+        throw "WinGet package deployment failed ($($result.ExitCode)): $(([string]$result.Output).Trim())"
+    }
+    Update-DevConfigSessionPath
+}
+
+function Install-DevConfigWinGetRelease {
+    Enable-DevConfigModernTls
+    $ProgressPreference = 'SilentlyContinue'
+    $directory = Join-Path ([IO.Path]::GetTempPath()) "DevConfig-WinGet-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $directory -ErrorAction Stop | Out-Null
+    try {
+        $baseUri = "https://github.com/microsoft/winget-cli/releases/download/v$Script:DevConfigWinGetTargetVersion"
+        foreach ($asset in $Script:DevConfigWinGetAssets.GetEnumerator()) {
+            $path = Join-Path $directory $asset.Key
+            Invoke-DevConfigWebRequest -Parameters @{
+                Uri = "$baseUri/$($asset.Key)"; OutFile = $path; TimeoutSec = 300
+            }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $asset.Value) {
+                throw "WinGet release asset failed SHA-256 verification: $($asset.Key)"
+            }
+        }
+        Invoke-DevConfigWinGetDeployment -Directory $directory
+    } finally {
+        Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction Stop
+    }
+}
+
 function Confirm-DevConfigWinGetReady {
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
         return
@@ -96,7 +182,7 @@ function Confirm-DevConfigWinGetReady {
         if ($attempt -eq 1) {
             Write-Host "  The WinGet module could not connect ($moduleError). Repairing WinGet..." -ForegroundColor Yellow
             try {
-                $null = Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop *>&1
+                Invoke-DevConfigWinGetDeployment
             } catch {
                 Write-Host "  WinGet repair did not complete: $($_.Exception.Message)" -ForegroundColor Yellow
             }
@@ -156,6 +242,10 @@ function ConvertTo-DevConfigWinGetVersion {
 # winget.exe runs in a fresh process, so it is the only source that reflects an in-place update:
 # the module resolves the engine version once and keeps reporting it for the life of this process.
 function Get-DevConfigWinGetVersion {
+    param(
+        [switch] $CliOnly
+    )
+
     # Skip the call when the alias is missing so a bare machine does not log a failed launch.
     if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
         try {
@@ -171,7 +261,7 @@ function Get-DevConfigWinGetVersion {
         }
     }
 
-    if ($Script:DevConfigWinGetMode -eq 'Cli') {
+    if ($CliOnly -or $Script:DevConfigWinGetMode -eq 'Cli') {
         return $null
     }
 
@@ -183,46 +273,22 @@ function Get-DevConfigWinGetVersion {
     }
 }
 
-# A null result means the lookup failed, which callers treat as "cannot tell" rather than "up to date".
-function Get-DevConfigWinGetLatestVersion {
-    if ($Script:DevConfigWinGetLatestChecked) {
-        return $Script:DevConfigWinGetLatestVersion
-    }
-    $Script:DevConfigWinGetLatestChecked = $true
-
-    try {
-        # The GitHub API rejects requests without a User-Agent.
-        $release = Invoke-RestMethod -Uri $Script:DevConfigWinGetLatestReleaseUrl -UseBasicParsing -TimeoutSec 30 `
-            -Headers @{ 'User-Agent' = 'WindowsDeveloperConfig' }
-        $Script:DevConfigWinGetLatestVersion = ConvertTo-DevConfigWinGetVersion -Text ([string]$release.tag_name)
-    } catch {
-        Write-Verbose "Could not look up the latest WinGet release: $($_.Exception.Message)"
-    }
-    return $Script:DevConfigWinGetLatestVersion
-}
-
 # Quiet by design: this runs on every invocation, including the follow-up verification.
-function Test-DevConfigWinGetLatest {
+function Test-DevConfigWinGetTargetVersion {
     # An unreadable version means WinGet is missing or broken, which the update path repairs.
-    $current = Get-DevConfigWinGetVersion
+    $current = Get-DevConfigWinGetVersion -CliOnly
     if (-not $current) {
         return $false
     }
 
-    # An offline or rate-limited lookup leaves a working WinGet alone rather than flagging every run.
-    $latest = Get-DevConfigWinGetLatestVersion
-    if (-not $latest) {
-        return $true
-    }
-
-    # Store and Windows builds can lead the latest stable release, so newer also counts as current.
-    return ($current -ge $latest)
+    # Store and Windows builds can lead the pinned release; never downgrade them.
+    return ($current -ge $Script:DevConfigWinGetTargetVersion)
 }
 
 # WinGet can report its previous version briefly after updating itself in place.
 function Wait-DevConfigWinGetVersionSettled {
     for ($attempt = 1; $attempt -le 5; $attempt++) {
-        if (Test-DevConfigWinGetLatest) {
+        if (Test-DevConfigWinGetTargetVersion) {
             return $true
         }
         if ($attempt -eq 1) {
@@ -233,24 +299,16 @@ function Wait-DevConfigWinGetVersionSettled {
     return $false
 }
 
-# Update runs only after the latest check fails, so machines already current skip the slower path.
+# Update runs only when the installed version does not meet the pinned target.
 function Update-DevConfigWinget {
     $current = Get-DevConfigWinGetVersion
-    $latest  = Get-DevConfigWinGetLatestVersion
-    if ($current -and $latest) {
-        Write-Host "  WinGet $current -> $latest" -ForegroundColor DarkGray
-    }
-
-    if ($Script:DevConfigWinGetMode -eq 'Cli') {
-        # Repair-WinGetPackageManager has no winget.exe equivalent, so there is nothing to try here.
-        Set-DevConfigStepUnverified -Reason 'The built-in winget command cannot update itself from here. Update App Installer from the Microsoft Store, then run this again.'
-        return
+    if ($current) {
+        Write-Host "  WinGet $current -> $Script:DevConfigWinGetTargetVersion" -ForegroundColor DarkGray
     }
 
     Write-Host '  (This can take a few minutes.)' -ForegroundColor DarkGray
     try {
-        # Suppress update output; exceptions and the follow-up check decide the result.
-        $null = Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop *>&1
+        Install-DevConfigWinGetRelease
         if (Wait-DevConfigWinGetVersionSettled) {
             return
         }
@@ -260,14 +318,14 @@ function Update-DevConfigWinget {
         Write-Host "  WinGet update did not complete: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 
-    # If the module update fails, winget.exe may still be usable for package operations.
+    # If the update fails, winget.exe may still be usable for package operations.
     if (Test-DevConfigWingetCliUsable) {
         Write-Host '  Falling back to the built-in winget command instead.' -ForegroundColor Yellow
         $Script:DevConfigWinGetMode = 'Cli'
     }
 
     if (Get-DevConfigWinGetVersion) {
-        Set-DevConfigStepUnverified -Reason "WinGet could not be updated to $latest. The version on this machine still works, so the run carries on -- update App Installer from the Microsoft Store when convenient."
+        Set-DevConfigStepUnverified -Reason "WinGet could not be updated to $Script:DevConfigWinGetTargetVersion. The version on this machine still works, so the run carries on -- update App Installer from the Microsoft Store when convenient."
     } else {
         Set-DevConfigStepUnverified -Reason 'WinGet could not be updated and is not reporting a version at all. Update App Installer from the Microsoft Store, then run this again.'
     }

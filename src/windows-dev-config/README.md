@@ -99,7 +99,7 @@ The wrappers accept no setup options. Each embeds a full payload commit SHA,
 verifies the Microsoft signature of `bootstrap.ps1` downloaded from that commit,
 and passes the same SHA to bootstrap with the fixed action. The production path
 does not use Git ref discovery or the GitHub REST API to select its payload.
-WinGet operations can still use the GitHub REST API.
+WinGet setup also avoids the GitHub REST API by downloading a pinned official release directly.
 
 ## Single workloads
 
@@ -146,7 +146,7 @@ Afterwards, open **Ubuntu** from the Start menu once to create your Linux userna
 
 - **Windows 11.** Built and tested against current Windows 11 releases. A few of the settings only exist on newer builds; on older ones those steps are skipped rather than failing the run. Windows 10 is not supported.
 - **Administrator rights** on the machine, and the ability to accept both UAC prompts.
-- **Internet access** to `github.com`, `api.github.com`, `raw.githubusercontent.com`, the PowerShell Gallery, and the winget package sources. Behind a proxy, the run needs your proxy configured for WinHTTP and for `winget`.
+- **Internet access** to `github.com`, `raw.githubusercontent.com`, `codeload.github.com`, `release-assets.githubusercontent.com`, the PowerShell Gallery, and the winget package sources. Behind a proxy, the run needs your proxy configured for WinHTTP and for `winget`.
 - **Hardware virtualization available to the OS** — WSL cannot install without it. On a physical machine that means VT-x / AMD-V enabled in BIOS/UEFI. In a VM it means the host has exposed nested virtualization to the guest. Everything except WSL still works without it; see [Troubleshooting](#troubleshooting).
 - **About 15 GB of free disk space** for the full package set.
 
@@ -291,7 +291,7 @@ Nothing *inside* the distro is configured by this flow. For that, see [WSL Comfo
 
 | # | Phase | Notes |
 | - | ----- | ----- |
-| 1 | Getting ready | Confirms PowerShell 7, then updates winget to the latest public stable release |
+| 1 | Getting ready | Confirms PowerShell 7, then updates winget to the pinned public stable release if needed |
 | 2 | Packages | The packages above, plus the PowerToys notification setting |
 | 3 | System settings | Sudo, Developer Mode, long paths, Remote Desktop |
 | 4 | File Explorer tweaks | |
@@ -392,7 +392,9 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 **What runs elevated.** The setup runs elevated after each UAC prompt. It needs Administrator for the `HKLM` settings, the WSL Windows features, and machine-wide package installs. The logon task itself runs at normal privilege, so it cannot silently elevate modified files.
 
-**What it downloads, and from where.** GitHub (this repository, the pinned Cascadia Code release, which is checked against a SHA-256, and the latest `microsoft/winget-cli` release), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. Failing to fetch the icon is not treated as an error, and neither is failing to look up the latest winget version.
+**What it downloads, and from where.** GitHub (this repository, the pinned Cascadia Code release, and the pinned `microsoft/winget-cli` installer and dependencies), the PowerShell Gallery (the `Microsoft.WinGet.Client` module), the winget package sources, and the GitHub favicon used as the Copilot profile icon. The font and WinGet downloads are checked against pinned SHA-256 hashes. GitHub downloads can still be throttled even though bootstrap and WinGet setup avoid the REST API. Failing to fetch the icon is not treated as an error.
+
+**Download retries.** Once bootstrap is running, its HTTP requests and the WinGet release downloads retry transient failures up to four attempts, using randomized exponential delays and honoring `Retry-After`. Retry waits total at most two minutes per request, in addition to request execution time. If the server asks for a longer wait than remains, the request fails rather than retrying early. Bootstrap stops if required files cannot be fetched or verified; a failed WinGet update is flagged and setup can continue with a working installation. The initial launcher fetches are outside this retry policy.
 
 **Code signing.** Production requires valid Microsoft Corporation Authenticode signatures. Before execution, the elevation launcher verifies the bootstrap's signature and confirms the installed copy has the same hash. Bootstrap verifies its security helper before loading it and every payload `.ps1` before and after copying, including with `-NoLaunch`. Each production launch rechecks permissions and signatures before loading other helpers. Failed checks stop setup. `-AllowUnsigned` skips signature verification for source development.
 
@@ -459,11 +461,13 @@ If virtualization is definitely on and WSL still won't activate after the restar
 <details>
 <summary><strong>winget can't be updated</strong></summary>
 
-The setup updates winget to the latest [microsoft/winget-cli](https://github.com/microsoft/winget-cli/releases/latest) public stable release. If it can't — usually because the built-in `winget` command is being used and the PowerShell module isn't reachable — update **App Installer** from the Microsoft Store, or install the latest release directly, then run the setup again.
+The setup targets the public stable release pinned in [`steps/_winget.ps1`](steps/_winget.ps1). Older or missing installations use direct GitHub release downloads, with SHA-256 checks and Windows package-signature enforcement. This works with either the PowerShell module or the built-in `winget` command. If it fails, update **App Installer** from the Microsoft Store, or install an official [WinGet release](https://github.com/microsoft/winget-cli/releases), then run the setup again.
 
 The step is best-effort, so a machine that can't be updated is flagged rather than stopped, and the rest of the run continues on whatever winget it has.
 
-A winget delivered by the Store or by Windows itself can be *newer* than the latest GitHub stable release — the 1.30.x previews, for instance. That counts as up to date, not as behind. If the latest release can't be looked up at all, a working winget is left alone rather than flagged.
+An installed version equal to or newer than the pin skips the update without a network lookup. RPC recovery re-registers the installed App Installer package locally, then retries the package query; it does not download or downgrade a newer version.
+
+To change the target release, update `DevConfigWinGetTargetVersion` and both asset hashes in `steps/_winget.ps1` together, then sign and publish the payload as usual.
 
 </details>
 

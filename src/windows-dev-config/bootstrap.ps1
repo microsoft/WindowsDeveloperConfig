@@ -46,6 +46,79 @@ function Invoke-CalmOsBootstrap {
     $ErrorActionPreference = 'Stop'
     Set-StrictMode -Version Latest
 
+    # Keep this helper identical to steps/_retry.ps1; bootstrap must work on its own.
+    function Invoke-DevConfigWebRequest {
+        param(
+            [Parameter(Mandatory)] [hashtable] $Parameters
+        )
+
+        $waited = 0.0
+        for ($attempt = 1; $attempt -le 4; $attempt++) {
+            try {
+                return Invoke-WebRequest @Parameters -UseBasicParsing -ErrorAction Stop
+            } catch {
+                $response = $null
+                $networkFailure = $false
+                for ($exception = $_.Exception; $null -ne $exception; $exception = $exception.InnerException) {
+                    if ($exception -is [Security.Authentication.AuthenticationException]) { throw }
+                    if ($exception.PSObject.Properties['Response'] -and $null -ne $exception.Response) {
+                        $response = $exception.Response
+                    }
+                    if ($exception -is [Net.WebException]) {
+                        $networkFailure = $exception.Status.ToString() -in @(
+                            'Timeout', 'ConnectFailure', 'ConnectionClosed', 'KeepAliveFailure',
+                            'NameResolutionFailure', 'ProxyNameResolutionFailure', 'ReceiveFailure', 'SendFailure'
+                        )
+                    } elseif ($exception.GetType().FullName -in @(
+                        'System.Net.Http.HttpRequestException', 'System.Net.Http.HttpIOException',
+                        'System.Threading.Tasks.TaskCanceledException', 'System.TimeoutException'
+                    )) {
+                        $networkFailure = $true
+                    }
+                }
+                $status = if ($null -ne $response) { [int]$response.StatusCode } else { 0 }
+                if ($attempt -eq 4 -or
+                    ($status -ne 0 -and $status -notin @(408, 429, 500, 502, 503, 504)) -or
+                    ($status -eq 0 -and -not $networkFailure)) {
+                    throw
+                }
+
+                $retryAfter = $null
+                if ($null -ne $response) {
+                    if ($response.Headers -is [Net.WebHeaderCollection]) {
+                        $retryAfter = $response.Headers['Retry-After']
+                    } elseif ($response.Headers.Contains('Retry-After')) {
+                        $retryAfter = @($response.Headers.GetValues('Retry-After'))[0]
+                    }
+                }
+                $serverDelay = 0.0
+                $date = [DateTimeOffset]::MinValue
+                if ($retryAfter -match '^\d+$') {
+                    if (-not [double]::TryParse($retryAfter, [Globalization.NumberStyles]::None,
+                            [Globalization.CultureInfo]::InvariantCulture, [ref]$serverDelay)) { throw }
+                } elseif ($retryAfter -and [DateTimeOffset]::TryParse($retryAfter,
+                        [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$date)) {
+                    $serverDelay = [Math]::Max(0, [Math]::Ceiling(($date - [DateTimeOffset]::UtcNow).TotalSeconds))
+                } elseif ($retryAfter) {
+                    Write-Verbose 'Ignoring an invalid Retry-After header.'
+                }
+
+                $backoff = 5 * [Math]::Pow(2, $attempt - 1)
+                $delay = [Math]::Max($backoff, $serverDelay)
+                $remaining = 120 - $waited
+                if ($delay -gt $remaining) {
+                    Write-Host '  Download retry wait exceeds the remaining two-minute budget.' -ForegroundColor DarkYellow
+                    throw
+                }
+                $jitterMilliseconds = [int][Math]::Floor([Math]::Min($backoff, $remaining - $delay) * 1000)
+                $milliseconds = [int]($delay * 1000) + (Get-Random -Minimum 0 -Maximum ($jitterMilliseconds + 1))
+                Write-Host "  Download attempt $attempt failed; retrying in $([Math]::Round($milliseconds / 1000, 1))s." -ForegroundColor DarkYellow
+                Start-Sleep -Milliseconds $milliseconds
+                $waited += $milliseconds / 1000
+            }
+        }
+    }
+
     $repo = 'microsoft/WindowsDeveloperConfig'
     $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
     $Workload = $Workload.ToLowerInvariant()
@@ -107,7 +180,9 @@ function Invoke-CalmOsBootstrap {
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
             $baseUri = "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$Ref/$flow"
-            $securityCode = (Invoke-RestMethod -Uri "$baseUri/steps/_security.ps1" -UseBasicParsing -TimeoutSec 60).TrimStart([char]0xFEFF)
+            $securityCode = (Invoke-DevConfigWebRequest -Parameters @{
+                Uri = "$baseUri/steps/_security.ps1"; TimeoutSec = 60
+            }).Content.TrimStart([char]0xFEFF)
             if (-not $AllowUnsigned) {
                 $signature = Get-AuthenticodeSignature -Content ([Text.Encoding]::Unicode.GetBytes($securityCode)) -SourcePathOrExtension '.ps1'
                 if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
@@ -120,7 +195,9 @@ function Invoke-CalmOsBootstrap {
             $work = New-DevConfigProtectedDirectory -Path (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ("CalmOS-bootstrap-" + [guid]::NewGuid().ToString('N')))
             try {
                 $bootstrap = Join-Path $work 'bootstrap.ps1'
-                Invoke-WebRequest -Uri "$baseUri/bootstrap.ps1" -OutFile $bootstrap -UseBasicParsing -TimeoutSec 60
+                Invoke-DevConfigWebRequest -Parameters @{
+                    Uri = "$baseUri/bootstrap.ps1"; OutFile = $bootstrap; TimeoutSec = 60
+                }
                 Assert-DevConfigProtectedTree -Directory $work
                 if (-not $AllowUnsigned) {
                     Assert-DevConfigMicrosoftSigned -Directory $work
@@ -155,7 +232,8 @@ function Invoke-CalmOsBootstrap {
         # PowerShell also recognizes smart quotes as string delimiters.
         $escapedRef = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Ref)
         $escapedRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($InstallRoot)
-        $command = "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot' -Action '$Action'"
+        $command = "function Invoke-DevConfigWebRequest {`n${function:Invoke-DevConfigWebRequest}`n}`n" +
+            "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot' -Action '$Action'"
         if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
         if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
         if ($NoLaunch) { $command += ' -NoLaunch' }
@@ -180,8 +258,10 @@ function Invoke-CalmOsBootstrap {
         }
 
         try {
-            $response = Invoke-WebRequest -Uri "https://github.com/$repo.git/info/refs?service=git-upload-pack" `
-                -Headers @{ 'Git-Protocol' = 'version=0' } -UseBasicParsing -TimeoutSec 60
+            $response = Invoke-DevConfigWebRequest -Parameters @{
+                Uri = "https://github.com/$repo.git/info/refs?service=git-upload-pack"
+                Headers = @{ 'Git-Protocol' = 'version=0' }; TimeoutSec = 60
+            }
         } catch {
             throw "Could not resolve '$Ref' from $repo ($($_.Exception.Message)). Check your internet connection or proxy settings, then run this again."
         }
@@ -223,7 +303,10 @@ function Invoke-CalmOsBootstrap {
         # The elevated window closes on errors, so a ref without the workload is reported here, before UAC.
         if ($Workload -ne 'devconfig') {
             try {
-                $null = Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$repo/$Ref/$flow/workloads/$Workload.ps1" -Method Head -UseBasicParsing -TimeoutSec 60
+                $null = Invoke-DevConfigWebRequest -Parameters @{
+                    Uri = "https://raw.githubusercontent.com/$repo/$Ref/$flow/workloads/$Workload.ps1"
+                    Method = 'Head'; TimeoutSec = 60
+                }
             } catch {
                 $failure = $_
                 $status = $null
@@ -250,36 +333,13 @@ function Invoke-CalmOsBootstrap {
             [Parameter(Mandatory)] [string] $Destination
         )
 
-        $candidates = @(
-            "https://github.com/$repo/archive/refs/heads/$Ref.zip"
-            "https://github.com/$repo/archive/$Ref.zip"
-        )
-
-        $lastError = $null
-        $everyAttemptWas404 = $true
-        foreach ($url in $candidates) {
-            foreach ($attempt in 1..3) {
-                try {
-                    Invoke-WebRequest -Uri $url -OutFile $Destination -UseBasicParsing -TimeoutSec 300
-                    return
-                } catch {
-                    $lastError = $_
-                    $status = $null
-                    try { $status = [int]$_.Exception.Response.StatusCode } catch { }
-                    if ($status -eq 404) { break }
-                    $everyAttemptWas404 = $false
-                    if ($attempt -lt 3) {
-                        Write-Host "  Download attempt $attempt didn't work -- trying again..." -ForegroundColor DarkGray
-                        Start-Sleep -Seconds (5 * $attempt)
-                    }
-                }
+        try {
+            Invoke-DevConfigWebRequest -Parameters @{
+                Uri = "https://github.com/$repo/archive/$Ref.zip"; OutFile = $Destination; TimeoutSec = 300
             }
+        } catch {
+            throw "Could not download '$Ref' from $repo ($($_.Exception.Message)). Check your internet connection or proxy settings, then run this again."
         }
-
-        if ($everyAttemptWas404) {
-            throw "$repo has no branch, tag or commit called '$Ref'. Check the name and run this again."
-        }
-        throw "Could not download '$Ref' from $repo ($($lastError.Exception.Message)). Check your internet connection or proxy settings, then run this again."
     }
 
     Write-Host ''
@@ -290,7 +350,9 @@ function Invoke-CalmOsBootstrap {
     }
     Write-Host "  Fetching '$Ref' from $repo..." -ForegroundColor DarkGray
 
-    $securityCode = (Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$repo/$Ref/$flow/steps/_security.ps1" -UseBasicParsing -TimeoutSec 60).TrimStart([char]0xFEFF)
+    $securityCode = (Invoke-DevConfigWebRequest -Parameters @{
+        Uri = "https://raw.githubusercontent.com/$repo/$Ref/$flow/steps/_security.ps1"; TimeoutSec = 60
+    }).Content.TrimStart([char]0xFEFF)
     if (-not $AllowUnsigned) {
         # Windows PowerShell requires UTF-16LE for in-memory signature verification.
         $signature = Get-AuthenticodeSignature -Content ([Text.Encoding]::Unicode.GetBytes($securityCode)) -SourcePathOrExtension '.ps1'

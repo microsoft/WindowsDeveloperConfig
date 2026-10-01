@@ -32,8 +32,8 @@ function Invoke-PrerequisitesPhase {
         New-DevConfigStep -Name 'PowerShell7' -Description 'Install PowerShell 7' -BestEffort `
             -Check { $PSVersionTable.PSEdition -eq 'Core' } `
             -Apply { Confirm-DevConfigPwshInUse }
-        New-DevConfigStep -Name 'WinGet' -Description 'Update WinGet to the latest version' -BestEffort `
-            -Check { Test-DevConfigWinGetLatest } `
+        New-DevConfigStep -Name 'WinGet' -Description 'Update WinGet to the pinned release' -BestEffort `
+            -Check { Test-DevConfigWinGetTargetVersion } `
             -Apply { Update-DevConfigWinget }
     )
 
