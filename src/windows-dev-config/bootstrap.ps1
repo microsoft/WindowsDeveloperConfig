@@ -13,7 +13,7 @@
   Production requests process-scoped RemoteSigned. -AllowUnsigned uses src/ without
   signature checks or execution-policy changes.
 
-  To select a branch or tag:
+  To select a branch, tag, or full 40-character commit SHA:
 
       & ([scriptblock]::Create((irm <url>))) -Ref 'v1.2.3'
 
@@ -170,14 +170,51 @@ function Invoke-CalmOsBootstrap {
         Write-Verbose "Could not raise the TLS version: $($_.Exception.Message)"
     }
 
-    $refName = $Ref
-    if ($Ref -notmatch '^[a-fA-F0-9]{40}$') {
-        $resolvedRef = (Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/commits/$([Uri]::EscapeDataString($Ref))" -UseBasicParsing -TimeoutSec 60).sha
-        if ($resolvedRef -isnot [string] -or $resolvedRef -notmatch '^[a-fA-F0-9]{40}$') {
-            throw "GitHub did not return a commit SHA for '$Ref'. Setup was not started."
+    function Resolve-CalmOsRef {
+        param(
+            [Parameter(Mandatory)] [string] $Ref
+        )
+
+        if ($Ref -match '^[a-fA-F0-9]{40}$') {
+            return $Ref
         }
-        $Ref = $resolvedRef
+
+        try {
+            $response = Invoke-WebRequest -Uri "https://github.com/$repo.git/info/refs?service=git-upload-pack" `
+                -Headers @{ 'Git-Protocol' = 'version=0' } -UseBasicParsing -TimeoutSec 60
+        } catch {
+            throw "Could not resolve '$Ref' from $repo ($($_.Exception.Message)). Check your internet connection or proxy settings, then run this again."
+        }
+        $advertisement = if ($response.Content -is [byte[]]) {
+            [Text.Encoding]::UTF8.GetString($response.Content)
+        } else {
+            [string]$response.Content
+        }
+        if (-not $advertisement.StartsWith("001e# service=git-upload-pack`n0000")) {
+            throw "GitHub did not return Git refs for $repo. Setup was not started."
+        }
+
+        $names = if ($Ref.StartsWith('refs/') -or $Ref -ceq 'HEAD') {
+            @($Ref)
+        } else {
+            @("refs/tags/$Ref", "refs/heads/$Ref")
+        }
+        foreach ($name in $names) {
+            # Annotated tags advertise the target commit with a ^{} suffix.
+            foreach ($candidate in @("$name^{}", $name)) {
+                $pattern = '(?m)^(?:0000)?[a-fA-F0-9]{4}([a-fA-F0-9]{40}) ' +
+                    [regex]::Escape($candidate) + '(?:\x00[^\n]*)?\r?$'
+                $match = [regex]::Match($advertisement, $pattern)
+                if ($match.Success) {
+                    return $match.Groups[1].Value
+                }
+            }
+        }
+        throw "$repo has no advertised branch or tag called '$Ref'. Check the name, or use a full 40-character commit SHA."
     }
+
+    $refName = $Ref
+    $Ref = Resolve-CalmOsRef -Ref $Ref
     $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()

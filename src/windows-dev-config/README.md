@@ -33,8 +33,7 @@ It is **idempotent** — every change is checked before it's made, so re-running
 Run this in Windows PowerShell 5.1 or PowerShell 7. Bootstrap requests elevation when needed:
 
 ```powershell
-$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
-& ([scriptblock]::Create((irm $url)))
+irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/setup-full.ps1 | iex
 ```
 
 You'll get one UAC prompt before setup and another after the restart.
@@ -44,9 +43,9 @@ Bootstrap avoids publisher-trust prompts by default. Organization policy can req
 <details>
 <summary><strong>What the command does</strong></summary>
 
-`irm` (`Invoke-RestMethod`) downloads [`bootstrap.ps1`](./bootstrap.ps1). The script block runs it with any supplied switches. Bootstrap then:
+`irm` (`Invoke-RestMethod`) downloads [`setup-full.ps1`](./setup-full.ps1). This launcher downloads and verifies [`bootstrap.ps1`](./bootstrap.ps1) from its pinned payload commit, then runs it with that full commit SHA. Bootstrap then:
 
-1. Resolves the ref to a commit and requests UAC consent if needed.
+1. Uses the pinned commit without a ref lookup and requests UAC consent if needed.
 2. Verifies the downloaded security helper, then downloads the repository ZIP into an administrator-protected temporary directory.
 3. Verifies the Microsoft Corporation signature on every `.ps1` in the repository-root `windows-dev-config/` folder.
 4. Copies [`bootstrap.ps1`](./bootstrap.ps1), [`dev-config.ps1`](./dev-config.ps1), [`steps/`](./steps), and [`workloads/`](./workloads) to `%ProgramData%\CalmOS`. Administrators/SYSTEM own and can modify the files; ordinary users have read/execute access.
@@ -76,8 +75,7 @@ search, search highlights, Widgets, and WinUI templates. It still
 installs the WinUI Copilot plugin.
 
 ```powershell
-$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
-& ([scriptblock]::Create((irm $url))) -Action Partial
+irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/windows-dev-config/setup-standard.ps1 | iex
 ```
 
 The action is preserved across elevation, PowerShell relaunch, and reboot.
@@ -97,8 +95,11 @@ irm https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/wind
 
 Replace `setup-full.ps1` with the chosen wrapper. Short URLs should point to these
 repository-root release files, not `src/`. All three require `| iex` to execute.
-The wrappers accept no setup options and verify the Microsoft signature of the
-downloaded `bootstrap.ps1` before running it with the fixed action.
+The wrappers accept no setup options. Each embeds a full payload commit SHA,
+verifies the Microsoft signature of `bootstrap.ps1` downloaded from that commit,
+and passes the same SHA to bootstrap with the fixed action. The production path
+does not use Git ref discovery or the GitHub REST API to select its payload.
+WinGet operations can still use the GitHub REST API.
 
 ## Single workloads
 
@@ -362,7 +363,7 @@ powershell.exe -NoProfile -File .\src\windows-dev-config\dev-config.ps1 -AllowUn
 
 Add [`-Action Partial`](#setup-actions) for the reduced setup, or [`-Workload winui`](#single-workloads) for a single workload.
 
-**Pin a tag, or try a branch.** `-Ref` accepts a branch, tag, or commit SHA. Bootstrap resolves it once so its downloads use the same commit. Pass arguments with a script block, not `| iex`:
+**Pin a tag, or try a branch.** `-Ref` accepts a branch, tag, or full 40-character commit SHA. Bootstrap resolves branches and tags once through Git ref discovery so its downloads use the same commit without consuming the GitHub REST API quota. Abbreviated commit SHAs are not supported. Pass arguments with a script block, not `| iex`:
 
 ```powershell
 $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
@@ -599,6 +600,17 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 | `steps/<phase>.ps1` | One file per phase, each exporting a single `Invoke-<Name>Phase` function. |
 
 Adding a phase means adding one file and one entry in a workload's phase list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.
+
+### Publishing a release
+
+1. Sign and publish the payload files as commit A.
+2. Set `$payloadRef` to A's full SHA in the source launchers: `setup-full.ps1`, `setup-standard.ps1`, `uninstall.ps1`, and `Workloads/winui/setup.ps1`.
+3. Sign those updated launchers and publish their signed copies as commit B. Do not edit them after signing.
+
+The launchers in B download bootstrap and its payload from A. Short URLs continue
+to point at the launchers on `main`. Keep the payload commit available; publishing
+a new launcher does not change the revision used by an older launcher.
+Direct bootstrap calls with a branch or tag still use Git ref discovery.
 
 ### Adding a workload
 
