@@ -7,6 +7,29 @@ namespace QuickWingetSetup.Services;
 
 public static class ScriptRunnerService
 {
+    public static void RunPowerShellScript(string scriptPath)
+    {
+        var sanitizedPath = scriptPath.Replace("\"", "");
+        var scriptDirectory = Path.GetDirectoryName(sanitizedPath) ?? string.Empty;
+        var command = $"Push-Location '{EscapeSingleQuotes(scriptDirectory)}'; try {{ & '{EscapeSingleQuotes(sanitizedPath)}' }} finally {{ Pop-Location }}";
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+        var shell = ResolveShell();
+        var psi = new ProcessStartInfo { FileName = "wt.exe", UseShellExecute = true, Verb = "runas" };
+        psi.ArgumentList.Add("new-tab");
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add(shell);
+        psi.ArgumentList.Add("-NoExit");
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-EncodedCommand");
+        psi.ArgumentList.Add(encoded);
+        if (Process.Start(psi) == null)
+        {
+            throw new InvalidOperationException("Failed to launch Windows Terminal. Ensure wt.exe is available.");
+        }
+    }
+
     public static void RunWinGetConfig(string scriptPath)
     {
         RunWinGetConfig(scriptPath, postConfigureScriptPath: null, postConfigureArgs: null);

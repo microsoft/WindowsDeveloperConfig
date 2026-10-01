@@ -29,7 +29,13 @@ param(
     [switch] $AllowUnsigned,
     [switch] $NoLaunch,
     [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+    [ValidateSet('', 'local-ai')] [string] $Scenario = '',
+    [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
+    [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
+    [switch] $RequireTriton,
+    [switch] $PlanOnly,
+    [string] $ReportRoot
 )
 
 function Invoke-CalmOsBootstrap {
@@ -40,7 +46,13 @@ function Invoke-CalmOsBootstrap {
         [switch] $AllowUnsigned,
         [switch] $NoLaunch,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [ValidateSet('', 'local-ai')] [string] $Scenario = '',
+        [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
+        [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
+        [switch] $RequireTriton,
+        [switch] $PlanOnly,
+        [string] $ReportRoot
     )
 
     $ErrorActionPreference = 'Stop'
@@ -52,13 +64,29 @@ function Invoke-CalmOsBootstrap {
     # The default workload is omitted from command lines so refs that predate workloads still accept them.
     $workloadSuffix = if ($Workload -ne 'devconfig') { " -Workload $Workload" } else { '' }
 
+    $scenarioOptionNames = @('AiBackend', 'AiRuntime', 'RequireTriton', 'PlanOnly', 'ReportRoot')
+    if (-not $Scenario -and @($scenarioOptionNames | Where-Object { $PSBoundParameters.ContainsKey($_) }).Count -gt 0) {
+        throw 'AI backend/runtime/report options require -Scenario local-ai.'
+    }
+    if ($Scenario -and $PSBoundParameters.ContainsKey('Action')) {
+        throw '-Action configures the full workstation and cannot be combined with -Scenario local-ai.'
+    }
+    if ($Scenario -and $Workload -ne 'devconfig') {
+        throw '-Workload cannot be combined with -Scenario local-ai.'
+    }
+
     # Reject refs that could escape the repository path.
     if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
         throw "'$Ref' is not a valid branch, tag or commit name. Use letters, digits, and . _ - / only."
     }
 
     if (-not $InstallRoot) {
-        $InstallRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'CalmOS'
+        $defaultInstallDirectory = if ($Scenario -and $AllowUnsigned) {
+            'CalmOS-Development'
+        } else {
+            'CalmOS'
+        }
+        $InstallRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $defaultInstallDirectory
     }
     $InstallRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallRoot)
     if ($InstallRoot -notmatch '^[A-Za-z]:\\[^:]+$') {
@@ -89,7 +117,14 @@ function Invoke-CalmOsBootstrap {
             [switch] $AllowUnsigned,
             [switch] $NoLaunch,
             [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-            [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+            [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+            [ValidateSet('', 'local-ai')] [string] $Scenario = '',
+            [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
+            [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
+            [switch] $RequireTriton,
+            [switch] $PlanOnly,
+            [string] $ReportRoot,
+            [Parameter(Mandatory)] [string] $ElevationErrorPath
         )
 
         $launcher = {
@@ -99,11 +134,27 @@ function Invoke-CalmOsBootstrap {
                 [switch] $AllowUnsigned,
                 [switch] $NoLaunch,
                 [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-                [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+                [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+                [ValidateSet('', 'local-ai')] [string] $Scenario = '',
+                [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
+                [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
+                [switch] $RequireTriton,
+                [switch] $PlanOnly,
+                [string] $ReportRoot,
+                [Parameter(Mandatory)] [string] $ElevationErrorPath
             )
 
             $ErrorActionPreference = 'Stop'
             Set-StrictMode -Version Latest
+            trap {
+                try {
+                    [IO.File]::WriteAllText(
+                        $ElevationErrorPath,
+                        ($_ | Out-String),
+                        [Text.UTF8Encoding]::new($false))
+                } catch { }
+                exit 1
+            }
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
             $baseUri = "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$Ref/$flow"
@@ -142,21 +193,48 @@ function Invoke-CalmOsBootstrap {
             $shellName = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
             $arguments = @('-NoProfile')
             if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
-            $arguments += '-File', $target, '-Ref', $Ref, '-InstallRoot', $InstallRoot, '-Action', $Action
-            if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+            $arguments += '-File', $target, '-Ref', $Ref, '-InstallRoot', $InstallRoot
+            if ($Scenario) {
+                $arguments += '-Scenario', $Scenario, '-AiBackend', $AiBackend, '-AiRuntime', $AiRuntime
+                if ($RequireTriton) { $arguments += '-RequireTriton' }
+                if ($PlanOnly) { $arguments += '-PlanOnly' }
+                if ($ReportRoot) { $arguments += '-ReportRoot', $ReportRoot }
+            } else {
+                $arguments += '-Action', $Action
+                if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+            }
             if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
             if ($NoLaunch) { $arguments += '-NoLaunch' }
-            & (Join-Path $PSHOME $shellName) @arguments
-            if ($LASTEXITCODE -ne 0) {
-                throw "Bootstrap finished with exit code $LASTEXITCODE."
+            if ($Scenario) {
+                & (Join-Path $PSHOME $shellName) @arguments
+                $bootstrapOutput = ''
+            } else {
+                $bootstrapOutput = (& (Join-Path $PSHOME $shellName) @arguments 2>&1 | Out-String).Trim()
+            }
+            $bootstrapExitCode = $LASTEXITCODE
+            if ($bootstrapOutput) { Write-Host $bootstrapOutput }
+            if ($bootstrapExitCode -ne 0) {
+                throw "Bootstrap finished with exit code $bootstrapExitCode.`n$bootstrapOutput"
             }
         }
 
         # PowerShell also recognizes smart quotes as string delimiters.
         $escapedRef = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Ref)
         $escapedRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($InstallRoot)
-        $command = "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot' -Action '$Action'"
-        if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
+        $escapedErrorPath = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($ElevationErrorPath)
+        $command = "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot' -ElevationErrorPath '$escapedErrorPath'"
+        if ($Scenario) {
+            $command += " -Scenario '$Scenario' -AiBackend '$AiBackend' -AiRuntime '$AiRuntime'"
+            if ($RequireTriton) { $command += ' -RequireTriton' }
+            if ($PlanOnly) { $command += ' -PlanOnly' }
+            if ($ReportRoot) {
+                $escapedReportRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($ReportRoot)
+                $command += " -ReportRoot '$escapedReportRoot'"
+            }
+        } else {
+            $command += " -Action '$Action'"
+            if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
+        }
         if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
         if ($NoLaunch) { $command += ' -NoLaunch' }
         # Start-Process joins arguments; Windows quoting keeps the command intact.
@@ -184,7 +262,7 @@ function Invoke-CalmOsBootstrap {
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         # The elevated window closes on errors, so a ref without the workload is reported here, before UAC.
-        if ($Workload -ne 'devconfig') {
+        if (-not $Scenario -and $Workload -ne 'devconfig') {
             try {
                 $null = Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$repo/$Ref/$flow/workloads/$Workload.ps1" -Method Head -UseBasicParsing -TimeoutSec 60
             } catch {
@@ -195,15 +273,32 @@ function Invoke-CalmOsBootstrap {
                 throw "'$refName' doesn't contain the '$Workload' workload under $flow. Check the workload name, or pick a newer -Ref."
             }
         }
-        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch -Action $Action -Workload $Workload
+        $elevationErrorPath = Join-Path $env:TEMP "CalmOS-bootstrap-error-$([guid]::NewGuid().ToString('N')).txt"
+        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch `
+            -Action $Action -Workload $Workload -Scenario $Scenario -AiBackend $AiBackend -AiRuntime $AiRuntime `
+            -RequireTriton:$RequireTriton -PlanOnly:$PlanOnly -ReportRoot $ReportRoot `
+            -ElevationErrorPath $elevationErrorPath
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
-        $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait -PassThru
+        $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -PassThru
+        $proc.WaitForExit()
         if ($proc.ExitCode -ne 0) {
-            throw "Elevated setup exited with code $($proc.ExitCode). No further setup was started."
+            $detail = if (Test-Path -LiteralPath $elevationErrorPath) {
+                (Get-Content -LiteralPath $elevationErrorPath -Raw).Trim()
+            } else {
+                'The elevated process did not return diagnostic output.'
+            }
+            Remove-Item -LiteralPath $elevationErrorPath -Force -ErrorAction SilentlyContinue
+            throw "Elevated setup exited with code $($proc.ExitCode). No further setup was started.`n$detail"
         }
+        Remove-Item -LiteralPath $elevationErrorPath -Force -ErrorAction SilentlyContinue
         if ($NoLaunch) {
-            $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
-            Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+            if ($Scenario) {
+                $scenarioTarget = Join-Path $InstallRoot 'Scenarios\local-ai\Workloads\local-ai\install.ps1'
+                Write-Host "Scenario files are ready at $scenarioTarget." -ForegroundColor Cyan
+            } else {
+                $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
+                Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+            }
         }
         return
     }
@@ -246,7 +341,9 @@ function Invoke-CalmOsBootstrap {
     }
 
     Write-Host ''
-    if ($Workload -eq 'devconfig') {
+    if ($Scenario) {
+        Write-Host 'Windows Developer Config: local AI scenario' -ForegroundColor Cyan
+    } elseif ($Workload -eq 'devconfig') {
         Write-Host 'Calm OS setup' -ForegroundColor Cyan
     } else {
         Write-Host "Windows Developer Config: $Workload workload" -ForegroundColor Cyan
@@ -296,6 +393,63 @@ function Invoke-CalmOsBootstrap {
         }
 
         $InstallRoot = New-DevConfigProtectedDirectory -Path $InstallRoot
+
+        if ($Scenario) {
+            $workloadsDir = if ($AllowUnsigned) {
+                Join-Path (Join-Path $top.FullName 'src') 'Workloads'
+            } else {
+                Join-Path $top.FullName 'Workloads'
+            }
+            if (-not ((Test-Path (Join-Path $workloadsDir 'local-ai\install.ps1')) -and
+                    (Test-Path (Join-Path $workloadsDir '_common\content-hashes.ps1')))) {
+                throw "'$Ref' does not contain the requested local-ai workload under the selected signed/source tree."
+            }
+            Assert-DevConfigProtectedTree -Directory $workloadsDir
+            if (-not $AllowUnsigned) {
+                Assert-DevConfigMicrosoftSigned -Directory $workloadsDir
+            }
+            . (Join-Path $workloadsDir '_common\content-hashes.ps1')
+            Assert-DevConfigWorkloadContent -WorkloadsRoot $workloadsDir
+
+            $scenariosRoot = New-DevConfigProtectedDirectory -Path (Join-Path $InstallRoot 'Scenarios')
+            $scenarioRoot = New-DevConfigProtectedDirectory -Path (Join-Path $scenariosRoot 'local-ai')
+            foreach ($existing in @('Workloads', 'windows-dev-config')) {
+                $existingPath = Join-Path $scenarioRoot $existing
+                if (Test-Path -LiteralPath $existingPath) {
+                    Remove-Item -LiteralPath $existingPath -Recurse -Force
+                }
+            }
+            Copy-Item -LiteralPath $workloadsDir -Destination $scenarioRoot -Recurse -Force
+            $scenarioWindowsDevConfig = New-Item -ItemType Directory -Path (Join-Path $scenarioRoot 'windows-dev-config') -Force
+            Copy-Item -LiteralPath (Join-Path $setupDir 'steps') -Destination $scenarioWindowsDevConfig.FullName -Recurse -Force
+            Assert-DevConfigProtectedTree -Directory $scenarioRoot
+            if (-not $AllowUnsigned) {
+                Assert-DevConfigMicrosoftSigned -Directory $scenarioRoot
+            }
+            . (Join-Path $scenarioRoot 'Workloads\_common\content-hashes.ps1')
+            Assert-DevConfigWorkloadContent -WorkloadsRoot (Join-Path $scenarioRoot 'Workloads')
+            Get-ChildItem -LiteralPath $scenarioRoot -Recurse -Filter '*.ps1' -File | Unblock-File
+
+            Remove-Item -LiteralPath $work -Recurse -Force
+            $target = Join-Path $scenarioRoot 'Workloads\local-ai\install.ps1'
+            Write-Host "  Scenario ready in $scenarioRoot" -ForegroundColor DarkGray
+            $scenarioArguments = @('-NoProfile')
+            if (-not $AllowUnsigned) { $scenarioArguments += '-ExecutionPolicy', 'RemoteSigned' }
+            $scenarioArguments += '-File', "`"$target`"", '-Backend', $AiBackend, '-Runtime', $AiRuntime
+            if ($RequireTriton) { $scenarioArguments += '-RequireTriton' }
+            if ($PlanOnly) { $scenarioArguments += '-PlanOnly' }
+            if ($ReportRoot) { $scenarioArguments += '-ReportRoot', "`"$ReportRoot`"" }
+            if ($NoLaunch) {
+                Write-Host "Run when ready: & '$escapedShell' $($scenarioArguments -join ' ')" -ForegroundColor Cyan
+                return
+            }
+            & $shell @scenarioArguments
+            $scenarioExitCode = $LASTEXITCODE
+            if ($scenarioExitCode -ne 0) {
+                throw "Local AI scenario finished with exit code $scenarioExitCode."
+            }
+            return
+        }
 
         # Keep logs and progress when replacing setup scripts.
         Copy-Item -LiteralPath (Join-Path $setupDir 'bootstrap.ps1'), (Join-Path $setupDir 'dev-config.ps1') -Destination $InstallRoot -Force

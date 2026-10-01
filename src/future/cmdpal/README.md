@@ -3,15 +3,15 @@
 A [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview)
 extension that surfaces the developer flows defined in this repo's
 [`manifest.yml`](../../manifest.yml). Pick a flow, hit Enter, and the extension
-launches `winget configure` (Windows) or `wsl bash` (Linux) in a new Windows
-Terminal tab — no need to remember which `.winget` file goes with which
-toolchain.
+launches `winget configure` or a PowerShell-native setup entry point (Windows),
+or `wsl bash` (Linux), in a new Windows Terminal tab.
 
-## Prerequisite: `winget configure` must be enabled
+## Prerequisite for DSC-backed flows: `winget configure`
 
-This extension launches flows exclusively through `winget configure`. If
-that subcommand is not wired up on the host, no Windows flow surfaced by
-CmdPal can succeed. See the developer guide's
+DSC-backed flows launch through `winget configure`. PowerShell-native flows,
+including the AI workloads, launch their `windows.install` script directly.
+If the configuration subcommand is not wired up on the host, DSC-backed flows
+cannot succeed. See the developer guide's
 [`Prerequisites (Windows)`](../../docs/development.md#prerequisites-windows)
 section for the three conditions that must hold (current App Installer, the
 `configuration` feature enabled, and no blocking ADMX policy) and the
@@ -23,7 +23,8 @@ enforces this at runtime with an actionable error message.
 
 The extension reads the same `manifest.yml` that drives CI. Each flow's UX
 metadata (`name`, `description`, `category`, `tags`, `icon`, `onboardingUrl`,
-`dependsOn`) plus its `windows.configuration` / `linux.install` paths come
+`dependsOn`) plus its `windows.configuration`, `windows.install`, and
+`linux.install` paths come
 straight from that file — adding a flow there makes it appear in CmdPal
 automatically.
 
@@ -92,18 +93,16 @@ The project targets `net9.0-windows10.0.26100.0` and is AOT/trim friendly.
 | Manifest field                      | What the extension does                                     |
 | ----------------------------------- | ----------------------------------------------------------- |
 | `windows.configuration`             | `winget configure <path>` in a new Windows Terminal tab, after a confirmation dialog |
+| `windows.install` without a configuration | Runs the PowerShell setup entry point directly in a new Windows Terminal tab |
 | `onboardingUrl`                     | Opens in the default browser via `📖 Official Docs` action  |
 | `icon`, `name`, `description`, ...  | Rendered on the list/detail pages                           |
 
-If `windows.configuration` is omitted in `manifest.yml`, the extension falls
-back to `<dir of windows.install>/configuration.winget` — i.e. the
-WindowsDevSetupScripts convention.
-
-> **Known gap.** Two flows are PowerShell-native and have no configuration
-> file at all: Calm OS (`calm-os`) and Comfort Shell (`comfort-shell`). The
-> fallback above resolves them to a path that doesn't exist, so the extension
-> can't launch them today. Before this extension ships, teach it to run
-> `windows.install` directly when `windows.configuration` is absent.
+If `windows.configuration` is omitted, the extension uses `windows.install`.
+This supports PowerShell-native flows such as Windows Dev Config, Comfort
+Shell, and the hardware-aware AI workloads when `source` is `local`. GitHub
+source mode currently hides multi-file PowerShell-native flows because fetching
+only the entry script would omit their relative dependencies; a packaged
+repository snapshot is required before enabling them remotely.
 
 ## Confirmation dialog
 

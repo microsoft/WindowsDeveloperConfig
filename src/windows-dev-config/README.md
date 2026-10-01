@@ -13,6 +13,7 @@ It is **idempotent** — every change is checked before it's made, so re-running
 - [Quick start](#quick-start)
 - [Setup actions](#setup-actions)
 - [Single workloads](#single-workloads)
+- [Local AI scenario](#local-ai-scenario)
 - [What to expect](#what-to-expect)
 - [Requirements](#requirements)
 - [Before you run this](#before-you-run-this)
@@ -125,6 +126,40 @@ is not upgraded because Visual Studio updates itself. Visual Studio must be clos
 are added; a restart requested by the Visual Studio Installer is listed in the summary. Each workload logs
 to `<workload>-log.txt`, for example `%ProgramData%\CalmOS\winui-log.txt`. Workloads share the run lock,
 so only one setup runs at a time.
+
+## Local AI scenario
+
+`-Scenario local-ai` is a separate product-level entry point. It does not run
+the Full or Partial workstation setup. It detects AI hardware, installs the
+matching contained PyTorch backend and compatible Triton when available, then
+executes tensor and neural-network acceptance:
+
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url))) -Scenario local-ai
+# Expected: PYTORCH_READY ... then LOCAL_AI_SCENARIO_READY
+```
+
+Optional model runtimes are selected explicitly:
+
+```powershell
+& ([scriptblock]::Create((irm $url))) -Scenario local-ai -AiRuntime LlamaCpp
+& ([scriptblock]::Create((irm $url))) -Scenario local-ai -AiRuntime Ollama
+& ([scriptblock]::Create((irm $url))) -Scenario local-ai -AiRuntime Foundry
+```
+
+Use `-PlanOnly -ReportRoot <directory>` to inspect hardware, selected backend,
+transitive acquisitions, and blockers without installing. `-AiBackend` accepts
+`Auto`, `CPU`, `CUDA`, `ROCm`, or `XPU`; `-RequireTriton` makes compatible
+Triton execution mandatory. Drivers remain prerequisites and are not replaced.
+
+Bootstrap downloads the complete scenario dependency tree, verifies every
+Microsoft-signed PowerShell file and the signed hash manifest for non-PowerShell
+inputs, copies the payload into an administrator-protected scenario directory,
+reverifies it, and launches only `Workloads\local-ai\install.ps1`.
+Explicit `-AllowUnsigned` scenario tests use
+`%ProgramData%\CalmOS-Development`, keeping unsigned files out of the production
+`%ProgramData%\CalmOS` tree.
 
 ## What to expect
 

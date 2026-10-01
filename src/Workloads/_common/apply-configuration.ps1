@@ -39,7 +39,8 @@ param(
     # bound to Mandatory parameters. Some flows (e.g. mac-comfort-shell)
     # have no post-install CLI to verify - the DSC only installs a font
     # and pwsh - so they legitimately pass @() here.
-    [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $RequireCommands
+    [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $RequireCommands,
+    [switch] $DeferSentinel
 )
 
 $ErrorActionPreference = 'Stop'
@@ -120,4 +121,6 @@ foreach ($cmd in $RequireCommands) {
     Write-Host "$cmd : $(& $cmd --version 2>&1 | Select-Object -First 1)"
 }
 
-Write-Host "INSTALL_OK: $Id"
+if (-not $DeferSentinel) {
+    Write-Host "INSTALL_OK: $Id"
+}

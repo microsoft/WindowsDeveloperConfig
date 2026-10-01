@@ -65,6 +65,18 @@ internal sealed partial class ScriptDetailPage : ListPage
                 MoreCommands = BuildContextCommands(localPath),
             });
         }
+        else if (_script.WindowsInstallPath is { } installPath)
+        {
+            var localPath = _fetchService.GetScriptPathAsync(installPath).GetAwaiter().GetResult();
+            items.Add(new ListItem(new RunPowerShellSetupCommand(installPath, _fetchService, _script))
+            {
+                Title = "🪟 Run Windows Setup",
+                Subtitle = $"PowerShell {installPath}",
+                Tags = [new Tag("Windows")],
+                Details = BuildScriptDetails(localPath),
+                MoreCommands = BuildContextCommands(localPath),
+            });
+        }
 
         if (_script.Includes != null && _script.Includes.Length > 0)
         {
@@ -117,6 +129,43 @@ internal sealed partial class ScriptDetailPage : ListPage
         return [
             new CommandContextItem(new ViewFileCommand(localPath)) { Title = "View script file" },
         ];
+    }
+}
+
+internal sealed partial class RunPowerShellSetupCommand : InvokableCommand, IConfirmationArgs
+{
+    private readonly string _scriptPath;
+    private readonly ScriptFetchService _fetchService;
+    private readonly ScriptEntry _script;
+
+    public RunPowerShellSetupCommand(string scriptPath, ScriptFetchService fetchService, ScriptEntry script)
+    {
+        _scriptPath = scriptPath;
+        _fetchService = fetchService;
+        _script = script;
+    }
+
+    public string Title => $"Run {_script.Name} setup?";
+    public string Description =>
+        $"This will run {_scriptPath} in a new Windows Terminal tab. "
+        + "The flow checks current state, applies only required changes, and verifies a real workload.";
+    public Microsoft.CommandPalette.Extensions.ICommand? PrimaryCommand => this;
+    public bool IsPrimaryCommandCritical => false;
+
+    public override ICommandResult Invoke()
+    {
+        if (_script.RequiresWsl && WslDetectionService.RefreshStatus() != WslStatus.Available)
+        {
+            ScriptRunnerService.RunWslInstall();
+            return CommandResult.Dismiss();
+        }
+
+        var localPath = _fetchService.GetScriptPathAsync(_scriptPath).GetAwaiter().GetResult();
+        if (localPath != null)
+        {
+            ScriptRunnerService.RunPowerShellScript(localPath);
+        }
+        return CommandResult.Dismiss();
     }
 }
 

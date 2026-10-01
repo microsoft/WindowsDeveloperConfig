@@ -24,8 +24,21 @@ function Invoke-DevConfigNativeCommand {
         param($FilePath, $Arguments)
         $ErrorActionPreference = 'Continue'
         $PSNativeCommandUseErrorActionPreference = $false
-        $output = & $FilePath @Arguments 2>&1 | Out-String
-        [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+        $previousExitCode = if (Test-Path Variable:global:LASTEXITCODE) { $global:LASTEXITCODE } else { $null }
+        Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        try {
+            $output = & $FilePath @Arguments 2>&1 | Out-String
+            if (-not (Test-Path Variable:global:LASTEXITCODE)) {
+                throw "Native command '$FilePath' did not launch successfully."
+            }
+            [pscustomobject]@{ ExitCode = $global:LASTEXITCODE; Output = $output }
+        } finally {
+            if ($null -ne $previousExitCode) {
+                $global:LASTEXITCODE = $previousExitCode
+            } else {
+                Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
     }
     if ($TimeoutSeconds -eq 0) {
         return & $invoke $FilePath $Arguments
