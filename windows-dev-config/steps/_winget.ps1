@@ -13,12 +13,12 @@ $Script:DevConfigWinGetMode = 'Module'
 $Script:DevConfigWingetNotFound  = -1978335212   # 0x8A150014 no installed package matched
 $Script:DevConfigWingetNoUpgrade = -1978335189   # 0x8A15002B already at the latest applicable version
 
-# Repair-WinGetPackageManager -Latest installs this release, so it is what "latest" is measured against.
-$Script:DevConfigWinGetLatestReleaseUrl = 'https://api.github.com/repos/microsoft/winget-cli/releases/latest'
-
-# Cached per run so the check and its follow-up verification share one network call.
-$Script:DevConfigWinGetLatestVersion = $null
-$Script:DevConfigWinGetLatestChecked = $false
+# Update the version and both official release asset hashes together.
+$Script:DevConfigWinGetTargetVersion = [version]'1.29.380'
+$Script:DevConfigWinGetAssets = [ordered]@{
+    'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle' = '65DEA9C01CE08EE7B763366B27C0E651F97DB857C11CA9B9C301826C10092F2E'
+    'DesktopAppInstaller_Dependencies.zip' = 'BA875AFE9D190F61218985AC0292A99D1DB710BF93E13C68944CA9D89F0D82D1'
+}
 
 function Install-DevConfigWinGetModule {
     Enable-DevConfigModernTls
@@ -78,6 +78,92 @@ function Initialize-DevConfigWinGet {
     $Script:DevConfigWinGetMode = 'Cli'
 }
 
+function Invoke-DevConfigWinGetDeployment {
+    param(
+        [string] $Directory = ''
+    )
+
+    # Keep Appx operations in Windows PowerShell to avoid dependency-array remoting issues.
+    $deployment = {
+        param([string] $Directory)
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+            if ($Directory) {
+                $architectures = switch ([Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITECTURE', 'Machine')) {
+                    'AMD64' { 'x64'; 'x86' }
+                    'ARM64' { 'arm64'; 'x64'; 'x86' }
+                    'x86'   { 'x86' }
+                    default { throw 'Unsupported Windows architecture for WinGet deployment.' }
+                }
+                $dependenciesRoot = Join-Path $Directory 'Dependencies'
+                Expand-Archive -LiteralPath (Join-Path $Directory 'DesktopAppInstaller_Dependencies.zip') `
+                    -DestinationPath $dependenciesRoot -ErrorAction Stop
+                $dependencies = @(
+                    foreach ($architecture in $architectures) {
+                        $packages = @(Get-ChildItem -LiteralPath (Join-Path $dependenciesRoot $architecture) -Filter '*.appx' -File)
+                        if (-not $packages.Count) {
+                            throw "WinGet dependencies are missing for $architecture."
+                        }
+                        $packages.FullName
+                    }
+                )
+                $bundle = Join-Path $Directory 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'
+                Add-AppxPackage -Path $bundle -DependencyPath $dependencies -ForceTargetApplicationShutdown -ErrorAction Stop
+            } else {
+                $package = Get-AppxPackage -Name Microsoft.DesktopAppInstaller |
+                    Sort-Object Version -Descending | Select-Object -First 1
+                if (-not $package) {
+                    $package = Get-AppxPackage -Name Microsoft.DesktopAppInstaller -AllUsers |
+                        Sort-Object Version -Descending | Select-Object -First 1
+                }
+                if (-not $package -or -not $package.InstallLocation) {
+                    throw 'No installed App Installer package is available to register.'
+                }
+                Add-AppxPackage -Register (Join-Path $package.InstallLocation 'AppxManifest.xml') `
+                    -DisableDevelopmentMode -ForceTargetApplicationShutdown -ErrorAction Stop
+            }
+            exit 0
+        } catch {
+            [Console]::Error.WriteLine($_.ToString())
+            exit 1
+        }
+    }
+    $escapedDirectory = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Directory)
+    $command = "& { $deployment } '$escapedDirectory'"
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $systemDirectory = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' }
+    $shell = Join-Path $env:SystemRoot "$systemDirectory\WindowsPowerShell\v1.0\powershell.exe"
+    $result = Invoke-DevConfigNativeCommand -FilePath $shell `
+        -Arguments @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds 600
+    if ($null -eq $result.ExitCode -or $result.ExitCode -ne 0) {
+        throw "WinGet package deployment failed ($($result.ExitCode)): $(([string]$result.Output).Trim())"
+    }
+    Update-DevConfigSessionPath
+}
+
+function Install-DevConfigWinGetRelease {
+    Enable-DevConfigModernTls
+    $ProgressPreference = 'SilentlyContinue'
+    $directory = Join-Path ([IO.Path]::GetTempPath()) "DevConfig-WinGet-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $directory -ErrorAction Stop | Out-Null
+    try {
+        $baseUri = "https://github.com/microsoft/winget-cli/releases/download/v$Script:DevConfigWinGetTargetVersion"
+        foreach ($asset in $Script:DevConfigWinGetAssets.GetEnumerator()) {
+            $path = Join-Path $directory $asset.Key
+            Invoke-DevConfigWebRequest -Parameters @{
+                Uri = "$baseUri/$($asset.Key)"; OutFile = $path; TimeoutSec = 300
+            }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $asset.Value) {
+                throw "WinGet release asset failed SHA-256 verification: $($asset.Key)"
+            }
+        }
+        Invoke-DevConfigWinGetDeployment -Directory $directory
+    } finally {
+        Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction Stop
+    }
+}
+
 function Confirm-DevConfigWinGetReady {
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
         return
@@ -96,7 +182,7 @@ function Confirm-DevConfigWinGetReady {
         if ($attempt -eq 1) {
             Write-Host "  The WinGet module could not connect ($moduleError). Repairing WinGet..." -ForegroundColor Yellow
             try {
-                $null = Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop *>&1
+                Invoke-DevConfigWinGetDeployment
             } catch {
                 Write-Host "  WinGet repair did not complete: $($_.Exception.Message)" -ForegroundColor Yellow
             }
@@ -156,6 +242,10 @@ function ConvertTo-DevConfigWinGetVersion {
 # winget.exe runs in a fresh process, so it is the only source that reflects an in-place update:
 # the module resolves the engine version once and keeps reporting it for the life of this process.
 function Get-DevConfigWinGetVersion {
+    param(
+        [switch] $CliOnly
+    )
+
     # Skip the call when the alias is missing so a bare machine does not log a failed launch.
     if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
         try {
@@ -171,7 +261,7 @@ function Get-DevConfigWinGetVersion {
         }
     }
 
-    if ($Script:DevConfigWinGetMode -eq 'Cli') {
+    if ($CliOnly -or $Script:DevConfigWinGetMode -eq 'Cli') {
         return $null
     }
 
@@ -183,46 +273,22 @@ function Get-DevConfigWinGetVersion {
     }
 }
 
-# A null result means the lookup failed, which callers treat as "cannot tell" rather than "up to date".
-function Get-DevConfigWinGetLatestVersion {
-    if ($Script:DevConfigWinGetLatestChecked) {
-        return $Script:DevConfigWinGetLatestVersion
-    }
-    $Script:DevConfigWinGetLatestChecked = $true
-
-    try {
-        # The GitHub API rejects requests without a User-Agent.
-        $release = Invoke-RestMethod -Uri $Script:DevConfigWinGetLatestReleaseUrl -UseBasicParsing -TimeoutSec 30 `
-            -Headers @{ 'User-Agent' = 'WindowsDeveloperConfig' }
-        $Script:DevConfigWinGetLatestVersion = ConvertTo-DevConfigWinGetVersion -Text ([string]$release.tag_name)
-    } catch {
-        Write-Verbose "Could not look up the latest WinGet release: $($_.Exception.Message)"
-    }
-    return $Script:DevConfigWinGetLatestVersion
-}
-
 # Quiet by design: this runs on every invocation, including the follow-up verification.
-function Test-DevConfigWinGetLatest {
+function Test-DevConfigWinGetTargetVersion {
     # An unreadable version means WinGet is missing or broken, which the update path repairs.
-    $current = Get-DevConfigWinGetVersion
+    $current = Get-DevConfigWinGetVersion -CliOnly
     if (-not $current) {
         return $false
     }
 
-    # An offline or rate-limited lookup leaves a working WinGet alone rather than flagging every run.
-    $latest = Get-DevConfigWinGetLatestVersion
-    if (-not $latest) {
-        return $true
-    }
-
-    # Store and Windows builds can lead the latest stable release, so newer also counts as current.
-    return ($current -ge $latest)
+    # Store and Windows builds can lead the pinned release; never downgrade them.
+    return ($current -ge $Script:DevConfigWinGetTargetVersion)
 }
 
 # WinGet can report its previous version briefly after updating itself in place.
 function Wait-DevConfigWinGetVersionSettled {
     for ($attempt = 1; $attempt -le 5; $attempt++) {
-        if (Test-DevConfigWinGetLatest) {
+        if (Test-DevConfigWinGetTargetVersion) {
             return $true
         }
         if ($attempt -eq 1) {
@@ -233,24 +299,16 @@ function Wait-DevConfigWinGetVersionSettled {
     return $false
 }
 
-# Update runs only after the latest check fails, so machines already current skip the slower path.
+# Update runs only when the installed version does not meet the pinned target.
 function Update-DevConfigWinget {
     $current = Get-DevConfigWinGetVersion
-    $latest  = Get-DevConfigWinGetLatestVersion
-    if ($current -and $latest) {
-        Write-Host "  WinGet $current -> $latest" -ForegroundColor DarkGray
-    }
-
-    if ($Script:DevConfigWinGetMode -eq 'Cli') {
-        # Repair-WinGetPackageManager has no winget.exe equivalent, so there is nothing to try here.
-        Set-DevConfigStepUnverified -Reason 'The built-in winget command cannot update itself from here. Update App Installer from the Microsoft Store, then run this again.'
-        return
+    if ($current) {
+        Write-Host "  WinGet $current -> $Script:DevConfigWinGetTargetVersion" -ForegroundColor DarkGray
     }
 
     Write-Host '  (This can take a few minutes.)' -ForegroundColor DarkGray
     try {
-        # Suppress update output; exceptions and the follow-up check decide the result.
-        $null = Repair-WinGetPackageManager -Latest -Force -ErrorAction Stop *>&1
+        Install-DevConfigWinGetRelease
         if (Wait-DevConfigWinGetVersionSettled) {
             return
         }
@@ -260,14 +318,14 @@ function Update-DevConfigWinget {
         Write-Host "  WinGet update did not complete: $($_.Exception.Message)" -ForegroundColor Yellow
     }
 
-    # If the module update fails, winget.exe may still be usable for package operations.
+    # If the update fails, winget.exe may still be usable for package operations.
     if (Test-DevConfigWingetCliUsable) {
         Write-Host '  Falling back to the built-in winget command instead.' -ForegroundColor Yellow
         $Script:DevConfigWinGetMode = 'Cli'
     }
 
     if (Get-DevConfigWinGetVersion) {
-        Set-DevConfigStepUnverified -Reason "WinGet could not be updated to $latest. The version on this machine still works, so the run carries on -- update App Installer from the Microsoft Store when convenient."
+        Set-DevConfigStepUnverified -Reason "WinGet could not be updated to $Script:DevConfigWinGetTargetVersion. The version on this machine still works, so the run carries on -- update App Installer from the Microsoft Store when convenient."
     } else {
         Set-DevConfigStepUnverified -Reason 'WinGet could not be updated and is not reporting a version at all. Update App Installer from the Microsoft Store, then run this again.'
     }
@@ -452,8 +510,8 @@ function Invoke-DevConfigPackageCleanup {
 # SIG # Begin signature block
 # MIInKAYJKoZIhvcNAQcCoIInGTCCJxUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDcdtIyadQTgJO4
-# e32dEbuMf+/xt4Yjrpnu0Wn+ud38mqCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDGE0t5pZLO1sp4
+# 6cyUF1lQhQuM6fRYULe034UhbJUHIaCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
 # yE7XD1dIAAAAAAIdMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQzWhcNMjcwNDE1MTg1
@@ -525,61 +583,61 @@ function Invoke-DevConfigPackageCleanup {
 # MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jv
 # c29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIdTRnITtcPV0gAAAAAAh0w
 # DQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwLwYJ
-# KoZIhvcNAQkEMSIEIGnbTfGKJ0vmWn5fUXGoZhe6HXTqCZn2RJfehiqV8zdNMEIG
+# KoZIhvcNAQkEMSIEIFa6CpGx+1ExnpwQh654aUuQQfm3KR5r1DdDscZSHr6qMEIG
 # CisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBvAGYAdKEagBhodHRwOi8v
-# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAG69tImsg4BX8Z7Yf
-# 1xCIHN0s3xZE0IWH64j2vg+QlH/nxHhj/YC+Xk9COF/8rzDt+te0B3mJ0Qei3uXS
-# 45IG8cW7Lxc2TqhYFWDELCN+arSyNyaQHN5FnnWJcsHoEGU/DZCmlTDHSU3bU8xj
-# K0NsoTFw2fFIAq5KnibT0Sb+zf4GEZVPq5DX2X446evzsmCeflMNTEJrpLdV6Jat
-# Ss5o3LI4i2TbGjsr37AuO3F26NWL63GKHlBxEAmQw6gL4q/ydpCBwWsj2Dwopg38
-# CRfMuU8psAWtAKfJhQnOJhGQ8xzBpcsRi1ltp25xsc1VFJXlZIiLO79duLeDultZ
-# 4PPy8KGCF5QwgheQBgorBgEEAYI3AwMBMYIXgDCCF3wGCSqGSIb3DQEHAqCCF20w
+# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAqYBstTxdKlwElTtu
+# NduqJOVyQgAXVp7w8+9Xr1XDpVH5q5jwyVJRhukEypVsBb4AVS7GtY9PjFW6mUSJ
+# NRa4QnukVXtygtvZlbv7vu85baF0uN7xDgFQX2QEbh70vUACi6XGCAaBDKGwXqEA
+# tef2j3sx7aDAhvJo9lt58GA+LBzKluChaihxiGZ6Ly0Wb8bf5oZGgU55cdYkHfH7
+# 4As0m5akA8sVWgtvoGxuT00QWpIGBCLwC6qLIxAN1B62XnBEe/qcOJJYSxFt//qO
+# AgWkqs9s74OPQSYsPS/WfWxuuuXGY+fc8FOTDMIle00yC/jChi+9BRSU3f4w4Cb0
+# TAxQ9aGCF5QwgheQBgorBgEEAYI3AwMBMYIXgDCCF3wGCSqGSIb3DQEHAqCCF20w
 # ghdpAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG9w0BCRABBKCCAUEEggE9
-# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCC8bBij1WDDewP4
-# RoOBEnyIr4rjB/R9NTaR30inVGcANAIGarfvStELGBMyMDI2MTAwMTA0NTMxMC4w
-# MDNaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
+# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCD2Zpn/pz1S96Py
+# IdTK5AFfwjCfYus0SNaIwFnrzs6hfAIGaqpLhl6XGBMyMDI2MTAwMjAwMTUzNS43
+# ODVaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
 # Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
 # cmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScw
-# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046MzMwMy0wNUUwLUQ5NDcxJTAjBgNVBAMT
+# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046MzcwMy0wNUUwLUQ5NDcxJTAjBgNVBAMT
 # HE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZpY2WgghHqMIIHIDCCBQigAwIBAgIT
-# MwAAAiEzwDX70g8hpAABAAACITANBgkqhkiG9w0BAQsFADB8MQswCQYDVQQGEwJV
+# MwAAAh86cGnkojAulQABAAACHzANBgkqhkiG9w0BAQsFADB8MQswCQYDVQQGEwJV
 # UzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UE
 # ChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGlt
-# ZS1TdGFtcCBQQ0EgMjAxMDAeFw0yNjAyMTkxOTM5NTRaFw0yNzA1MTcxOTM5NTRa
+# ZS1TdGFtcCBQQ0EgMjAxMDAeFw0yNjAyMTkxOTM5NTFaFw0yNzA1MTcxOTM5NTFa
 # MIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMH
 # UmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSUwIwYDVQQL
 # ExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScwJQYDVQQLEx5uU2hpZWxk
-# IFRTUyBFU046MzMwMy0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1l
-# LVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDb
-# cTACqU1YvRocyWL2PL9fyf/+ULs2qK7U1aZsRnDZSnlCr7K7jgA3eFCEJL5BZ7dU
-# TC0DeZepf+ZC+7HEbB4IdzmJfQAUDFFerqY5VTHmQvP2XA3lWSFj740idcGUHglP
-# 5H/PbCJU7GAHWP2HdcCjdx1lYAo0A+zLI7xwnTQeMyOXX212Eg4UmDPPJgxdTMw6
-# WFVWsBPWRBi5gDixy2s+7R8ADk5lbBBFDB5h0CjrNWIN7uCAzF5g7trrL8nXIKp1
-# 0mj9RxhcGQ+tlht6VIvdygRVTUGdzFB2/nBvJqQ9kxxFltQST70fEdx4TyaKow/f
-# 5+BSh4z4/9f7NXIVVTLn/8kcJAfRqFmRrrFt3IKby7VrzmYuoQWD0lmNFtGQ57Br
-# JkPrPFAPek1ALtcbb7FH3nQpvi8ngz/MFX/+cnmNFWFU29VVLmzB9XvLZxbYvkee
-# tt0mh5lfteeN2rEwUyrdrKufz9h2S6pbate+C2h02CrXwSka0x6ezpTmGkIJLFt2
-# 5ub/UYXNLdHdsxGD6EfckOIoJYsm4MS9F/vSqLNHK89I0vTLBngQEp6LIFkINanR
-# T3PtNx3pNKRKJRALc6L6mhW4hL4aHL749qPfQ72t5qAMm5xiKYMgJ2WanidRLNuI
-# 251JIN7raaeA/2vb0XFkZcIbTR1pfQGsco4U0g5tjwIDAQABo4IBSTCCAUUwHQYD
-# VR0OBBYEFOYjIs5qa6pfuquPyyK1FTr5QDCnMB8GA1UdIwQYMBaAFJ+nFV0AXmJd
+# IFRTUyBFU046MzcwMy0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1l
+# LVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDL
+# O8XFOcfGqAqgiz0+AmQmFl3dZ0aTG4UFJkqqNdMHy28DaheCBs6ONufukye5x42C
+# WkzgRIy9kE2VWwEntZ8ZkgyrykC0bIqsID7+6FxguseTXf1Vwvm1D8104VmetoBJ
+# lJ4uGbuyJZUvXDx55nVh50ygLTzZ24WkQsnPpvRZv2kPc39f3bhLyHVtnHsa/W/8
+# 6Vrftd+AfFveA+qN/EY+XGj5c/DPMXCYECb0arYb92dDJWtwzpyBrp4gfHlgY1UE
+# pc4l4AGELrf2J4wrxTzTW+SM8XhV1dOOPrYjD080IbZqL8B+IF0RCdn269YXrGK6
+# QIHipznKZcCS8jN30YAHnTJVN5Zzs6t/2YsqBGDquvDad7934FFTwzvUcO3VoIyd
+# 93XWwvP8/SCFVJh21W8oGQTptGHyly+Fl4henVMVZF1v6osOtirX8GFTiEhnf8nR
+# dOg7yZYAJ0xy9CtDfbXaTn/cf3Lq3N/GCYKFjC+5mUCE+AJhmxMuMdvSUGmKiAFd
+# iPAjUTqsWWBBZJm0eCwgeGJFmmQA+V7/98BKcE+gUL7O9eWRDQwKeAcvo6rxNv2Y
+# 4jKrHA6Z/wi3a/fKUhLCNZES8qGdrpDAm7qh+6FjYxytAbkiKM6uTNy/ULPlwtlY
+# ZoAJDDQP7eYCywwVbNTbHXRBSS+NccC0sSB4W7U67wIDAQABo4IBSTCCAUUwHQYD
+# VR0OBBYEFNk72sGDlH0r5DwvfGR5XwJI8B7bMB8GA1UdIwQYMBaAFJ+nFV0AXmJd
 # g/Tl0mWnG1M1GelyMF8GA1UdHwRYMFYwVKBSoFCGTmh0dHA6Ly93d3cubWljcm9z
 # b2Z0LmNvbS9wa2lvcHMvY3JsL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0El
 # MjAyMDEwKDEpLmNybDBsBggrBgEFBQcBAQRgMF4wXAYIKwYBBQUHMAKGUGh0dHA6
 # Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvY2VydHMvTWljcm9zb2Z0JTIwVGlt
 # ZS1TdGFtcCUyMFBDQSUyMDIwMTAoMSkuY3J0MAwGA1UdEwEB/wQCMAAwFgYDVR0l
 # AQH/BAwwCgYIKwYBBQUHAwgwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUA
-# A4ICAQA4I/3bkdnTxD2rFum3MF8xVKdEkohAObbePrQ+0fr5bRimjz9sVkKT/7gc
-# j4OMcClSYG+IdX6Mp3EYsLHWfjvwfzFoeZE+yTbdBj/1VHZQRuCmw6QqeVCTbw2n
-# nS7nBxnWd9oZXbPUpqEawH5DqXQaWFgR9A4KWVK/IvXVDMj1PlPCES1P3JonNbdh
-# kkkz49rJuKOm5b7e/BH8loqAmXOXRc22yxWVTMWrEp4pslmv8eT7VoY8X/jdKYTP
-# VEXsfmLbVFcqzMuB8vFGfUyWsWROS8wgq7lQYfWcYqh7NymoATX+wWYK3zWG7aRc
-# iPGUAzznXdf+aHtIWnQLNa5HFmSXkiak3fSuprWYZiHhuYjE16hroApcBHpm+8S/
-# kNqhm9WjQX+2BxnYv+Jejy6lqTi8fLBLS069WXVw/ptf5IV+FtYl34GvVoeg31Uo
-# UmVVZe1SDUJkm9dDXc8l/qBDYiAIT2CCsPTyt9XA9JVuHxdP63n7ChvWAO/47QRu
-# CDsUlFJoWwyBwl7jeYpaRVMtQt0iuJMGGjgEaJX1Q/2j8sXURvTceLHDD9ipWt09
-# 2ZDWMQciDRmhHNFOX1dnjBvk/k1UMcg997j5oYznAnSpJvlg/4BP3aVE0h/YH2Kg
-# sKbU4NXZHAjJXj2Slqo1C115CG6qBZaFkM8W6vPZCm5qnSezOjCCB3EwggVZoAMC
+# A4ICAQBlbu3IoynnPz0K1iPbeNnsej2b15l5sdl2FAFBBGT9lRdc2gNV8LAIusPY
+# HHhUvRDcsx4lbMNhVKPGu4TDLaqNt/CI+SFtGuqdRLpVP1XE9cCLyKrKPpcJFJCq
+# PpV+efoAtYBmIUQcxxwT7WIQ7gag8+rkKvrMkCoRqKS0mKv8J1sKfi85+G2uhZ/1
+# RteSVdYZOZOj+Sb4wzonTCTj7EtgMN/BX35W5dTzd7wJdGepYkVi871dSrC2Tr1Z
+# FzAR7S44drCWZpJ6phJabVNOsNxFJKgSykugOGWzQ318Rr3MTPg2s3Bns+pUPVgM
+# ijd4bUOH2BlEsLMMwOcolTTZqg1HYrdY1jxpUAI9ipjBQRINL/O705Z+/f2LjNmJ
+# QooCVJVX24adpZ519SsfazGoqXGt91bmqKo0fI09Il4sUHh4ih6rpiQDBlyL7vmv
+# CejwVxYevY4qVwTZ/o3gvl+R0lFxYS9feIM4NeG0+WsDZ7jLci5MFeuNwosQY3z2
+# 6Xg1oj0U9u+ncR9uTU+xBmJ8BtlCdhQ13RNMX5P+krRYPB3XCp9Jm6XaO1995q32
+# AIZm1mzBGI6yHlviXaEC5TzGiO1LXuPtXZU2X93oQJbMoe3v8+5CPKrQalGWyYuh
+# 2a3V1pwbj+W0FEmEFPpu8TI+qYO1IIQWUSRvFjXth5Ob02hMMjCCB3EwggVZoAMC
 # AQICEzMAAAAVxedrngKbSZkAAAAAABUwDQYJKoZIhvcNAQELBQAwgYgxCzAJBgNV
 # BAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4w
 # HAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xMjAwBgNVBAMTKU1pY3Jvc29m
@@ -623,40 +681,40 @@ function Invoke-DevConfigPackageCleanup {
 # yzELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1Jl
 # ZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjElMCMGA1UECxMc
 # TWljcm9zb2Z0IEFtZXJpY2EgT3BlcmF0aW9uczEnMCUGA1UECxMeblNoaWVsZCBU
-# U1MgRVNOOjMzMDMtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1T
-# dGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQALbEgZZnyYHXJ1DGb5fGjplXpt
-# uaCBgzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
+# U1MgRVNOOjM3MDMtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1T
+# dGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQBLIMg1P7sNuCXpmbH2IXT2tXeE
+# EKCBgzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
 # DgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
 # JjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3
-# DQEBCwUAAgUA7mhb4jAiGA8yMDI2MTAwMTA0MTExNFoYDzIwMjYxMDAyMDQxMTE0
-# WjB0MDoGCisGAQQBhFkKBAExLDAqMAoCBQDuaFviAgEAMAcCAQACAjTIMAcCAQAC
-# AhLVMAoCBQDuaa1iAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKg
-# CjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBABwmoO5p
-# VO8jvB1kjTzEmADV7qQJuIB3GsagXmx4IfcC4mxDBgaj1ucihB7g/oYSknHaR1jC
-# 7zaO2UwXVBdIgqfKeMFXlXDrrbJVh5vyXF+EWjGwE8GIG1c3tZi9Pk7EpJVhcLvU
-# O4kL2vgC0+zX0Tf8seMcnbN/tmPFdH8yzB6YDaBEIZrOcY4yHPmgXjV5bN5aGBWW
-# Zq562cirjluEglKMmf0teySUQs6iLqfEiYgWtrjV7ss9iXeVj9ISTSDDeVJckQy4
-# wRN2aYa9ZSKu+aw38Vi5I3UHPhhALOyKGqc/L2h1lweTcO8jdrLHfb/449xLYHa/
-# LrcggeXXDuz2ea0xggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UE
+# DQEBCwUAAgUA7mk2xTAiGA8yMDI2MTAwMTE5NDUwOVoYDzIwMjYxMDAyMTk0NTA5
+# WjB0MDoGCisGAQQBhFkKBAExLDAqMAoCBQDuaTbFAgEAMAcCAQACAi/pMAcCAQAC
+# AhNKMAoCBQDuaohFAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKg
+# CjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAKtmpTzH
+# P3hQz2G28Qv9JmTTq9Kht6v45kKJldE6Wtvr+Bf1y1gLH7ogGEqrzTD8thx43Mh9
+# uwi4F4S8l495YbCPFfyhtN8LxbjKUI7hth/tlgAZOKaJJvS5mQCcIkcC0j1m4Na8
+# HipgxrT7JW4pUDyldv1ethSeRCKJCwToBYxYnxfVX/CWU4UzDMmFVFEiei0tIq7u
+# yrXQo4/vYD5ZZ8AVCOEoXpEse2AHgPSj8zjb5n1AbMrhqYcKXkghmWgRogugmkar
+# HgIo6mLHmOB/XT10lAewb3gcjU565FUnA0O0NDC4MUMo9Zz5g5G2IDSacB515RZT
+# TdFMyGbiFQ9rCr4xggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UE
 # CBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9z
 # b2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQ
-# Q0EgMjAxMAITMwAAAiEzwDX70g8hpAABAAACITANBglghkgBZQMEAgEFAKCCAUow
-# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCAfVfrT
-# YuGHslnqawSCp7wuHCdLvoPOU6/oFvO4orVizjCB+gYLKoZIhvcNAQkQAi8xgeow
-# gecwgeQwgb0EIADvIQefFVUa4BJy8IZywMAvmGSKdUVqEmy9A++PCj1EMIGYMIGA
+# Q0EgMjAxMAITMwAAAh86cGnkojAulQABAAACHzANBglghkgBZQMEAgEFAKCCAUow
+# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCAVDsaM
+# Axk+8Bk9Q5opdWqTQYcJLKDATibNnaYiAebaNDCB+gYLKoZIhvcNAQkQAi8xgeow
+# gecwgeQwgb0EILAkCt9WkCsMtURkFu6TY0P3UXdRnCiYuPZhe3ykLfwUMIGYMIGA
 # pH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcT
 # B1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UE
-# AxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIhM8A1+9IPIaQA
-# AQAAAiEwIgQgSziUjV7LvHLFEomOOaJOgZlNnEOd4ui1WtClxfRsCjswDQYJKoZI
-# hvcNAQELBQAEggIAfWuA6afUKOLxd5KFzHgUpmxERbtrfIsEPFPFHf4sDbus00iw
-# 3Lji5lr3ApQ0yibmZiONfFiO5RSj3LUf60GhH8y9+yBipRGRlEvJ40+faTefgvk/
-# hvYY9QI/yUC/kNssGrpvEHZ0vEnct/3pZF+La0SSegQh5pYGldS4CIdyXKvxDel3
-# n4f600Dy/wSEGVw607pUS0pb2fQMupVXbfwwnBHP6OEAxics89jPzdM9EMfOxh98
-# P60CIQPJtW0xuGxdE3p9rP+xmo8gQ2scHVtLF+gTZdtfuSVQJeVGjl+I1MjxNJFi
-# G57YDnTNQSMqfrPQwAu3zhkOhSB3ExHytgapLGTq5YBwhUJhrTUA3Xje3q659ZfA
-# JyXLBif/pmlqGfGZ24Rf+ZpNhDRiSFgsVhco9JpzHJwwGpq914XcjRmoZnHRpDXG
-# yvHFhJwSTMS6jq5UPxoLFFDnZzp++9xRHHOI6OhX4yBZc9r4QUvhHhOagC+kiYRa
-# Ziy4d4GhkGOJ8Dmae6KZG5nzXeKFPQ9pFXtEgwsEgavJ8MLxFjzIGpy7cQTKMXOG
-# 0bi20f/+lKm210TGsdoRa6CUPcZLRd5sqUOi6142og+s0LKTpKgvJ2sDzDFHp+fc
-# 7etr1L6hxoC9o4A6CDeAKiBHf6H6hIkJdp6ZGdT/MYayjbw3tmV1BGOCxYM=
+# AxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIfOnBp5KIwLpUA
+# AQAAAh8wIgQgxY2OAnX1QGdtm4tPfEXldKO36IU79HkKhkyNnMQGE10wDQYJKoZI
+# hvcNAQELBQAEggIAW1LYfYfAnz+IFYE8hHb9y0bDOmOW2fKp0SkHifr/e40IuTUH
+# /ijawTa4SHZg4R4U2KsrXe7Ounjrnu2E2Py0B92CAhpSpFNyN7oIOUz6eB0XAZo6
+# jMpH6cFG0lSkBK+kBr/HoU52C1CU2xp7MIJhoMTRnPkYNppmBB/GmJ+J693+zC1K
+# yLEt2VyEeSNr2wBns0hjeg69ylcRevOkvUBhSG/z1P7ObV0VI/ddDIx1DgcEnpF1
+# hrF+nJ/ag1JMlcTkcP2XDnrbqwYgaf/mxgAjyBdKW6XM7OKGqtZ20IXn9eGiYKG8
+# 9UVL7+3K6TsbMIgNnlNXgz72BW2rT9ZH+0ERxvqSBONiSWh8ikhXMoLWZvGtH4ZK
+# QC8juXaZgI3uDqhXSWoKSlEv54IEoq8+5hPydvETQURgj8c0kx634YCZI9TKUHYB
+# SR/V5N2UcpG8fbB8WRYFi7jT8u0wwZLasGm2pWqnvgCPUnLdhYG2WU55/EzA0s4Z
+# l6lXdQaXZ0N4Jvu0QqrNL7Oaa7O+5Rbm6Ovqwr9wv6hgJm/2lWXttyae+13xSShF
+# bVXnf4GjoZdhO0LHpJgBciDov6Xhp+9JA0LrdRy8C/z2eG7LAwifyPxWJCisI1aa
+# lsop9pYqgwMP005t8zWie6mceUKyUDCq0JWSYEM4fhzZk9xb+vueWGh475M=
 # SIG # End signature block
