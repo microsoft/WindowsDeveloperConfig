@@ -109,7 +109,31 @@ function Invoke-DevConfigWinGetDeployment {
                     }
                 )
                 $bundle = Join-Path $Directory 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle'
-                Add-AppxPackage -Path $bundle -DependencyPath $dependencies -ForceTargetApplicationShutdown -ErrorAction Stop
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                $dependencies = @(
+                    foreach ($dependency in $dependencies) {
+                        $archive = [IO.Compression.ZipFile]::OpenRead($dependency)
+                        try {
+                            $entry = $archive.GetEntry('AppxManifest.xml')
+                            if (-not $entry) { throw "Missing AppxManifest.xml in $dependency." }
+                            $reader = [IO.StreamReader]::new($entry.Open())
+                            try { $manifest = [xml]$reader.ReadToEnd() } finally { $reader.Dispose() }
+                        } finally { $archive.Dispose() }
+                        $identity = $manifest.Package.Identity
+                        if (-not $identity.Name -or -not $identity.Publisher -or -not $identity.ProcessorArchitecture -or -not $identity.Version) {
+                            throw "Incomplete dependency identity in $dependency."
+                        }
+                        $installed = @(Get-AppxPackage -Name $identity.Name -ErrorAction Stop | Where-Object {
+                            $_.Publisher -eq $identity.Publisher -and
+                            [string]$_.Architecture -eq $identity.ProcessorArchitecture -and
+                            [version]$_.Version -ge [version]$identity.Version
+                        })
+                        if (-not $installed.Count) { $dependency }
+                    }
+                )
+                $parameters = @{ Path = $bundle; ForceTargetApplicationShutdown = $true; ErrorAction = 'Stop' }
+                if ($dependencies.Count) { $parameters.DependencyPath = $dependencies }
+                Add-AppxPackage @parameters
             } else {
                 $package = Get-AppxPackage -Name Microsoft.DesktopAppInstaller |
                     Sort-Object Version -Descending | Select-Object -First 1
@@ -173,7 +197,7 @@ function Confirm-DevConfigWinGetReady {
         try {
             Get-WinGetPackage -Source winget -ErrorAction Stop | Out-Null
             return
-        } catch [System.Runtime.InteropServices.COMException] {
+        } catch {
             # 0x800706BA means the module could not reach WinGet's RPC server.
             if ($_.Exception.HResult -ne -2147023174) { throw }
             $moduleError = $_.Exception.Message

@@ -465,6 +465,8 @@ The setup targets the public stable release pinned in [`steps/_winget.ps1`](step
 
 The step is best-effort, so a machine that can't be updated is flagged rather than stopped, and the rest of the run continues on whatever winget it has.
 
+Setup reuses installed dependencies that meet the required version for the same package name, publisher, and architecture.
+
 An installed version equal to or newer than the pin skips the update without a network lookup. RPC recovery re-registers the installed App Installer package locally, then retries the package query; it does not download or downgrade a newer version.
 
 To change the target release, update `DevConfigWinGetTargetVersion` and both asset hashes in `steps/_winget.ps1` together, then sign and publish the payload as usual.
