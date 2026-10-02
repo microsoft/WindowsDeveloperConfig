@@ -125,7 +125,7 @@ function Invoke-DevConfigWinGetDeployment {
             }
             exit 0
         } catch {
-            [Console]::Error.WriteLine($_.ToString())
+            Write-Error -ErrorRecord $_ -ErrorAction Continue
             exit 1
         }
     }
