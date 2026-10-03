@@ -527,9 +527,10 @@ Run in an elevated PowerShell window:
 
 From source: `.\src\windows-dev-config\dev-config.ps1 -AllowUnsigned -Action Uninstall`.
 `bootstrap.ps1` also accepts `-Action Uninstall`. Cleanup uses Windows PowerShell to remove PowerShell 7.
-Per-user tools are removed through temporary tasks in the same account's non-elevated, signed-in session.
-Git and Visual Studio Code use their registered Inno uninstallers without progress windows or automatic restarts;
-other installation types use WinGet. Some uninstallers may still request Administrator approval.
+User-scope WinGet removals run through temporary tasks in the same account's non-elevated, signed-in session.
+NVM, Git, and Visual Studio Code use their direct uninstallers with the cleanup process's Administrator rights,
+without progress windows or automatic restarts. Other installation types use WinGet.
+Some uninstallers may still request Administrator approval.
 
 **Cleanup runs without confirmation and permanently deletes the `Ubuntu` distro and its files.**
 It uninstalls WSL and the tools below, including pre-existing, machine-wide, and all-user MSIX installations.
