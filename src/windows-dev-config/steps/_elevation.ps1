@@ -97,7 +97,7 @@ try {
             Start-Sleep -Milliseconds 500
             $task = Get-ScheduledTask -TaskName $taskName
             $info = Get-ScheduledTaskInfo -TaskName $taskName
-            # A new task reports 0x41303 until its first run.
+            # A new task reports 0x41303 until its first run and 0x41301 while it runs.
             $hasStarted = $hasStarted -or $task.State -eq 'Running' -or $info.LastTaskResult -ne 0x41303
             if (-not $hasStarted -and $timer.Elapsed.TotalSeconds -ge 30) {
                 throw 'Per-user cleanup could not start. Sign in with the account running this script and retry.'
@@ -109,7 +109,7 @@ try {
                 Write-Host "  still working -- $([int]$timer.Elapsed.TotalMinutes)m so far" -ForegroundColor DarkGray
                 $nextProgress += 60
             }
-        } while (-not $hasStarted -or $task.State -in @('Running', 'Queued'))
+        } while (-not $hasStarted -or $task.State -in @('Running', 'Queued') -or $info.LastTaskResult -eq 0x41301)
 
         $exitCode = [BitConverter]::ToInt32([BitConverter]::GetBytes([uint32]$info.LastTaskResult), 0)
         if ($exitCode -eq 258) {
