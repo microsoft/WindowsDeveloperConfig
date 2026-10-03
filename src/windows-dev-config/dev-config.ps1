@@ -21,6 +21,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# A child shell can inherit incompatible built-in modules from another PowerShell edition.
+$env:PSModulePath = "$PSHOME\Modules;$env:PSModulePath"
+
 $stepsDir = Join-Path $PSScriptRoot 'steps'
 $securityCode = [IO.File]::ReadAllText((Join-Path $stepsDir '_security.ps1'))
 if (-not $AllowUnsigned) {
