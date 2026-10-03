@@ -38,6 +38,15 @@ $entries = [ordered]@{
     Bootstrap = Get-StartupCode $bootstrapFunction.Body.EndBlock 'function Invoke-DevConfigWebRequest*'
     Elevation = Get-StartupCode $launcher.Right.Expression.ScriptBlock.EndBlock '[[]Net.ServicePointManager]*'
 }
+foreach ($path in @('setup-full.ps1', 'setup-standard.ps1', 'uninstall.ps1', '..\Workloads\winui\setup.ps1')) {
+    $entryPoint = [Management.Automation.Language.Parser]::ParseFile((Join-Path $source $path), [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors) { throw ($parseErrors -join [Environment]::NewLine) }
+    $startup = $entryPoint.Find({
+        param($node)
+        $node -is [Management.Automation.Language.ScriptBlockExpressionAst]
+    }, $true)
+    $entries[$path] = Get-StartupCode $startup.ScriptBlock.EndBlock '[[]Net.ServicePointManager]*'
+}
 $shells = @(
     (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'),
     $PowerShell7Path
