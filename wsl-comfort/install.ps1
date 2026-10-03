@@ -496,73 +496,106 @@ function Invoke-ComfortShellBootstrap {
 }
 
 function Install-NerdFont {
+    $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Stop'
 
     $Version     = '2407.24'
     $WantedFonts = @('CascadiaCodeNF.ttf', 'CascadiaMonoNF.ttf')
-
-    # Skip if all font files and registry entries are already present
-    $fontsDir  = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'
-    $regPath   = 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
-    $regValues = @(
-        (Get-ItemProperty $regPath -EA SilentlyContinue).PSObject.Properties |
-        Where-Object Name -notin 'PSPath','PSParentPath','PSChildName','PSDrive','PSProvider' |
-        Select-Object -ExpandProperty Value
-    )
-    $filesOk = -not ($WantedFonts | Where-Object { -not (Test-Path (Join-Path $fontsDir $_)) })
-    $regOk   = -not ($WantedFonts | Where-Object { $fn = $_; -not ($regValues | Where-Object { $_ -like "*\$fn" }) })
-    if ($filesOk -and $regOk) {
-        Write-Host "Nerd fonts already installed; skipping."
-        return
-    }
-
-    $zipUrl  = "https://github.com/microsoft/cascadia-code/releases/download/v$Version/CascadiaCode-$Version.zip"
-    $workDir = Join-Path $env:TEMP "CascadiaCode-$Version"
-    $zipPath = Join-Path $workDir 'CascadiaCode.zip'
-    New-Item -ItemType Directory -Path $workDir -Force | Out-Null
-    New-Item -ItemType Directory -Path $fontsDir -Force | Out-Null
-
-    Write-Host "Downloading $zipUrl ..."
-    $ProgressPreference = 'SilentlyContinue'
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-
-    $expectedHash = 'E67A68EE3386DB63F48B9054BD196EA752BC6A4EBB4DF35ADCE6733DA50C8474'
-    $actualHash   = (Get-FileHash $zipPath -Algorithm SHA256).Hash
-    if ($actualHash -ne $expectedHash) {
-        Remove-Item $zipPath -Force
-        throw "Hash mismatch for CascadiaCode-$Version.zip: expected $expectedHash, got $actualHash"
-    }
-
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    Add-Type -AssemblyName System.Drawing
-
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+    $zip         = $null
+    $workDir     = Join-Path $env:TEMP "CascadiaCode-$Version"
+    $zipPath     = Join-Path $workDir 'CascadiaCode.zip'
+    $stagedFonts = @($WantedFonts | ForEach-Object { Join-Path $workDir $_ })
     try {
+        # Skip if all font files and registry entries are already present
+        $fontsDir  = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'
+        $regPath   = 'HKCU:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
+        $regValues = @(
+            (Get-ItemProperty $regPath -EA SilentlyContinue).PSObject.Properties |
+            Where-Object Name -notin 'PSPath','PSParentPath','PSChildName','PSDrive','PSProvider' |
+            Select-Object -ExpandProperty Value
+        )
+        $filesOk = -not ($WantedFonts | Where-Object { -not (Test-Path (Join-Path $fontsDir $_)) })
+        $regOk   = -not ($WantedFonts | Where-Object { $fn = $_; -not ($regValues | Where-Object { $_ -like "*\$fn" }) })
+        if ($filesOk -and $regOk) {
+            Write-Host '[  OK] Nerd fonts already installed; skipping.' -ForegroundColor Green
+            return
+        }
+
+        $zipUrl = "https://github.com/microsoft/cascadia-code/releases/download/v$Version/CascadiaCode-$Version.zip"
+        New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+        New-Item -ItemType Directory -Path $fontsDir -Force | Out-Null
+
+        Write-Host "Downloading $zipUrl ..."
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+
+        $expectedHash = 'E67A68EE3386DB63F48B9054BD196EA752BC6A4EBB4DF35ADCE6733DA50C8474'
+        $actualHash   = (Get-FileHash $zipPath -Algorithm SHA256).Hash
+        if ($actualHash -ne $expectedHash) {
+            throw "Hash mismatch for CascadiaCode-$Version.zip: expected $expectedHash, got $actualHash"
+        }
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        Add-Type -AssemblyName System.Drawing
+
+        $installed = 0
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
         foreach ($name in $WantedFonts) {
             $entry = $zip.Entries | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-            if (-not $entry) { Write-Warning "Not found in archive: $name"; continue }
+            if (-not $entry) {
+                Write-Host "[WARN] Font not found in archive: $name" -ForegroundColor Yellow
+                continue
+            }
 
             $dest = Join-Path $fontsDir $name
-            Write-Host "Installing $name -> $dest"
-            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
-
-            $pfc = New-Object System.Drawing.Text.PrivateFontCollection
             try {
-                $pfc.AddFontFile($dest)
-                $family = $pfc.Families[0].Name
-            } finally { $pfc.Dispose() }
+                $staged = Join-Path $workDir $name
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $staged, $true)
 
-            $regName = "$family (TrueType)"
-            New-ItemProperty -Path $regPath -Name $regName -Value $dest -PropertyType String -Force | Out-Null
-            Write-Host "  registered as '$regName'"
+                $fileCurrent = (Test-Path $dest) -and
+                    ((Get-FileHash $staged -Algorithm SHA256).Hash -eq (Get-FileHash $dest -Algorithm SHA256).Hash)
+                if ($fileCurrent) {
+                    Write-Host "  $name is already current; keeping existing file." -ForegroundColor DarkGray
+                } else {
+                    Write-Host "Installing $name -> $dest"
+                    Copy-Item -LiteralPath $staged -Destination $dest -Force
+                }
+
+                $isRegistered = $regValues | Where-Object { $_ -like "*\$name" }
+                if (-not $isRegistered) {
+                    $pfc = New-Object System.Drawing.Text.PrivateFontCollection
+                    try {
+                        $pfc.AddFontFile($dest)
+                        $family = $pfc.Families[0].Name
+                    } finally { $pfc.Dispose() }
+
+                    $regName = "$family (TrueType)"
+                    New-ItemProperty -Path $regPath -Name $regName -Value $dest -PropertyType String -Force | Out-Null
+                    Write-Host "  registered as '$regName'"
+                }
+                $installed++
+            } catch {
+                Write-Host "[WARN] Could not install $name; continuing without it." -ForegroundColor Yellow
+                Write-Host "  $($_.Exception.Message)" -ForegroundColor DarkGray
+            }
         }
+
+        if ($installed -eq $WantedFonts.Count) {
+            Write-Host '[  OK] Nerd fonts installed. Restart running apps to pick them up.' -ForegroundColor Green
+        } else {
+            Write-Host "[WARN] Nerd font installation was incomplete ($installed/$($WantedFonts.Count) installed)." -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host '[WARN] Nerd font installation could not be completed; continuing setup.' -ForegroundColor Yellow
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor DarkGray
     }
     finally {
-        $zip.Dispose()
+        if ($zip) { $zip.Dispose() }
+        Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+        $stagedFonts | Remove-Item -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workDir -Force -ErrorAction SilentlyContinue
+        $ErrorActionPreference = $previousErrorActionPreference
     }
-
-    Remove-Item $zipPath -Force
-    Write-Host "`nDone. Restart any running apps (terminal, editors) to pick up the new fonts."
 }
 
 function Install-TerminalProfile {
