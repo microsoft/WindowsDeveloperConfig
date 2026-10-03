@@ -8,6 +8,7 @@ Set-StrictMode -Version Latest
 
 # Prefer structured module results; use winget.exe when the module is unavailable.
 $Script:DevConfigWinGetMode = 'Module'
+$Script:DevConfigWingetSourceFailure = $null
 
 # Exit codes are stable across locales; console text is not.
 $Script:DevConfigWingetNotFound  = -1978335212   # 0x8A150014 no installed package matched
@@ -195,7 +196,9 @@ function Confirm-DevConfigWinGetReady {
 
     for ($attempt = 1; $attempt -le 2; $attempt++) {
         try {
-            Get-WinGetPackage -Source winget -ErrorAction Stop | Out-Null
+            Invoke-DevConfigWingetSourceOperation -Name 'WinGet source query' -ScriptBlock {
+                Get-WinGetPackage -Source winget -ErrorAction Stop
+            } | Out-Null
             return
         } catch {
             # 0x800706BA means the module could not reach WinGet's RPC server.
@@ -214,9 +217,11 @@ function Confirm-DevConfigWinGetReady {
     }
 
     try {
-        $listed = Invoke-DevConfigWingetCli -Arguments @('list', '--source', 'winget', '--accept-source-agreements', '--disable-interactivity')
-        if ($listed.ExitCode -ne 0 -and $listed.ExitCode -ne $Script:DevConfigWingetNotFound) {
-            throw "winget list failed with exit code $($listed.ExitCode)"
+        Invoke-DevConfigWingetSourceOperation -Name 'WinGet CLI source query' -ScriptBlock {
+            $listed = Invoke-DevConfigWingetCli -Arguments @('list', '--source', 'winget', '--accept-source-agreements', '--disable-interactivity')
+            if ($listed.ExitCode -ne 0 -and $listed.ExitCode -ne $Script:DevConfigWingetNotFound) {
+                throw [Runtime.InteropServices.COMException]::new("winget list failed with exit code $($listed.ExitCode)", $listed.ExitCode)
+            }
         }
     } catch {
         throw "The WinGet module cannot connect ($moduleError), and winget.exe cannot query packages ($($_.Exception.Message)). Update App Installer from the Microsoft Store, then reopen PowerShell and run setup again."
@@ -232,6 +237,47 @@ function Invoke-DevConfigWingetCli {
         [Parameter(Mandatory)] [string[]] $Arguments
     )
     return Invoke-DevConfigNativeCommand -FilePath 'winget.exe' -Arguments $Arguments
+}
+
+function Test-DevConfigWingetSourceFailure {
+    param(
+        [Parameter(Mandatory)] [Exception] $Exception
+    )
+    $sourceFailure = $false
+    while ($null -ne $Exception) {
+        # RPC failures belong to the existing repair and CLI fallback path.
+        if ($Exception.HResult -eq -2147023174) { return $false }
+        # Missing source data (0x8A15000F), source open failure (0x8A150045), or all sources failed (0x8A15004B).
+        if ($Exception.HResult -in @(-1978335217, -1978335163, -1978335157) -or
+            $Exception.GetType().FullName -eq 'Microsoft.WinGet.Client.Engine.Exceptions.CatalogConnectException') {
+            $sourceFailure = $true
+        }
+        $Exception = $Exception.InnerException
+    }
+    return $sourceFailure
+}
+
+function Invoke-DevConfigWingetSourceOperation {
+    param(
+        [Parameter(Mandatory)] [string] $Name,
+        [Parameter(Mandatory)] [scriptblock] $ScriptBlock,
+        [switch] $RetryPackageFailure
+    )
+    if ($Script:DevConfigWingetSourceFailure) {
+        throw $Script:DevConfigWingetSourceFailure
+    }
+    try {
+        Invoke-DevConfigRetry -Name $Name -ScriptBlock $ScriptBlock -ShouldRetry {
+            param($Failure)
+            $RetryPackageFailure -or (Test-DevConfigWingetSourceFailure -Exception $Failure.Exception)
+        }
+    } catch {
+        if (Test-DevConfigWingetSourceFailure -Exception $_.Exception) {
+            $Script:DevConfigWingetSourceFailure = "The winget source is unavailable after retries. Remaining package operations are skipped for this run. Check your connection and WinGet source configuration, then run setup again. $($_.Exception.Message)"
+            throw $Script:DevConfigWingetSourceFailure
+        }
+        throw
+    }
 }
 
 # App Execution Alias stubs can exist without a registered App Installer package, so invoke winget.exe.
@@ -362,12 +408,15 @@ function Test-DevConfigWingetPackageInstalled {
         [switch] $AnyVersion
     )
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
-        $listed = Invoke-DevConfigWingetCli -Arguments @('list', '--id', $Id, '--exact', '--accept-source-agreements')
+        $listed = Invoke-DevConfigWingetSourceOperation -Name "winget list $Id" -ScriptBlock {
+            $result = Invoke-DevConfigWingetCli -Arguments @('list', '--id', $Id, '--exact', '--source', 'winget', '--accept-source-agreements')
+            if ($result.ExitCode -ne 0 -and $result.ExitCode -ne $Script:DevConfigWingetNotFound) {
+                throw [Runtime.InteropServices.COMException]::new("winget list $Id failed with exit code $($result.ExitCode)", $result.ExitCode)
+            }
+            return $result
+        }
         if ($listed.ExitCode -eq $Script:DevConfigWingetNotFound) {
             return $false
-        }
-        if ($listed.ExitCode -ne 0) {
-            throw "winget list $Id failed with exit code $($listed.ExitCode)"
         }
         if ($AnyVersion) {
             return $true
@@ -377,7 +426,9 @@ function Test-DevConfigWingetPackageInstalled {
     }
 
     # EqualsCaseInsensitive avoids ambiguous substring matches.
-    $pkg = Get-WinGetPackage -Id $Id -Source winget -MatchOption EqualsCaseInsensitive
+    $pkg = Invoke-DevConfigWingetSourceOperation -Name "WinGet package query $Id" -ScriptBlock {
+        Get-WinGetPackage -Id $Id -Source winget -MatchOption EqualsCaseInsensitive -ErrorAction Stop
+    }
     if (-not $pkg) {
         return $false
     }
@@ -395,9 +446,14 @@ function Test-DevConfigWingetUpgradeAvailable {
     param(
         [Parameter(Mandatory)] [string] $Id
     )
-    $upgrade = Invoke-DevConfigWingetCli -Arguments @('list', '--id', $Id, '--exact', '--upgrade-available', '--accept-source-agreements')
+    $upgrade = Invoke-DevConfigWingetSourceOperation -Name "winget upgrade query $Id" -ScriptBlock {
+        $result = Invoke-DevConfigWingetCli -Arguments @('list', '--id', $Id, '--exact', '--source', 'winget', '--upgrade-available', '--accept-source-agreements')
+        if ($result.ExitCode -ne 0 -and $result.ExitCode -ne $Script:DevConfigWingetNotFound) {
+            throw [Runtime.InteropServices.COMException]::new("winget upgrade query $Id failed with exit code $($result.ExitCode)", $result.ExitCode)
+        }
+        return $result
+    }
     if ($upgrade.ExitCode -ne 0) {
-        # No listing means nothing to upgrade to; a broken query must not force an endless reinstall.
         return $false
     }
     # @() keeps the count valid when nothing matches; under Set-StrictMode a bare $null has no Count.
@@ -408,19 +464,19 @@ function Install-DevConfigWingetPackage {
     param(
         [Parameter(Mandatory)] [string] $Id
     )
-    Invoke-DevConfigRetry -Name "winget install $Id" -ScriptBlock {
+    Invoke-DevConfigWingetSourceOperation -Name "winget install $Id" -RetryPackageFailure -ScriptBlock {
         if ($Script:DevConfigWinGetMode -eq 'Cli') {
             $r = Invoke-DevConfigWingetCli -Arguments @('install', '--id', $Id, '--exact', '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements')
             if ($r.ExitCode -ne 0 -and $r.ExitCode -ne $Script:DevConfigWingetNoUpgrade) {
-                throw "winget install $Id failed with exit code $($r.ExitCode)"
+                throw [Runtime.InteropServices.COMException]::new("winget install $Id failed with exit code $($r.ExitCode)", $r.ExitCode)
             }
             return
         }
 
-        $result = Install-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive
+        $result = Install-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive -ErrorAction Stop
         # NoApplicableUpgrade means the package is already installed and current.
         if (-not $result.Succeeded() -and $result.Status -ne 'NoApplicableUpgrade') {
-            throw "winget install $Id failed: $($result.ErrorMessage())"
+            throw [InvalidOperationException]::new("winget install $Id failed: $($result.ErrorMessage())", $result.ExtendedErrorCode)
         }
     }
 }

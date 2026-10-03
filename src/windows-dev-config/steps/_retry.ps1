@@ -11,7 +11,8 @@ function Invoke-DevConfigRetry {
         [Parameter(Mandatory)] [scriptblock] $ScriptBlock,
         [string] $Name = 'operation',
         [int] $MaxAttempts = 3,
-        [int] $InitialDelaySeconds = 5
+        [int] $InitialDelaySeconds = 5,
+        [scriptblock] $ShouldRetry
     )
     $attempt = 0
     $delay = $InitialDelaySeconds
@@ -23,6 +24,9 @@ function Invoke-DevConfigRetry {
         } catch {
             # Timeout exceptions already consumed their allowance, so callers handle the fallback path.
             if ($_.Exception -is [System.TimeoutException]) {
+                throw
+            }
+            if ($ShouldRetry -and -not (& $ShouldRetry $_)) {
                 throw
             }
             if ($attempt -ge $MaxAttempts) {
