@@ -175,7 +175,11 @@ Every one of these is listed in full detail in [What it changes](#what-it-change
 
 Installed with winget from the `winget` source, silently, with agreements accepted:
 
-Before installing packages, setup checks the WinGet module's connection. An RPC connection failure triggers one repair and retry, then a fallback to `winget.exe` if it can query packages. If neither works, setup stops with a repair message.
+Before installing packages, setup checks the WinGet module's connection. An RPC connection failure triggers one repair and retry, then a fallback to `winget.exe` if it can query packages. If neither front end works, setup stops with a repair message.
+
+Package queries and installs use the `winget` source. Recognized source failures retry up to three attempts. If recovery fails, remaining package operations are skipped and flagged for that run, while independent local settings continue. Check your connection and WinGet source configuration, then run setup again to retry. Package-specific installation failures retain their own retries.
+
+Run `src\tests\calm-os\winget-source-checks.ps1` in Windows PowerShell 5.1 and PowerShell 7 to check this behavior with simulated package operations, without changing the machine.
 
 | Package | winget id |
 | ------- | --------- |

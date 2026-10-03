@@ -217,7 +217,12 @@ function Invoke-PackagesPhase {
             Show-DevConfigPhaseHeader
         }
         Initialize-DevConfigWinGet
-        Confirm-DevConfigWinGetReady
+        try {
+            Confirm-DevConfigWinGetReady
+        } catch {
+            if (-not $Script:DevConfigWingetSourceFailure) { throw }
+            Write-Host "  $Script:DevConfigWingetSourceFailure" -ForegroundColor Yellow
+        }
     }
 
     $selected = @(Get-DevConfigPackage -Name $Packages)
