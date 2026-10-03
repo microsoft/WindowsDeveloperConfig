@@ -473,7 +473,7 @@ function Invoke-DevConfigInnoCleanup {
                 throw "The registered $DisplayName Inno uninstaller is not a supported executable path. Repair its installation and retry."
             }
             Invoke-DevConfigCleanupCommand -FilePath $path `
-                -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -Unelevated:($Scope -eq 'user') | Out-Null
+                -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') | Out-Null
         }
     }
 }
