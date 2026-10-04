@@ -283,6 +283,8 @@ These are **best-effort**: they need the network and a PATH that has just been u
 
 Nothing *inside* the distro is configured by this flow. For that, see [WSL Comfort](../wsl-comfort/readme.md).
 
+Readiness and distro-list checks use closed standard input so a missing WSL runtime cannot pause them at an installation prompt. Installation and update commands keep their normal console behavior.
+
 ## How it works
 
 ### The phases
@@ -606,6 +608,12 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 | `steps/<phase>.ps1` | One file per phase, each exporting a single `Invoke-<Name>Phase` function. |
 
 Adding a phase means adding one file and one entry in a workload's phase list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.
+
+Run the isolated WSL probe checks from the repository root in Windows PowerShell 5.1 and PowerShell 7; they do not install WSL:
+
+```powershell
+.\src\tests\calm-os\wsl-query-checks.ps1
+```
 
 ### Publishing a release
 

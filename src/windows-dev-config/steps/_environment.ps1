@@ -86,13 +86,15 @@ function Invoke-DevConfigProcess {
         [Parameter(Mandatory)] [int] $TimeoutSeconds,
         [switch] $NoNewWindow,
         [string] $RedirectStandardOutput,
-        [string] $RedirectStandardError
+        [string] $RedirectStandardError,
+        [string] $RedirectStandardInput
     )
     $start = @{ FilePath = $FilePath; PassThru = $true }
     if ($Arguments.Count)         { $start.ArgumentList           = $Arguments }
     if ($NoNewWindow)             { $start.NoNewWindow            = $true }
     if ($RedirectStandardOutput)  { $start.RedirectStandardOutput = $RedirectStandardOutput }
     if ($RedirectStandardError)   { $start.RedirectStandardError  = $RedirectStandardError }
+    if ($RedirectStandardInput)   { $start.RedirectStandardInput  = $RedirectStandardInput }
 
     $process   = Start-Process @start
     # Cache the process handle before exit so Windows PowerShell can still report ExitCode.

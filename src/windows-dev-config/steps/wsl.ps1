@@ -23,7 +23,8 @@ function Test-DevConfigServicingRebootPending {
 function Get-DevConfigWslExitCode {
     param(
         [Parameter(Mandatory)] [string[]] $Arguments,
-        [int] $TimeoutSeconds = 120
+        [int] $TimeoutSeconds = 120,
+        [switch] $NoInput
     )
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
         return $null
@@ -31,20 +32,23 @@ function Get-DevConfigWslExitCode {
 
     $stdout = [System.IO.Path]::GetTempFileName()
     $stderr = [System.IO.Path]::GetTempFileName()
+    $stdin = $null
     try {
+        if ($NoInput) { $stdin = [System.IO.Path]::GetTempFileName() }
         return Invoke-DevConfigProcess -FilePath 'wsl.exe' -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds `
-            -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr -RedirectStandardInput $stdin
     } catch {
         Write-Verbose "wsl $($Arguments -join ' ') could not run: $($_.Exception.Message)"
         return $null
     } finally {
         Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+        if ($stdin) { Remove-Item -LiteralPath $stdin -Force -ErrorAction SilentlyContinue }
     }
 }
 
 # The current WSL package supports --version; the inbox WSL returns a nonzero exit code.
 function Test-DevConfigWslRuntimeCurrent {
-    return ((Get-DevConfigWslExitCode -Arguments @('--version')) -eq 0)
+    return ((Get-DevConfigWslExitCode -Arguments @('--version') -NoInput) -eq 0)
 }
 
 function Test-DevConfigWslFeaturesActive {
@@ -126,10 +130,13 @@ function Test-DevConfigUbuntuInstalled {
     $env:WSL_UTF8 = '1'
     $out = [System.IO.Path]::GetTempFileName()
     $err = [System.IO.Path]::GetTempFileName()
+    $stdin = $null
     try {
+        # Closed stdin prevents a missing WSL runtime from waiting at its installation prompt.
+        $stdin = [System.IO.Path]::GetTempFileName()
         # This query is bounded and redirected so a nonresponsive listing is treated as not installed.
         $exitCode = Invoke-DevConfigProcess -FilePath 'wsl.exe' -Arguments @('--list', '--quiet') `
-            -NoNewWindow -TimeoutSeconds 120 -RedirectStandardOutput $out -RedirectStandardError $err
+            -NoNewWindow -TimeoutSeconds 120 -RedirectStandardOutput $out -RedirectStandardError $err -RedirectStandardInput $stdin
         if ($exitCode -ne 0) {
             return $false
         }
@@ -143,6 +150,7 @@ function Test-DevConfigUbuntuInstalled {
         return $false
     } finally {
         Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+        if ($stdin) { Remove-Item -LiteralPath $stdin -Force -ErrorAction SilentlyContinue }
     }
 }
 
