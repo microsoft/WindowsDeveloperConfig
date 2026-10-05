@@ -51,7 +51,7 @@ function Remove-DevConfigNvm {
         throw 'The NVM uninstaller was not found under NVM_HOME. Repair its installation and retry.'
     }
     foreach ($path in $uninstallers) {
-        Invoke-DevConfigCleanupCommand -FilePath $path -Unelevated `
+        Invoke-DevConfigCleanupCommand -FilePath $path `
             -Arguments @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') | Out-Null
     }
 }
@@ -217,7 +217,12 @@ function Invoke-PackagesPhase {
             Show-DevConfigPhaseHeader
         }
         Initialize-DevConfigWinGet
-        Confirm-DevConfigWinGetReady
+        try {
+            Confirm-DevConfigWinGetReady
+        } catch {
+            if (-not $Script:DevConfigWingetSourceFailure) { throw }
+            Write-Host "  $Script:DevConfigWingetSourceFailure" -ForegroundColor Yellow
+        }
     }
 
     $selected = @(Get-DevConfigPackage -Name $Packages)

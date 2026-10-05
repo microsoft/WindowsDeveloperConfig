@@ -53,6 +53,8 @@ Bootstrap avoids publisher-trust prompts by default. Organization policy can req
 
 Files stay on disk so setup can load its helpers and resume after reboot.
 
+Each setup entry point prioritizes its running shell's built-in modules so switching between PowerShell 7 and Windows PowerShell does not break signature verification.
+
 For elevation, the launcher downloads and verifies the bootstrap, installs it in the protected directory, and runs it with `-File`.
 
 `-AllowUnsigned` selects `src/windows-dev-config/` and skips signature checks. Bootstrap never selects unsigned source automatically.
@@ -175,7 +177,11 @@ Every one of these is listed in full detail in [What it changes](#what-it-change
 
 Installed with winget from the `winget` source, silently, with agreements accepted:
 
-Before installing packages, setup checks the WinGet module's connection. An RPC connection failure triggers one repair and retry, then a fallback to `winget.exe` if it can query packages. If neither works, setup stops with a repair message.
+Before installing packages, setup checks the WinGet module's connection. An RPC connection failure triggers one repair and retry, then a fallback to `winget.exe` if it can query packages. If neither front end works, setup stops with a repair message.
+
+Package queries and installs use the `winget` source. Recognized source failures retry up to three attempts. If recovery fails, remaining package operations are skipped and flagged for that run, while independent local settings continue. Check your connection and WinGet source configuration, then run setup again to retry. Package-specific installation failures retain their own retries.
+
+Run `src\tests\calm-os\winget-source-checks.ps1` in Windows PowerShell 5.1 and PowerShell 7 to check this behavior with simulated package operations, without changing the machine.
 
 | Package | winget id |
 | ------- | --------- |
@@ -282,6 +288,8 @@ These are **best-effort**: they need the network and a PATH that has just been u
 - **Ubuntu**, via `wsl --install -d Ubuntu --no-launch`, falling back to `--web-download` if the Microsoft Store route doesn't complete. The distro's first-run welcome screen is suppressed; open Ubuntu from the Start menu to create your Linux user.
 
 Nothing *inside* the distro is configured by this flow. For that, see [WSL Comfort](../wsl-comfort/readme.md).
+
+Readiness and distro-list checks use closed standard input so a missing WSL runtime cannot pause them at an installation prompt. Installation and update commands keep their normal console behavior.
 
 ## How it works
 
@@ -527,16 +535,17 @@ Run in an elevated PowerShell window:
 
 From source: `.\src\windows-dev-config\dev-config.ps1 -AllowUnsigned -Action Uninstall`.
 `bootstrap.ps1` also accepts `-Action Uninstall`. Cleanup uses Windows PowerShell to remove PowerShell 7.
-Per-user tools are removed through temporary tasks in the same account's non-elevated, signed-in session.
-Git and Visual Studio Code use their registered Inno uninstallers without progress windows or automatic restarts;
-other installation types use WinGet. Some uninstallers may still request Administrator approval.
+User-scope WinGet removals run through temporary tasks in the same account's non-elevated, signed-in session.
+NVM, Git, and Visual Studio Code use their direct uninstallers with the cleanup process's Administrator rights,
+without progress windows or automatic restarts. Other installation types use WinGet.
+Some uninstallers may still request Administrator approval.
 
 **Cleanup runs without confirmation and permanently deletes the `Ubuntu` distro and its files.**
 It uninstalls WSL and the tools below, including pre-existing, machine-wide, and all-user MSIX installations.
 Cleanup covers Full's configuration regardless of which setup action ran. It does not restore previous settings.
 
 - **Settings:** disable Sudo, Developer Mode, and Remote Desktop; reset Explorer, Start, search, notification, Bluetooth tray, taskbar End Task, Widgets, Edge policies, long-path, and WSL first-run settings; select the unrestricted QuietHours profile and switch app/system themes to light.
-- **Terminal:** cancel any pending next-sign-in font update; remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries (including dynamically generated PowerShell entries), and the Copilot fragment.
+- **Terminal:** cancel any pending next-sign-in font update; remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries (including dynamically generated PowerShell entries), and the Copilot fragment. Terminal settings are reset after WSL and tool removal to avoid recreating their profiles during cleanup.
 - **Integrations:** remove the managed Oh My Posh profile block, WinUI template package, and win-dev-skills marketplace. Custom profile code and unrelated plugins are preserved; a marketplace still used by other plugins is flagged rather than force-removed.
 - **Tools:** remove uv executables, caches, and local data; NVM; the WinUI Copilot plugin; Node.js; Copilot; Python 3.14 and its launcher/install manager; Git; GitHub CLI; Oh My Posh; Azure CLI; Coreutils; .NET SDK 10; Intelligent Terminal; PowerToys; Visual Studio Code; Windows App CLI; and PowerShell 7.
 
@@ -593,6 +602,8 @@ otherwise it deletes only the named value.
 
 Source of truth for this flow is `src/windows-dev-config/`. The copy at the repository root is the Authenticode-signed release copy, regenerated by the sign pipeline — don't edit it directly. See [`src/docs/development.md`](https://github.com/microsoft/WindowsDeveloperConfig/blob/main/src/docs/development.md#repo-layout-signed-vs-source).
 
+Run `.\src\tests\calm-os\module-path-checks.ps1` from the repository root on Windows with PowerShell 7 installed to check cross-edition module loading and signature verification without applying setup.
+
 | File | What it is |
 | ---- | ---------- |
 | `bootstrap.ps1` | Remote entry point: elevation, verified downloads, protected installation, and launch. |
@@ -606,6 +617,12 @@ Source of truth for this flow is `src/windows-dev-config/`. The copy at the repo
 | `steps/<phase>.ps1` | One file per phase, each exporting a single `Invoke-<Name>Phase` function. |
 
 Adding a phase means adding one file and one entry in a workload's phase list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.
+
+Run the isolated WSL probe checks from the repository root in Windows PowerShell 5.1 and PowerShell 7; they do not install WSL:
+
+```powershell
+.\src\tests\calm-os\wsl-query-checks.ps1
+```
 
 ### Publishing a release
 

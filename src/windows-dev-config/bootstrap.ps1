@@ -46,6 +46,9 @@ function Invoke-CalmOsBootstrap {
     $ErrorActionPreference = 'Stop'
     Set-StrictMode -Version Latest
 
+    # A child shell can inherit incompatible built-in modules from another PowerShell edition.
+    $env:PSModulePath = "$PSHOME\Modules;$env:PSModulePath"
+
     # Keep this helper identical to steps/_retry.ps1; bootstrap must work on its own.
     function Invoke-DevConfigWebRequest {
         param(
@@ -177,6 +180,8 @@ function Invoke-CalmOsBootstrap {
 
             $ErrorActionPreference = 'Stop'
             Set-StrictMode -Version Latest
+            # A child shell can inherit incompatible built-in modules from another PowerShell edition.
+            $env:PSModulePath = "$PSHOME\Modules;$env:PSModulePath"
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
             $baseUri = "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$Ref/$flow"

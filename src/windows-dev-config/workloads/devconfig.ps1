@@ -111,9 +111,10 @@ if ($Action -eq 'Partial') {
     ($phases | Where-Object { $_.File -eq 'registry-taskbar-search.ps1' }).Title = 'Taskbar & Start tweaks'
 } elseif ($Action -eq 'Uninstall') {
     $phases = @($phases | Where-Object { $_['Uninstall'] })
-    # Remove tools after the cleanup steps that need them.
-    $phases = @($phases | Where-Object { $_.File -ne 'packages.ps1' }) +
-        @($phases | Where-Object { $_.File -eq 'packages.ps1' })
+    # Reset Terminal after removing the tools and WSL fragments that can recreate profiles.
+    $phases = @($phases | Where-Object { $_.File -notin @('packages.ps1', 'terminal.ps1') }) +
+        @($phases | Where-Object { $_.File -eq 'packages.ps1' }) +
+        @($phases | Where-Object { $_.File -eq 'terminal.ps1' })
 }
 
 @{
