@@ -43,8 +43,8 @@ function Get-AppxPackage {
     return @()
 }
 function Invoke-DevConfigCleanupCommand {
-    param([string] $FilePath, [string[]] $Arguments, [int[]] $SuccessCodes, [switch] $Unelevated)
-    $script:calls.Add([pscustomobject]@{ File = $FilePath; Arguments = $Arguments; Unelevated = [bool]$Unelevated })
+    param([string] $FilePath, [string[]] $Arguments, [int[]] $SuccessCodes, [switch] $Unelevated, [int] $TimeoutSeconds = 900)
+    $script:calls.Add([pscustomobject]@{ File = $FilePath; Arguments = $Arguments; Unelevated = [bool]$Unelevated; Timeout = $TimeoutSeconds })
     if ($script:commandFailure) { throw 'Fixture uninstaller failed (1).' }
     [pscustomobject]@{ ExitCode = $script:packageExit; Output = '' }
 }
@@ -78,11 +78,13 @@ Assert-Check ($script:calls.Count -eq 4) 'Run direct Inno cleanup and WinGet for
 Assert-Check (-not $script:calls[0].Unelevated -and -not $script:calls[2].Unelevated) 'Keep both direct Inno calls elevated during package cleanup'
 Assert-Check ($script:calls[1].Unelevated -and $script:calls[1].Arguments -contains 'user') 'Keep generic user-scope WinGet cleanup unelevated'
 Assert-Check (-not $script:calls[3].Unelevated -and $script:calls[3].Arguments -contains 'machine') 'Keep generic machine-scope WinGet cleanup elevated'
+Assert-Check ($script:calls[1].Timeout -eq 3600 -and $script:calls[3].Timeout -eq 3600) 'Allow slow WinGet uninstalls up to 60 minutes'
 
 $script:calls.Clear()
 $script:packageExit = $Script:DevConfigWingetNotFound
 Assert-Check (Invoke-DevConfigPackageCleanup -Ids 'Fixture.Package' -InnoUninstall $inno -CheckOnly) 'Report an already-removed package as complete'
 Assert-Check ($script:calls.Count -eq 2 -and @($script:calls | Where-Object { $_.File -ne 'winget.exe' -or $_.Arguments[0] -ne 'list' -or $_.Unelevated }).Count -eq 0) 'No-op checks neither uninstall nor launch limited-token tasks'
+Assert-Check (@($script:calls | Where-Object { $_.Timeout -ne 900 }).Count -eq 0) 'Keep the default limit for WinGet list checks'
 $script:packageExit = 0
 Assert-Check (-not (Invoke-DevConfigPackageCleanup -Ids 'Fixture.Package' -CheckOnly)) 'Report an installed package as needing cleanup'
 

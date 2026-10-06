@@ -542,6 +542,8 @@ function Invoke-DevConfigPackageCleanup {
     )
     $failures = @()
     $operation = if ($CheckOnly) { 'list' } else { 'uninstall' }
+    # Large MSI removals such as Azure CLI can take over 15 minutes on slower machines.
+    $timeoutSeconds = if ($CheckOnly) { 900 } else { 3600 }
     foreach ($id in $Ids) {
         foreach ($scope in @('user', 'machine')) {
             try {
@@ -554,7 +556,8 @@ function Invoke-DevConfigPackageCleanup {
                 }
                 $arguments += '--exact', '--scope', $scope, '--disable-interactivity', '--accept-source-agreements'
                 $result = Invoke-DevConfigCleanupCommand -FilePath 'winget.exe' -Arguments $arguments `
-                    -SuccessCodes @(0, $Script:DevConfigWingetNotFound) -Unelevated:($scope -eq 'user' -and -not $CheckOnly)
+                    -SuccessCodes @(0, $Script:DevConfigWingetNotFound) -TimeoutSeconds $timeoutSeconds `
+                    -Unelevated:($scope -eq 'user' -and -not $CheckOnly)
                 if ($CheckOnly -and $result.ExitCode -eq 0) {
                     return $false
                 }
