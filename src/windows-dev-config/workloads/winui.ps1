@@ -5,9 +5,8 @@
 
 .DESCRIPTION
   Workload definition read by dev-config.ps1. It follows the Microsoft Learn WinUI onboarding
-  (https://learn.microsoft.com/windows/apps/get-started/start-here) and installs what
-  Workloads\winui\configuration.winget does, without needing winget configure. The phase
-  files under steps\ do the work.
+  (https://learn.microsoft.com/windows/apps/get-started/start-here) without needing
+  winget configure. The phase files under steps\ do the work.
 #>
 
 [CmdletBinding()]
