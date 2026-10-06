@@ -44,6 +44,7 @@ function Invoke-RegistryTaskbarSearchPhase {
             ValueName   = 'IsDynamicSearchBoxEnabled'
             Value       = 0
             Description = 'Disable Show search highlights'
+            BestEffort  = $true
         }
         @{
             Name        = 'StartRecommendations'
