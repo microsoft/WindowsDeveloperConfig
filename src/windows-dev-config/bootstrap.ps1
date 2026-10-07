@@ -122,6 +122,39 @@ function Invoke-CalmOsBootstrap {
         }
     }
 
+    # Keep this helper identical to steps/_pwsh-bootstrap.ps1; bootstrap must work on its own.
+    function Get-DevConfigPwshExe {
+        if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7) {
+            $candidate = Join-Path $PSHOME 'pwsh.exe'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        }
+
+        foreach ($root in @($env:ProgramW6432, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+            if (-not $root) { continue }
+            $candidate = Join-Path $root 'PowerShell\7\pwsh.exe'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        }
+
+        foreach ($command in @(Get-Command 'pwsh.exe' -CommandType Application -All -ErrorAction SilentlyContinue)) {
+            # App execution aliases have no executable version; resolve their package below.
+            if ($command.Version -and $command.Version.Major -ge 7 -and
+                (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+                return $command.Source
+            }
+        }
+
+        if (Get-Command 'Get-AppxPackage' -ErrorAction SilentlyContinue) {
+            foreach ($package in @(Get-AppxPackage -Name Microsoft.PowerShell -ErrorAction Stop |
+                Sort-Object { [version]$_.Version } -Descending)) {
+                if (-not $package.InstallLocation -or ([version]$package.Version).Major -lt 7) { continue }
+                $candidate = Join-Path $package.InstallLocation 'pwsh.exe'
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+            }
+        }
+
+        return $null
+    }
+
     $repo = 'microsoft/WindowsDeveloperConfig'
     $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
     $Workload = $Workload.ToLowerInvariant()
@@ -152,8 +185,10 @@ function Invoke-CalmOsBootstrap {
     }
 
     $shell = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
-    $pwsh = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'PowerShell\7\pwsh.exe'
-    if ($Action -ne 'Uninstall' -and (Test-Path -LiteralPath $pwsh)) { $shell = $pwsh }
+    if ($Action -ne 'Uninstall') {
+        $pwsh = Get-DevConfigPwshExe
+        if ($pwsh) { $shell = $pwsh }
+    }
     $escapedShell = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($shell)
     $arguments = @('-NoProfile')
     if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }

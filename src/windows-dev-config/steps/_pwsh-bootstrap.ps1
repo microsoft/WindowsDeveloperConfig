@@ -6,11 +6,42 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-function Test-DevConfigHasPwsh {
-    [bool](Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue)
+function Get-DevConfigPwshExe {
+    if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7) {
+        $candidate = Join-Path $PSHOME 'pwsh.exe'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+
+    foreach ($root in @($env:ProgramW6432, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not $root) { continue }
+        $candidate = Join-Path $root 'PowerShell\7\pwsh.exe'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    }
+
+    foreach ($command in @(Get-Command 'pwsh.exe' -CommandType Application -All -ErrorAction SilentlyContinue)) {
+        # App execution aliases have no executable version; resolve their package below.
+        if ($command.Version -and $command.Version.Major -ge 7 -and
+            (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+            return $command.Source
+        }
+    }
+
+    if (Get-Command 'Get-AppxPackage' -ErrorAction SilentlyContinue) {
+        foreach ($package in @(Get-AppxPackage -Name Microsoft.PowerShell -ErrorAction Stop |
+            Sort-Object { [version]$_.Version } -Descending)) {
+            if (-not $package.InstallLocation -or ([version]$package.Version).Major -lt 7) { continue }
+            $candidate = Join-Path $package.InstallLocation 'pwsh.exe'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        }
+    }
+
+    return $null
 }
 
-# PATH is checked directly because WinGet read cmdlets are not used during bootstrap.
+function Test-DevConfigHasPwsh {
+    [bool](Get-DevConfigPwshExe)
+}
+
 function Install-DevConfigPwshBootstrap {
     for ($attempt = 1; $attempt -le 2; $attempt++) {
         try {
@@ -39,25 +70,27 @@ function Invoke-DevConfigEnsurePwsh {
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
     )
 
-    if ($PSVersionTable.PSEdition -eq 'Core') {
+    if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7) {
         return
     }
 
-    if (-not (Test-DevConfigHasPwsh)) {
+    $pwsh = Get-DevConfigPwshExe
+    if (-not $pwsh) {
         Write-Host ''
         Write-Host 'Installing PowerShell 7 first -- WinGet is more reliable on it than on Windows PowerShell.' -ForegroundColor Yellow
         Write-Host '(One-time. Takes about a minute.)' -ForegroundColor DarkGray
         Install-DevConfigPwshBootstrap
+        $pwsh = Get-DevConfigPwshExe
     }
 
-    if (-not (Test-DevConfigHasPwsh)) {
+    if (-not $pwsh) {
         Write-Host 'Could not install PowerShell 7 -- carrying on with Windows PowerShell.' -ForegroundColor Yellow
         return
     }
 
     Write-Host 'Switching this setup over to PowerShell 7...' -ForegroundColor DarkCyan
     $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
-    $proc = Start-Process -FilePath 'pwsh.exe' -ArgumentList $relaunchArgs -Wait -NoNewWindow -PassThru
+    $proc = Start-Process -FilePath $pwsh -ArgumentList $relaunchArgs -Wait -NoNewWindow -PassThru
 
     # The relaunch performs the setup work, so this Windows PowerShell process exits with its code.
     exit $proc.ExitCode

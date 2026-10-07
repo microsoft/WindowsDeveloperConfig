@@ -16,6 +16,10 @@ checks WinGet retry/fallback behavior with simulated package operations,
 without changing the machine; run it in both Windows PowerShell 5.1 and
 PowerShell 7.
 
+`src\tests\calm-os\pwsh-discovery-checks.ps1` checks MSI, MSIX, and portable
+PowerShell discovery and handoff without installing software. Run it in both
+Windows PowerShell 5.1 and PowerShell 7.
+
 ## File layout
 
 | File | What it is |

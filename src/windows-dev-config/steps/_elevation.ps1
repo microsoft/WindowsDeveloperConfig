@@ -128,8 +128,8 @@ try {
 }
 
 function Get-DevConfigShellExe {
-    # Prefer pwsh when it is on PATH; Windows PowerShell 5.1 is always available as fallback.
-    if (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue) { 'pwsh.exe' } else { 'powershell.exe' }
+    $pwsh = Get-DevConfigPwshExe
+    if ($pwsh) { $pwsh } else { 'powershell.exe' }
 }
 
 function Get-DevConfigTaskShellExe {
