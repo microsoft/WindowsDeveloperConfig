@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   This script is a thin CI/dev shim. The core artifact for the PHP flow is
-  `configuration.winget` in this directory — a winget DSC configuration that
+  `configuration.winget` in this directory - a winget DSC configuration that
   declaratively installs PHP via winget.
 
   The shim exists only to:

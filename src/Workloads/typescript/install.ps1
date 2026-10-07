@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   This script is a thin CI/dev shim. The core artifact for the TypeScript flow
-  is `configuration.winget` in this directory — a winget DSC configuration
+  is `configuration.winget` in this directory - a winget DSC configuration
   that declaratively installs Node.js LTS and, via a PSDscResources/Script
   resource, globally installs the TypeScript compiler.
 

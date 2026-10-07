@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   This script is a thin CI/dev shim. The core artifact for the WinForms flow
-  is `configuration.winget` in this directory — a winget DSC configuration
+  is `configuration.winget` in this directory - a winget DSC configuration
   that declaratively installs the .NET 10 SDK (which includes the Windows
   Desktop targeting pack used by `UseWindowsForms=true` projects).
 
