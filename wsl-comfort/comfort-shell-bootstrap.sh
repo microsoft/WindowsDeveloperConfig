@@ -657,7 +657,7 @@ fi
 command -v direnv >/dev/null 2>&1 && eval "$(direnv hook '"$CHOSEN_SHELL"')"
 command -v zoxide >/dev/null 2>&1 && eval "$(zoxide init '"$CHOSEN_SHELL"')"
 # Modern aliases
-command -v eza >/dev/null 2>&1 && alias ls="eza --icons" && alias ll="eza -la --icons --git" && alias lt="eza --tree"
+command -v eza >/dev/null 2>&1 && alias ls="eza --icons=auto" && alias ll="eza -la --icons --git" && alias lt="eza --tree"
 command -v bat >/dev/null 2>&1 && alias cat="bat"
 command -v rg >/dev/null 2>&1 && alias grep="rg"
 command -v fd >/dev/null 2>&1 && alias find="fd"

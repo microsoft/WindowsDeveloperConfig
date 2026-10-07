@@ -1,106 +1,34 @@
 <#
 .SYNOPSIS
-  Dark theme and Windows Terminal profile defaults.
+  Apply the WinAppCLI winget DSC configuration on Windows.
+
+.DESCRIPTION
+  This script is a thin CI/dev shim. The core artifact for the WinAppCLI flow
+  is `configuration.winget` in this directory - a dscv3 winget DSC config
+  that verifies the supported Windows version, enables Developer Mode, and
+  installs the .NET 10 SDK and Windows App Development CLI.
+
+  The shim applies the configuration with the shared retry helper, refreshes
+  PATH, verifies `dotnet` and `winapp`, and emits `INSTALL_OK: winappcli` for
+  the test harness.
 #>
+
+[CmdletBinding()]
+param()
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Script:DevConfigThemeKey = 'HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-$Script:DevConfigThemeSettings = @(
-    @{ Name = 'AppsTheme'; KeyPath = $Script:DevConfigThemeKey; ValueName = 'AppsUseLightTheme'; Value = 0; ResetValue = 1 }
-    @{ Name = 'SystemTheme'; KeyPath = $Script:DevConfigThemeKey; ValueName = 'SystemUsesLightTheme'; Value = 0; ResetValue = 1 }
-)
-
-function Test-DevConfigDarkThemeSet {
-    foreach ($setting in $Script:DevConfigThemeSettings) {
-        if (-not (Test-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value)) {
-            return $false
-        }
-    }
-    return $true
-}
-
-function Set-DevConfigDarkTheme {
-    foreach ($setting in $Script:DevConfigThemeSettings) {
-        Set-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value
-    }
-}
-
-function Test-DevConfigPs7DefaultProfile {
-    $path = Get-DevConfigTerminalSettingsPath
-    if (-not $path) {
-        # Missing settings still need configuration when Terminal is installed but has not launched.
-        return (-not (Get-DevConfigTerminalSettingsTarget))
-    }
-
-    $settings = Read-DevConfigTerminalSettings -Path $path
-    $current  = Get-DevConfigJsonValue -Object $settings -Path 'defaultProfile'
-    if (-not $current) {
-        return $false
-    }
-    if ($current -eq $Script:DevConfigPs7ProfileName) {
-        return $true
-    }
-
-    $ps7 = Find-DevConfigPs7Profile -Settings $settings
-    return [bool]($ps7 -and $current -eq (Get-DevConfigJsonValue -Object $ps7 -Path 'guid'))
-}
-
-function Set-DevConfigPs7DefaultProfile {
-    $path = Get-DevConfigTerminalSettingsTarget
-    if (-not $path) {
-        throw 'Windows Terminal is not installed, so its default profile cannot be set.'
-    }
-
-    $settings = Read-DevConfigTerminalSettings -Path $path
-    $ps7      = Find-DevConfigPs7Profile -Settings $settings
-
-    # The documented profile name works before Terminal has listed the PowerShell 7 profile.
-    $profileRef = if ($ps7) {
-        Get-DevConfigJsonValue -Object $ps7 -Path 'guid'
-    } else {
-        $Script:DevConfigPs7ProfileName
-    }
-
-    Set-DevConfigJsonProperty -Object $settings -Name 'defaultProfile' -Value $profileRef
-    Save-DevConfigTerminalSettings -Path $path -Settings $settings
-    Write-Host "Set the Windows Terminal default profile to '$profileRef'."
-}
-
-function Invoke-TerminalPhase {
-    if ($Script:DevConfigAction -eq 'Uninstall') {
-        $steps = @(
-            foreach ($setting in $Script:DevConfigThemeSettings) {
-                New-DevConfigRegistryStep -Setting $setting -Reset
-            }
-            New-DevConfigStep -Name 'TerminalReset' -Description 'Remove Terminal defaults and PowerShell, Copilot, and Ubuntu profiles' -BestEffort `
-                -Check { param($DistributionName) Reset-DevConfigTerminal -DistributionName $DistributionName -CheckOnly } `
-                -Apply { param($DistributionName) Reset-DevConfigTerminal -DistributionName $DistributionName } `
-                -ArgumentList @($Script:DevConfigWslDistributionName)
-        )
-        Invoke-DevConfigSteps -Steps $steps
-        return
-    }
-
-    # These user preferences are best-effort so later setup phases can continue.
-    $steps = @(
-        New-DevConfigStep -Name 'DarkTheme' -Description 'Force dark app/system theme' -BestEffort `
-            -Check { Test-DevConfigDarkThemeSet } `
-            -Apply { Set-DevConfigDarkTheme }
-        New-DevConfigStep -Name 'Ps7DefaultProfile' -Description 'Set PowerShell 7 as the default Windows Terminal profile' -BestEffort `
-            -Check { Test-DevConfigPs7DefaultProfile } `
-            -Apply { Set-DevConfigPs7DefaultProfile }
-    )
-
-    Invoke-DevConfigSteps -Steps $steps
-}
+& (Join-Path $PSScriptRoot '..\_common\apply-configuration.ps1') `
+    -Id              'winappcli' `
+    -ConfigFile      (Join-Path $PSScriptRoot 'configuration.winget') `
+    -RequireCommands @('dotnet', 'winapp')
 
 # SIG # Begin signature block
 # MIInKAYJKoZIhvcNAQcCoIInGTCCJxUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBZhUkjewpLCplm
-# vGoEeNmxZlVNILWsKKrmvmaAJ4G5k6CCDLowggX1MIID3aADAgECAhMzAAACHU0Z
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBX3Q9h7H98HLUl
+# t0mmxJNwahfWg3JXftdIT/4FVKt+5qCCDLowggX1MIID3aADAgECAhMzAAACHU0Z
 # yE7XD1dIAAAAAAIdMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQzWhcNMjcwNDE1MTg1
@@ -172,61 +100,61 @@ function Invoke-TerminalPhase {
 # MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jv
 # c29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIdTRnITtcPV0gAAAAAAh0w
 # DQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQwLwYJ
-# KoZIhvcNAQkEMSIEIC3yCEQlMmSt7LEDPs6dfzEhWffXA9lJeiQqWgFNnhM9MEIG
+# KoZIhvcNAQkEMSIEIK2kGBafFVsZroajzO2uv1hirbSQJVp6FCY5AyKH0sl6MEIG
 # CisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBvAGYAdKEagBhodHRwOi8v
-# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAnHisnUZZCk3YvUey
-# jcvxA16oKv7FMbITdDujtgjioNHxv+JT/L4l2/3wR5EI+ho2SEWF0OCDxg0Wg7+y
-# n8v205xBLirYrDMo/Z0ArjrQQtYU4mNAOTL/RJaapEe/9k3MuGvjA9XXWfHwnNk+
-# kgpFb4kw1ccvl2er6ouFY8y7LvDdP8tbi3gH7QbWvHyMzuJ/B4VvwsFjAAvII0/w
-# mhz8mJQTnfMLUCQV0q7Jf/MzLyIajHfYt1NsRT1Sx6ZfkWaNL89eLoOXdUjQZv8w
-# QYEtWUdi+o1IE8t9i4dpfrjmsTRexgp1u3CC3zFeNI75YCJbGmErPP6uS+YK7Arq
-# Ned2PKGCF5QwgheQBgorBgEEAYI3AwMBMYIXgDCCF3wGCSqGSIb3DQEHAqCCF20w
+# d3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAEggEAL5DHYVGFgX1cyHkj
+# NCWBl+rBI1aaMGsy4eo6BrveR1R5W3kiJCrd8sR05JQy3RMUxr2g98R+mh9AXgBk
+# CHUQUaouetr8URoszV6xAqrL+y5c4Djk3DPdHdB5Maiv+JDvcse/GzUIPm+Hrnhm
+# g+PwF5z8WwcvYy5lRQ2D71KCeGUoqk+YRu0mnR2AdHbkCXh9S1jbPEPIUMD+hDcZ
+# wJezpcRRjxuZVAc38A1SDevwdcAwPoMu5ZsntPOC45rJbZ1meDLnq9Gy9yiC+y4v
+# GKVpkoqPiBO8XFxmBTBaYvDBFSBrMPeiEu1B6vHjmN7nsLix+8EBn/8uqHrQnNRy
+# 6PEAwKGCF5QwgheQBgorBgEEAYI3AwMBMYIXgDCCF3wGCSqGSIb3DQEHAqCCF20w
 # ghdpAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG9w0BCRABBKCCAUEEggE9
-# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCAb1QGewcwu4FQt
-# YtLbwfr2cppmCOkd7fGRBUSLkqkaYAIGaqn6NFK8GBMyMDI2MTAwNzAwMjgxMy43
-# NzVaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
+# MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQCAQUABCAfZaR1xHGJxyHO
+# sPLPiYBxA58fPB2s8QHXQ33Xbx0UFgIGaqouWqlfGBMyMDI2MTAwNzAwMjgxNC43
+# NDRaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
 # Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
 # cmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScw
-# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046N0YwMC0wNUUwLUQ5NDcxJTAjBgNVBAMT
+# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046ODkwMC0wNUUwLUQ5NDcxJTAjBgNVBAMT
 # HE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZpY2WgghHqMIIHIDCCBQigAwIBAgIT
-# MwAAAh6jrKRuOW98SQABAAACHjANBgkqhkiG9w0BAQsFADB8MQswCQYDVQQGEwJV
+# MwAAAiJB0vaq/8i1/wABAAACIjANBgkqhkiG9w0BAQsFADB8MQswCQYDVQQGEwJV
 # UzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UE
 # ChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGlt
-# ZS1TdGFtcCBQQ0EgMjAxMDAeFw0yNjAyMTkxOTM5NDlaFw0yNzA1MTcxOTM5NDla
+# ZS1TdGFtcCBQQ0EgMjAxMDAeFw0yNjAyMTkxOTM5NTZaFw0yNzA1MTcxOTM5NTZa
 # MIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMH
 # UmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSUwIwYDVQQL
 # ExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScwJQYDVQQLEx5uU2hpZWxk
-# IFRTUyBFU046N0YwMC0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1l
-# LVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCl
-# 0TjtbDwsR7Fe8ac6ol5s1zhtTqd2AWpchQhLp9G5mmSM23N5fyQGCQ1D06rOA3Pg
-# XKF+76vXvOCs2VsLv1owj4mHEyEqiq8GJ5yC+/QNYRpZPA8e7OgekzDO6S/4vy/j
-# TMYbp3rhuFiKKCzTWOQtdFcF+D0k369I7pm/E07SyNMGkuNd5lj5SJ91UqFuZfjM
-# B6cQ2wh77mtiRUVdj53yjdNqj+GQl+Yaz29Bjrzn7U1ln+JpLlnb0xdGmZoIPKZb
-# wBVcWtyL4uyhML7SSTmiOfWXU+g+yNl0CdoLGL8LtWHEi8FsuTPeSdSqmeMrvLaE
-# mibTVTS4vQQY8NPnb6uI5y6iNV9vBFcm8LU/lDTjGTqPa7UBT4gdf5Jm3wYrfCFZ
-# 4P/j5MoqT0JONca50jt4TGI90SihXaDEYqk23S0IJZ3UkUpukDRTjK713BIykffx
-# yBqMeQqfO0zvWfUx7BrmUpugQcw99+DxLl2gf+uQEpRmnlbrVJ9dvW9ds4fqEPN2
-# jG0QwF1PBSglNcV1SpqZKitQgBGSwu/82AKztoCHwYRHRNwzwTVe/1KNTvmqAd4U
-# ges4ywOH02haagT8wYY8OdWdjKn3k052w+kmc0UC0F+iVXTGZIMxvo9iBZQoXehz
-# RtWJ/VOtKvCyS3csKzN7rStWJwjSWz6dtOf0l+ytLQIDAQABo4IBSTCCAUUwHQYD
-# VR0OBBYEFOYKFprqBB0JZmJcFC4cPPmeF4JkMB8GA1UdIwQYMBaAFJ+nFV0AXmJd
+# IFRTUyBFU046ODkwMC0wNUUwLUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1l
+# LVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC1
+# ueKJukIuUsAAJo/AY5DZRqH7bhgv7CWGNlEdbRGoITrdE6Wsn57NaNu1BTdjBbFc
+# v7Rfixte0x+HRvXSqsD+WeSX/6/y9wE0Mz+xRPTGIY20K7aQDa68OyzVyUeUCypy
+# ZC/gW/3ytO/ZOnU9H2ri77kJP8ABrqyy1UxX/OseEgvHsj8yikWT0ARtrjWbXMHF
+# zSOo5hQcfUmMXKqWWz6+N0+UynhGy1n+doW4WZgpH8Y5W7hpSokWj1M/Lu4wi3o6
+# Dz9vVWukcgUFGjLAl4YZpOhah7HuiC/alXImMQf8C3A8q/6/1hFoeIZB4UGkywxB
+# /OSTOSsL6+39pDqzM7CgOpf4V799kN94yM9uXJI5T/SiA5MdIZIhEW0+bh85RqDh
+# 5YW3/oav54RPxw5OPlH64QV6KJkl0FIElMVoLNo8UWRQcMD179x7WASjC6LsaNZ7
+# yK0qcESIsL1wiQmdfQBxcqrFCpIQfnmQFkOp9IyXUWqza8tmpz8E6aXg9b1eiAT3
+# PVTgrOlPi/hYZCfPxX/6jGtyPjy1CiwOmJamohmSU//COAenfRT2G2HMRUpCX1zs
+# +AmDmdQM1XRab4YSALLAlDzGCsgI77nnuJjoXAliJmv7NfrvWAcA5KqCUOWQ6kSP
+# t5r28MfKXWJJpSXtFeS/MkDzJy/iJRVyHcFy/B+MtwIDAQABo4IBSTCCAUUwHQYD
+# VR0OBBYEFFkHwGoDJ5ZbEEiu8KstiusqaozQMB8GA1UdIwQYMBaAFJ+nFV0AXmJd
 # g/Tl0mWnG1M1GelyMF8GA1UdHwRYMFYwVKBSoFCGTmh0dHA6Ly93d3cubWljcm9z
 # b2Z0LmNvbS9wa2lvcHMvY3JsL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0El
 # MjAyMDEwKDEpLmNybDBsBggrBgEFBQcBAQRgMF4wXAYIKwYBBQUHMAKGUGh0dHA6
 # Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvY2VydHMvTWljcm9zb2Z0JTIwVGlt
 # ZS1TdGFtcCUyMFBDQSUyMDIwMTAoMSkuY3J0MAwGA1UdEwEB/wQCMAAwFgYDVR0l
 # AQH/BAwwCgYIKwYBBQUHAwgwDgYDVR0PAQH/BAQDAgeAMA0GCSqGSIb3DQEBCwUA
-# A4ICAQCkoZB5NnJVFb5wKejRonk518a2TBNYpKcBMtfL6BS0ARaABOMGYLlPNuhI
-# 1HwmelP9hX3oq3TaEm/cDkkzNQAzDedPgoRI2R7+8poNSWvHXEAs7SZODm9x7Kql
-# BkNZM9ex4XY1yNmVOAmWDjRr7jKjaiQbntf7EC4GNikxGGaVWOjfYt3Q9X0r/Ks8
-# KBlbzDR9zjA/TCctR4co1WpU1ZRLFrB9bl8dRxsbnyT2qQ41E7dT12R30eIGUziE
-# s5GN+26V/ovXOi20dJiM13hYWvy1NNJAhkKOlLB1ONund6ffhPdUcHWsu8V+lR0a
-# akMV64HqDbLumZrCNwUofVx3xMk8F4tCYJtQxLTywc30sZAD1S2sC1959x6KixA+
-# p41FLUl8g64oHy3bfYnH5xd4JOBgQoaqndGjcctxr+8EknjhKyrgAzrTcKLJbUez
-# goye8brCLJ+y6PAoEjpXRkSYAU8wfQ3YWRck6ALwoV7Uin8+rpGQSbXhF6c1dTFa
-# kXmChClud4IADY/t6JRkJ+06FzL+jDd8KLV8Qj77JfiuTiPIG5G/xlnGoZFcX+yy
-# BtDvzZE48d+Y+HYUd/cvhH1FKl7AH+5AyotqJSFmvM/BuYRx2B20asVXilV2k2Jb
-# NO3LGCz3Q+dpElzwsfJrka1N/getma7fWpowsNvoIaEQvjad8TCCB3EwggVZoAMC
+# A4ICAQBiAM+nqrpwG29txSXv42o+CsTe2C4boaRfFju9JaWkLTHwq7pknNONL3n+
+# UG3x/B083EKXiFYrAmul7BTHCGXU63/xRsZ2wj3ZmR0A4d9nf9saCJVm4juPVFBa
+# i/oktOOYH2j+1+zM70woN5ongB/pvy7X8AfY6JB4XPvb80Qz7fY5eddbnwjzg1sZ
+# hUPFbbcweWeACINrzqFK62mMeXKmhtufMraoogJeJXfWY3x4/pbubgENT3+pXT65
+# 203CPF9kfdKE7GKAIRYy3xkBTDvFd8dufjOpCn38nK6qMlVtnBjDhWQG0PM3E/ox
+# Bs5UBrI6pBYkmIHtbjifDquHT+ThaVV7xHc6InoSc3aNzX49JHUgQmuvDdMjLkbY
+# XeA0/1q5IxSg2U+ycZBOvAi3udZPKhA5VzODjf/ucu/vFtXrYcRkmGKN3jujaK3/
+# yMZi2Ju5NEL3ISWorwp7RjeZg+JMIK0fosuVj+YCm5r64LH/D9QJDAj+XfZaNeFd
+# v90K5A0QRRGP/poB9yTIVjEXj/uJzp8L4Dd44sAquqDOiHdkLgxfK8nPqpCSWPZ9
+# G+RCPm85o9cAfxENtrSuOwcpyKzxsRCYCL+PK4+98orit9EVJ/LLoCeG+jLlj0Ka
+# D4Qy6sZe4rWMr1brQLosTBZNwFnXxNjInCWBd0i7is1yTS/4qTCCB3EwggVZoAMC
 # AQICEzMAAAAVxedrngKbSZkAAAAAABUwDQYJKoZIhvcNAQELBQAwgYgxCzAJBgNV
 # BAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4w
 # HAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xMjAwBgNVBAMTKU1pY3Jvc29m
@@ -270,40 +198,40 @@ function Invoke-TerminalPhase {
 # yzELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1Jl
 # ZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjElMCMGA1UECxMc
 # TWljcm9zb2Z0IEFtZXJpY2EgT3BlcmF0aW9uczEnMCUGA1UECxMeblNoaWVsZCBU
-# U1MgRVNOOjdGMDAtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1T
-# dGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQCD/QNkKDIW4VIF7j3oi2qbrR0a
-# /6CBgzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
+# U1MgRVNOOjg5MDAtMDVFMC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1T
+# dGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQC7ycXVZx3bsDpJkr7Vucgpksoz
+# uKCBgzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
 # DgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
 # JjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMA0GCSqGSIb3
-# DQEBCwUAAgUA7m98FDAiGA8yMDI2MTAwNjEzNTQyOFoYDzIwMjYxMDA3MTM1NDI4
-# WjB0MDoGCisGAQQBhFkKBAExLDAqMAoCBQDub3wUAgEAMAcCAQACAhNTMAcCAQAC
-# AhNkMAoCBQDucM2UAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKg
-# CjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAJFNfQzo
-# 7iVoKkxkQn+xLdtETDlApabs/M7JehSK5f9xujxqnmFkILV5TCnkc18427eEBOLh
-# LfIdqcx7hsZnOM8FFi+IQr8JqMhuwAx8cWGEucKBQ9ovz6Ir634lcnqZciUMNCWd
-# uW+EBsBxaREXwylmvj0fCbOprBCC/6MN0AivEKcCi8s8Idjc8FveC/8IFIkpFEXi
-# E+2KN2UnV7lWl/27t+M3B05KaQmjqtg5ymttX81l7d+WxYOFldt5D+voBtVlSFv+
-# LYM3QHJTC+f7ifjoxIOVXL/ujSdD+sKcNRbmHPX8VRdN1/S71xA00DSRyN7Y+rFp
-# uzzwZFPNOLuz538xggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UE
+# DQEBCwUAAgUA7m+wTDAiGA8yMDI2MTAwNjE3MzcxNloYDzIwMjYxMDA3MTczNzE2
+# WjB0MDoGCisGAQQBhFkKBAExLDAqMAoCBQDub7BMAgEAMAcCAQACAiPkMAcCAQAC
+# AhW0MAoCBQDucQHMAgEAMDYGCisGAQQBhFkKBAIxKDAmMAwGCisGAQQBhFkKAwKg
+# CjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcNAQELBQADggEBAKhFlheA
+# K8lTSifzjZt0bkfGx0QNCUZ/dum8wi1EBZo9nKecf6XJ7MaVNhLMvzGfO+r3yZ0V
+# REo+OFmwUWVcpsWKeYuTpb1wdYsO7z4spM/oQTMgr5I0cGrF5xaV0urTaaWwCsaf
+# gx2MG4OxZYOWZfP8EK32awdghyvtZF6/YsPG+bv6Vtn9548Yl8ycpyZNdVyHsd2J
+# f4loOZQ8hHIRNeZYo+ytvaX8mkQnFVNR4QDoXvve6YeDW/buZmCA4xTD4/MdAkME
+# sve0Y/FjEVF+skXcpK6mNfl6pfLu4HmYEvNrTepmv939AGb0Uu10Oe8EpWkk6bCw
+# DypnXlJ5YYvI+WcxggQNMIIECQIBATCBkzB8MQswCQYDVQQGEwJVUzETMBEGA1UE
 # CBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9z
 # b2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3NvZnQgVGltZS1TdGFtcCBQ
-# Q0EgMjAxMAITMwAAAh6jrKRuOW98SQABAAACHjANBglghkgBZQMEAgEFAKCCAUow
-# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCAyjVPT
-# LzPfqL8vTdNDkTZJA6eo+DxxBRbdsgyJAJnRHzCB+gYLKoZIhvcNAQkQAi8xgeow
-# gecwgeQwgb0EIC+BXWrz9geMgM8Bvn8bqxHjhHXJ29EBizITIw0B9vOCMIGYMIGA
+# Q0EgMjAxMAITMwAAAiJB0vaq/8i1/wABAAACIjANBglghkgBZQMEAgEFAKCCAUow
+# GgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqGSIb3DQEJBDEiBCAxxLxw
+# 182owA2pUyCxWOMfQcfQ9LSBXK0xpaPEeikvRTCB+gYLKoZIhvcNAQkQAi8xgeow
+# gecwgeQwgb0EIAVgXQEKBOfGgjNskmDOmbcEIOnHGNwA+QcRufDR5AkTMIGYMIGA
 # pH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcT
 # B1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UE
-# AxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIeo6ykbjlvfEkA
-# AQAAAh4wIgQgnB9zYmBzYOY1aFwQK0FKwMxHokuA9TBRCkz/OhBDvkowDQYJKoZI
-# hvcNAQELBQAEggIAa0KQstRML5uGFaJF7/ei4vDcMy7UmH0YJF8l869xqMplG+0J
-# NsGoOtP4+U5yw12Xtb6lBdxcbCxWPVLONBZBTZa1tFhIDbhPiSuQtMZlbkHaR7M7
-# UOBsLz/4k3DM2dIbVfGgTWwAy3/F3A3G5S1cO5O3f8M/oLcBMQcAj1uhQjuZOb9v
-# d7Uhf5KJTqk7Sj5PAghnVyuxnFUiMYYO+hvaVhF/aazfAH8/ZD65N6WDeKYBpLLI
-# t8Wryfk92t1IV2+Ltgv5mIW/t5/+uqA3vpZTD1PFKrFPMGfJi9GdgkFE2FVTIBy/
-# h+WupIcqTGi+BDhh3C4X3ZAM8orPWAzCZWzceZGmh0MEfLLLjP+WCWRhAc+ogxjv
-# qz+2kieUYNK4L7SNZuXA00DWRWwTKH4PgdGW/lG7/r+B3CbnIIPYYZEYk6kzDwh5
-# d0m6CfUwEKrcpTT27NXRbHnzhBVyDNaScF1mc7IIHIFmv/GNrPti7qyh5KF2U3gO
-# scwn/I8SnLKg/vMGejRIEEs+E6ULhlkO8ODO8dDRUtLhLG0PkEM7AK+W/lRvOHVT
-# tBxReKVqtvsQ+lQd5ECnZWnupklTVXUFCxbXny/tnwwPVCATdLiKTJVhHze95nQZ
-# y3myTcAQh1/10stiZp5UdbCL55bNEC/DFLJAl6SfYz5WYQWgOvM6pB5GL9c=
+# AxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTACEzMAAAIiQdL2qv/Itf8A
+# AQAAAiIwIgQgM97+HL2PrC0RsQ3+mziSEz4w/M8OxHz2I0gGesEjgdkwDQYJKoZI
+# hvcNAQELBQAEggIAZmf32Ln9LZcQleZya7pPKR3PLBOkC8uKlpuhMRfDE/Sw6i3b
+# 6QT4tjUwbs0BeMQpm675YU//GEEj6ETBXfZcGz0owrL7JVw/HHKgOrhjFH5vjEn9
+# aEVTFRe5AekH5wiJ94MgP8irEnDN3U8czYJunrcFVdVBdioYZRoVS0uCarIFmnf5
+# ddwDjxJm/gPEMMHSS/2Llij7poRQ5H0xwAJZZXHh6amWejWVdhvaJHZPcowHz3jD
+# QdgJpG9ZsbmDxVFjdzM9nJ8Ti2ATKEmn65fZiV0xe2ti63tZGqBq5HTxy7XO9if/
+# xe1gLd+9SA/h2PJlcnylQTXoJ56uXQL9XNLELxBNm6B5wendRUyW3p3zt0XWfBjc
+# oZiCFwy2EFGmt+86c0qK9jnwsfO4vCjd/q6vs9E5ATY5OvU5n8Fz5Ms5AFFTSLOb
+# Z/1L7tnkeN5dio/VqGIKryNhUqf0Jn+B704uwIoC1zRBFGRKxSSX00I60JebGTxn
+# Vo080HAYC5IgM9FvKpzLn2F8SvjjLXjFhMAXBxVgfCF25gF+tPUaLtdSFMPpxHN8
+# /gZNITi0AIDF9z6OCLyEouLRzYy2m/thdbYf3frjXP0T8UPtrBBzm1oNazpYnn78
+# lPpu3nrjojuEeRocJU4MFuaeNy4YEDPh/62ltJ4NMxCmCrLD1gaLjwyyyjY=
 # SIG # End signature block

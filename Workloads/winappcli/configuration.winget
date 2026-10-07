@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+#
+#     winget configure --file Workloads/winappcli/configuration.winget `
+#         --accept-configuration-agreements `
+#         --disable-interactivity
+#
+$schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
+metadata:
+  winget:
+    processor: dscv3
+resources:
+  - type: Microsoft.DSC.Transitional/RunCommandOnSet
+    name: OsVersion
+    properties:
+      executable: powershell.exe
+      arguments:
+        "0": -NoProfile
+        "1": -NoLogo
+        "2": -Command
+        "3": >-
+          $minimum = [version]'10.0.17763';
+          $current = [Environment]::OSVersion.Version;
+          if ($current -lt $minimum) {
+            throw "Windows $minimum or later is required. Current version: $current."
+          }
+        treatAsArray: true
+    metadata:
+      description: Verify min OS version (Windows 10 1809+)
+
+  - type: Microsoft.DSC.Transitional/RunCommandOnSet
+    name: DeveloperMode
+    properties:
+      executable: powershell.exe
+      arguments:
+        "0": -NoProfile
+        "1": -NoLogo
+        "2": -Command
+        "3": >-
+          $path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock';
+          if (-not (Test-Path $path)) {
+            New-Item -Path $path -Force | Out-Null
+          };
+          if ((Get-ItemPropertyValue -Path $path -Name AllowDevelopmentWithoutDevLicense -ErrorAction SilentlyContinue) -ne 1) {
+            New-ItemProperty -Path $path -Name AllowDevelopmentWithoutDevLicense -PropertyType DWord -Value 1 -Force | Out-Null
+          }
+        treatAsArray: true
+    metadata:
+      description: Enable Developer Mode
+      winget:
+        securityContext: elevated
+
+  - type: Microsoft.WinGet/Package
+    name: DotNetSdk
+    properties:
+      id: Microsoft.DotNet.SDK.10
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install .NET SDK 10
+      winget:
+        securityContext: elevated
+
+  - type: Microsoft.WinGet/Package
+    name: WinAppCLI
+    properties:
+      id: Microsoft.WinAppCli
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install Windows App Development CLI
+      winget:
+        securityContext: elevated
