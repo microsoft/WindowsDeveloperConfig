@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Go: Developer Mode and the Go toolchain.
+  Go: the Go toolchain.
 
 .DESCRIPTION
   Workload definition read by dev-config.ps1. It follows the same shape as the WinUI
@@ -27,12 +27,6 @@ Set-StrictMode -Version Latest
             File     = 'prerequisites.ps1'
             Function = 'Invoke-PrerequisitesPhase'
             Title    = 'Getting ready'
-        }
-        @{
-            File     = 'registry-system.ps1'
-            Function = 'Invoke-RegistrySystemPhase'
-            Title    = 'Developer Mode'
-            Steps    = @('DeveloperMode')
         }
         @{
             File       = 'packages.ps1'
