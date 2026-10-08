@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-  Rust: Developer Mode, Rustup, Visual Studio Community's C++ desktop workload (for the
-  msvc toolchain's linker), and the stable Rust toolchain.
+  Rust: Rustup, Visual Studio Community's C++ desktop workload (for the msvc toolchain's linker),
+  and the stable Rust toolchain.
 
 .DESCRIPTION
   Workload definition read by dev-config.ps1. It follows the same shape as the WinUI workload:
@@ -31,12 +31,6 @@ Set-StrictMode -Version Latest
             File     = 'prerequisites.ps1'
             Function = 'Invoke-PrerequisitesPhase'
             Title    = 'Getting ready'
-        }
-        @{
-            File     = 'registry-system.ps1'
-            Function = 'Invoke-RegistrySystemPhase'
-            Title    = 'Developer Mode'
-            Steps    = @('DeveloperMode')
         }
         @{
             File       = 'packages.ps1'
