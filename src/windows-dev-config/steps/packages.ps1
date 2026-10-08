@@ -152,6 +152,11 @@ function Get-DevConfigPackageCatalog {
             UninstallOrder = 10
         }
         @{
+            Name           = 'Go'
+            Id             = 'GoLang.Go'
+            UninstallOrder = 17
+        }
+        @{
             Name           = 'OhMyPosh'
             Id             = 'JanDeDobbeleer.OhMyPosh'
             UninstallOrder = 8
@@ -165,6 +170,11 @@ function Get-DevConfigPackageCatalog {
             Name           = 'winappCli'
             Id             = 'Microsoft.WinAppCli'
             UninstallOrder = 15
+        }
+        @{
+            Name           = 'Rustup'
+            Id             = 'Rustlang.Rustup'
+            UninstallOrder = 19
         }
         @{
             Name           = 'PowerToys'
