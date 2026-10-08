@@ -156,10 +156,15 @@ flows:
     tags: [dotnet, csharp, winapp, winappcli, winui, windows, desktop]
     icon: 🪟
     onboardingUrl: https://learn.microsoft.com/windows/apps/dev-tools/winapp-cli/
+    # PowerShell-native flow: Workloads/winappcli/setup.ps1 runs the Windows Dev
+    # Config engine (windows-dev-config/workloads/winappcli.ps1). There is no
+    # configuration.winget, so the `configuration` key is omitted (same shape
+    # as winui). The engine entry point needs a signed release cycle and
+    # elevation, so it can't run unattended in the automated CI matrix.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/winappcli/install.ps1
-      configuration: Workloads/winappcli/configuration.winget
+      install: Workloads/winappcli/setup.ps1
       build: ""
       run: pwsh -NoProfile -File src/tests/winappcli/probe.ps1
       expected: src/tests/winappcli/expected.txt
