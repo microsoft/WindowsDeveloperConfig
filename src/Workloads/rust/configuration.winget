@@ -46,6 +46,9 @@ resources:
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
           $bootstrapper = Join-Path $env:TEMP 'vs_BuildTools.exe';
           Invoke-WebRequest -Uri 'https://aka.ms/vs/17/release/vs_BuildTools.exe' -OutFile $bootstrapper -UseBasicParsing;
+          $sig = Get-AuthenticodeSignature -LiteralPath $bootstrapper;
+          if ($sig.Status -ne 'Valid') { Remove-Item -LiteralPath $bootstrapper -Force -ErrorAction SilentlyContinue; throw "vs_BuildTools.exe failed Authenticode verification (status: $($sig.Status))" };
+          if ($sig.SignerCertificate.Subject -notlike '*O=Microsoft Corporation*') { Remove-Item -LiteralPath $bootstrapper -Force -ErrorAction SilentlyContinue; throw "vs_BuildTools.exe is not signed by Microsoft (subject: $($sig.SignerCertificate.Subject))" };
           $proc = Start-Process -FilePath $bootstrapper -ArgumentList @('--quiet','--wait','--norestart','--nocache','--add','Microsoft.VisualStudio.Workload.VCTools','--includeRecommended') -Wait -PassThru;
           if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { throw "vs_BuildTools.exe exited with code $($proc.ExitCode)" }
         treatAsArray: true
