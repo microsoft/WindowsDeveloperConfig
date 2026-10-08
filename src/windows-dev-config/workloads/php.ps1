@@ -1,10 +1,12 @@
 <#
 .SYNOPSIS
-  PHP: Developer Mode and the PHP runtime/CLI.
+  PHP: the PHP runtime/CLI.
 
 .DESCRIPTION
   Workload definition read by dev-config.ps1. It follows the same shape as the WinUI
-  workload, trimmed to the PHP runtime only. The phase files under steps\ do the work.
+  workload, trimmed to the PHP runtime only. PHP has no app-packaging/sideloading
+  story, so the Developer Mode phase is skipped. The phase files under steps\ do
+  the work.
 #>
 
 [CmdletBinding()]
@@ -27,12 +29,6 @@ Set-StrictMode -Version Latest
             File     = 'prerequisites.ps1'
             Function = 'Invoke-PrerequisitesPhase'
             Title    = 'Getting ready'
-        }
-        @{
-            File     = 'registry-system.ps1'
-            Function = 'Invoke-RegistrySystemPhase'
-            Title    = 'Developer Mode'
-            Steps    = @('DeveloperMode')
         }
         @{
             File       = 'packages.ps1'

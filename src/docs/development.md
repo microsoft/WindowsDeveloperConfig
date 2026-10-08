@@ -69,7 +69,7 @@ Command Palette extension.
 | Flow              | CI status     | Installs                                                                                |
 | ----------------- | ------------- | --------------------------------------------------------------------------------------- |
 | TypeScript        | ✅ automated   | `OpenJS.NodeJS.LTS` + `npm install -g typescript`                                       |
-| PHP               | 🙋 manual     | PowerShell-native one-liner: Developer Mode, PowerShell 7, `PHP.PHP.8.5` ([`workloads/php.ps1`](../windows-dev-config/workloads/php.ps1)) |
+| PHP               | 🙋 manual     | PowerShell-native one-liner: PowerShell 7, `PHP.PHP.8.5` ([`workloads/php.ps1`](../windows-dev-config/workloads/php.ps1)) |
 | .NET              | ✅ automated   | `Microsoft.DotNet.SDK.10`                                                               |
 | Go                | ✅ automated   | `GoLang.Go` (rolling — winget publishes Go unversioned)                                 |
 | Java              | ✅ automated   | `Microsoft.OpenJDK.25`                                                                  |
