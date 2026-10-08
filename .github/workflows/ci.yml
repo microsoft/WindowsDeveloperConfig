@@ -8,15 +8,14 @@ name: CI
 # Flows are declared in /manifest.yml. Adding a language = one entry there +
 # an install script + a hello-world under tests/. No edits to this file.
 
+# Automated triggers (push/pull_request/schedule) are disabled while the repo
+# migrates workloads from the winget-configure/DSC model to a PowerShell-native
+# engine (windows-dev-config/dev-config.ps1 + Workloads/<name>/setup.ps1). The
+# new engine-based flows (winui, dotnet, winforms, winappcli) can't run
+# unattended in this matrix yet — they need a signed release cycle + elevation.
+# workflow_dispatch is kept so the workflow can still be run manually on demand.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-  schedule:
-    # Nightly at 07:00 UTC, catches upstream winget/apt breakage with no commits.
-    - cron: '0 7 * * *'
 
 permissions:
   contents: read
