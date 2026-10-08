@@ -103,9 +103,9 @@ $shells = @(Get-TestPowerShellHosts)
 $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
 
 $pipeline = Get-Content -LiteralPath (Join-Path $repositoryRoot '.pipelines\OneBranch.SignAndPackage.yml') -Raw
-if ($pipeline -notmatch 'files_to_sign:\s*src/\*\*/\*\.ps1' -or
+if ($pipeline -notmatch 'files_to_sign:\s*''src/\*\*/\*\.ps1;src/\*\*/\*\.psd1''' -or
     $pipeline -notmatch 'src/Workloads/\*\*') {
-    throw 'The release pipeline no longer signs src/**/*.ps1 and packages src/Workloads/**.'
+    throw 'The release pipeline must sign PowerShell scripts and data files and package src/Workloads/**.'
 }
 
 foreach ($shell in $shells) {
@@ -155,9 +155,11 @@ if ($missingReleaseFlows.Count -gt 0) {
     Write-Host "ALL_SIGNED_RELEASE_PENDING: sign cycle must publish $($missingReleaseFlows -join ', ')"
 } else {
     $signedScope = @(
-        Get-ChildItem -LiteralPath (Join-Path $releaseRoot '_common') -File -Filter '*.ps1'
+        Get-ChildItem -LiteralPath (Join-Path $releaseRoot '_common') -File |
+            Where-Object { $_.Extension -in @('.ps1', '.psd1') }
         foreach ($flow in $flows) {
-            Get-ChildItem -LiteralPath (Join-Path $releaseRoot $flow) -File -Filter '*.ps1'
+            Get-ChildItem -LiteralPath (Join-Path $releaseRoot $flow) -File |
+                Where-Object { $_.Extension -in @('.ps1', '.psd1') }
         }
     )
     foreach ($script in $signedScope) {

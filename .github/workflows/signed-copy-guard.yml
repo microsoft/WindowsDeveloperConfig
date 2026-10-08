@@ -119,7 +119,7 @@ jobs:
               exit 0
           }
 
-          $header = "❌ The following files were edited in this PR but do not match ``src/`` (modulo the Authenticode signature block on ``.ps1`` files):"
+          $header = "❌ The following files were edited in this PR but do not match ``src/`` (modulo the Authenticode signature block on ``.ps1`` and ``.psd1`` files):"
           $lines = @($header, "")
           foreach ($o in $offenders) {
               switch ($o.status) {

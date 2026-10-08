@@ -20,8 +20,57 @@ foreach ($entry in $catalog.Components.GetEnumerator()) {
 . (Join-Path $PSScriptRoot '..\..\Workloads\_common\content-hashes.ps1')
 $workloadsRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\Workloads')).Path
 Assert-DevConfigWorkloadContent -WorkloadsRoot $workloadsRoot
+$pipeline = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\..\.pipelines\OneBranch.SignAndPackage.yml') -Raw
+Assert-True ($pipeline -match 'files_to_sign:\s*''src/\*\*/\*\.ps1;src/\*\*/\*\.psd1''') 'Release signing should include PowerShell data files'
+& {
+    . (Join-Path $PSScriptRoot '..\..\windows-dev-config\steps\_security.ps1')
+    $fixture = Join-Path $env:TEMP "devconfig-data-signing-$([guid]::NewGuid().ToString('N'))"
+    try {
+        New-Item -ItemType Directory -Path $fixture | Out-Null
+        $dataPath = Join-Path $fixture 'catalog.psd1'
+        Set-Content -LiteralPath $dataPath -Value '@{ Value = 1 }' -Encoding UTF8
+        Assert-ThrowsLike {
+            Assert-DevConfigMicrosoftSigned -Directory $fixture
+        } '*catalog.psd1 *NotSigned*' 'Production verification should reject unsigned data files'
+
+        $signatureStatus = 'Valid'
+        $signerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+        function Get-AuthenticodeSignature {
+            param([string] $LiteralPath)
+            [pscustomobject]@{
+                Status = $signatureStatus
+                SignerCertificate = [pscustomobject]@{ Subject = $signerSubject }
+            }
+        }
+        Assert-DevConfigMicrosoftSigned -Directory $fixture
+        $signerSubject = 'CN=Other publisher'
+        Assert-ThrowsLike {
+            Assert-DevConfigMicrosoftSigned -Directory $fixture
+        } '*catalog.psd1 *unexpected signer*' 'Production verification should reject data files from other publishers'
+        $signatureStatus = 'HashMismatch'
+        Assert-ThrowsLike {
+            Assert-DevConfigMicrosoftSigned -Directory $fixture
+        } '*catalog.psd1 *HashMismatch*' 'Production verification should reject tampered signed data files'
+
+        $sourceDirectory = Join-Path $fixture 'src\Workloads'
+        $releaseDirectory = Join-Path $fixture 'Workloads'
+        New-Item -ItemType Directory -Path $sourceDirectory, $releaseDirectory | Out-Null
+        $sourceData = Join-Path $sourceDirectory 'catalog.psd1'
+        $releaseData = Join-Path $releaseDirectory 'catalog.psd1'
+        Set-Content -LiteralPath $sourceData -Value '@{ Value = 1 }' -Encoding UTF8
+        Set-Content -LiteralPath $releaseData -Value @('@{ Value = 1 }', '', '# SIG # Begin signature block', '# Test signature', '# SIG # End signature block') -Encoding UTF8
+        Assert-Equal (Import-PowerShellDataFile -LiteralPath $releaseData).Value 1 'Signature footer should not change catalog import'
+        $report = & (Join-Path $PSScriptRoot '..\..\tools\check-signed-drift.ps1') -RepoRoot $fixture | ConvertFrom-Json
+        Assert-Equal $report.files[0].status 'ok' 'Signed data file comparison should ignore the signature footer'
+        Set-Content -LiteralPath $releaseData -Value @('@{ Value = 2 }', '', '# SIG # Begin signature block', '# Test signature', '# SIG # End signature block') -Encoding UTF8
+        $report = & (Join-Path $PSScriptRoot '..\..\tools\check-signed-drift.ps1') -RepoRoot $fixture | ConvertFrom-Json
+        Assert-Equal $report.files[0].status 'drifted' 'Signed data file comparison should detect changed catalog content'
+    } finally {
+        Remove-Item -LiteralPath $fixture -Recurse -Force
+    }
+}
 $trackedContent = @(git -C (Join-Path $PSScriptRoot '..\..\..') ls-files 'src/Workloads/**' |
-    Where-Object { [IO.Path]::GetExtension($_) -ne '.ps1' } |
+    Where-Object { [IO.Path]::GetExtension($_) -notin @('.ps1', '.psd1') } |
     ForEach-Object { $_.Substring('src/Workloads/'.Length).Replace('/', '\') })
 Assert-Equal @($Script:DevConfigWorkloadContentHashes.Keys | Sort-Object).Count $trackedContent.Count 'Signed content manifest should cover every tracked non-PowerShell Workloads file'
 foreach ($path in $trackedContent) {
@@ -39,7 +88,7 @@ print(json.dumps({
     path[len("src/Workloads/"):].replace("/", "\\"):
         hashlib.sha256(subprocess.check_output(["git", "show", f"HEAD:{path}"])).hexdigest()
     for path in paths
-    if not path.lower().endswith(".ps1")
+    if not path.lower().endswith((".ps1", ".psd1"))
 }, sort_keys=True))
 '@
 $blobHashScriptPath = Join-Path $env:TEMP "devconfig-blob-hashes-$([guid]::NewGuid().ToString('N')).py"

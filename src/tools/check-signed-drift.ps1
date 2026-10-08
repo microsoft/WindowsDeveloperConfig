@@ -8,13 +8,13 @@
     source under src/{Workloads,windows-dev-config,wsl-comfort}/ and the
     Authenticode-signed release copy at the matching top-level paths.
     The sign pipeline (.pipelines/OneBranch.SignAndPackage.yml) regenerates
-    the top-level copies by signing src/**/*.ps1 (appending a
+    the top-level copies by signing src/**/*.ps1 and src/**/*.psd1 (appending a
     "# SIG # Begin signature block" footer) and mirroring every other file
     (.winget / .sh / .md / images / anything else) byte-for-byte.
 
     This script walks every file under both trees, pairs each one with its
     counterpart, and classifies it as ok | drifted | missing-in-root |
-    missing-in-src. For .ps1 files the comparison strips the UTF-8 BOM,
+    missing-in-src. For .ps1 and .psd1 files the comparison strips the UTF-8 BOM,
     normalizes CRLF to LF, and on the root copy drops everything from the
     first "# SIG # Begin signature block" line to EOF. For every other
     file the comparison is a strict byte-equal.
@@ -166,9 +166,9 @@ function Compare-Pair {
     $srcBytes  = [System.IO.File]::ReadAllBytes($SrcAbsPath)
     $rootBytes = [System.IO.File]::ReadAllBytes($RootAbsPath)
 
-    $isPs1 = [System.IO.Path]::GetExtension($RootRelPath).Equals('.ps1', [System.StringComparison]::OrdinalIgnoreCase)
+    $isPowerShell = [System.IO.Path]::GetExtension($RootRelPath).ToLowerInvariant() -in @('.ps1', '.psd1')
 
-    if ($isPs1) {
+    if ($isPowerShell) {
         $srcNorm  = Get-NormalizedPs1Bytes -Bytes $srcBytes
         $rootNorm = Get-NormalizedPs1Bytes -Bytes $rootBytes -StripSignatureBlock
         $offset = Get-FirstDifferenceOffset -A $srcNorm -B $rootNorm
@@ -176,7 +176,7 @@ function Compare-Pair {
             $entry.status = 'ok'
         } else {
             $entry.status = 'drifted'
-            $entry.reason = "normalized .ps1 bytes differ at offset $offset (src len=$($srcNorm.Length), root len=$($rootNorm.Length))"
+            $entry.reason = "normalized PowerShell bytes differ at offset $offset (src len=$($srcNorm.Length), root len=$($rootNorm.Length))"
         }
     } else {
         $offset = Get-FirstDifferenceOffset -A $srcBytes -B $rootBytes
@@ -227,10 +227,10 @@ foreach ($rel in $pairs) {
 $sorted = $results | Sort-Object -Property path
 
 $summary = [ordered]@{
-    ok              = ($sorted | Where-Object { $_.status -eq 'ok' }).Count
-    drifted         = ($sorted | Where-Object { $_.status -eq 'drifted' }).Count
-    missing_in_root = ($sorted | Where-Object { $_.status -eq 'missing-in-root' }).Count
-    missing_in_src  = ($sorted | Where-Object { $_.status -eq 'missing-in-src' }).Count
+    ok              = @($sorted | Where-Object { $_.status -eq 'ok' }).Count
+    drifted         = @($sorted | Where-Object { $_.status -eq 'drifted' }).Count
+    missing_in_root = @($sorted | Where-Object { $_.status -eq 'missing-in-root' }).Count
+    missing_in_src  = @($sorted | Where-Object { $_.status -eq 'missing-in-src' }).Count
 }
 
 $report = [ordered]@{

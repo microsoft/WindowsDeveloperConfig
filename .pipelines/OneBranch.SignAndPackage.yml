@@ -1,4 +1,4 @@
-# Authenticode-signs all PowerShell scripts and publishes a release artifact
+# Authenticode-signs all PowerShell scripts and data files and publishes a release artifact
 # containing the signed scripts and winget DSC configuration files.
 
 trigger: none
@@ -34,16 +34,16 @@ extends:
               ob_outputDirectory: $(Build.ArtifactStagingDirectory)/drop
 
             steps:
-              # Sign all PowerShell scripts in-place.
+              # Sign all PowerShell scripts and data files in-place.
               - task: onebranch.pipeline.signing@1
-                displayName: Sign PowerShell scripts
+                displayName: Sign PowerShell scripts and data files
                 inputs:
                   command: sign
                   signing_environment: azure_devops
                   signing_profile: external_distribution
-                  files_to_sign: src/**/*.ps1
+                  files_to_sign: 'src/**/*.ps1;src/**/*.psd1'
 
-              # Collect signed PS1 scripts, winget DSC configuration files,
+              # Collect signed PowerShell files, winget DSC configuration files,
               # and top-level release files into the output directory.
               - task: CopyFiles@2
                 displayName: Collect release files

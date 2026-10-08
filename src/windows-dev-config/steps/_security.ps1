@@ -121,7 +121,8 @@ function Assert-DevConfigMicrosoftSigned {
     )
 
     $Directory = (Get-Item -LiteralPath $Directory -Force).FullName
-    $scripts = @(Get-ChildItem -LiteralPath $Directory -Recurse -File -Filter '*.ps1' -Force)
+    $scripts = @(Get-ChildItem -LiteralPath $Directory -Recurse -File -Force |
+        Where-Object { $_.Extension -in @('.ps1', '.psd1') })
     if ($scripts.Count -eq 0) {
         throw "The Calm OS payload in '$Directory' contains no PowerShell files."
     }

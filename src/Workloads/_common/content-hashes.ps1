@@ -1,5 +1,4 @@
 $Script:DevConfigWorkloadContentHashes = @{
-    '_common\ai-catalog.psd1' = 'ab5c8ffeec7be95b57a62a644e2a1e19cdf12101e1132b03f97e1c8e0f5df8ef'
     'cuda\smoke.cu' = '6252383bda8856daa14c4f315961e17d4de3bdba1cba6bf4c09a5d0aa52a2a6f'
     'dotnet\configuration.winget' = 'cba2c6873cee7eff241b6d7698d773f8575cfc60a6e9d7dbb8986f4ecea5c048'
     'go\configuration.winget' = '552e6fe17baa47df8d1f429735cdd718bdb61b052a86cc47e8f8c6c2cd22232c'
@@ -53,7 +52,7 @@ function Assert-DevConfigWorkloadContent {
 
     $root = (Get-Item -LiteralPath $WorkloadsRoot -Force).FullName.TrimEnd('\')
     $actualFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force |
-        Where-Object { $_.Extension -ne '.ps1' })
+        Where-Object { $_.Extension -notin @('.ps1', '.psd1') })
     $actualPaths = @($actualFiles | ForEach-Object {
         $_.FullName.Substring($root.Length).TrimStart([char]'\')
     })
