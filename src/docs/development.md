@@ -115,7 +115,7 @@ Workloads/
   php/             # configuration.winget (core) + install.ps1 (thin shim)
   python/          # configuration.winget (core) + install.ps1 (thin shim)
   dotnet/          # configuration.winget (core) + install.ps1 (thin shim)
-  go/              # configuration.winget (core) + install.ps1 (thin shim)
+  go/              # setup.ps1 (one-line setup via the engine)
   java/            # configuration.winget (core) + install.ps1 (thin shim)
   rust/            # configuration.winget (core) + install.ps1 (thin shim)
   winforms/        # configuration.winget (core) + install.ps1 (thin shim)

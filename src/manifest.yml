@@ -188,10 +188,15 @@ flows:
     tags: [go, golang]
     icon: 🐹
     onboardingUrl: https://go.dev/doc/install
+    # PowerShell-native flow: Workloads/go/setup.ps1 runs the Windows Dev Config engine
+    # (windows-dev-config/workloads/go.ps1). There is no configuration.winget, so the
+    # configuration key is omitted (same shape as winui). manual_test because the engine
+    # entry point needs a signed release cycle and elevation, which the automated matrix
+    # can't provide.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/go/install.ps1
-      configuration: Workloads/go/configuration.winget
+      install: Workloads/go/setup.ps1
       build: ""
       run: go run src/tests/go/hello.go
       expected: src/tests/go/expected.txt

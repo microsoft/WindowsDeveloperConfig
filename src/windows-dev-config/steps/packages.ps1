@@ -152,6 +152,11 @@ function Get-DevConfigPackageCatalog {
             UninstallOrder = 10
         }
         @{
+            Name           = 'Go'
+            Id             = 'GoLang.Go'
+            UninstallOrder = 17
+        }
+        @{
             Name           = 'OhMyPosh'
             Id             = 'JanDeDobbeleer.OhMyPosh'
             UninstallOrder = 8
