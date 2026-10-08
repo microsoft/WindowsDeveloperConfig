@@ -118,7 +118,7 @@ Workloads/
   go/              # configuration.winget (core) + install.ps1 (thin shim)
   java/            # configuration.winget (core) + install.ps1 (thin shim)
   rust/            # configuration.winget (core) + install.ps1 (thin shim)
-  winforms/        # configuration.winget (core) + install.ps1 (thin shim)
+  winforms/        # setup.ps1 (one-line setup via the engine)
   winui/           # setup.ps1 (one-line setup via the engine)
   cuda/            # x64/ARM64 CUDA + MSVC + compiled GPU-kernel readiness
   rocm/            # Windows x64 AMD ROCm Core SDK + compiled HIP kernel
