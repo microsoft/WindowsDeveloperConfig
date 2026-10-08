@@ -1,6 +1,5 @@
 $Script:DevConfigWorkloadContentHashes = @{
     'cuda\smoke.cu' = '6252383bda8856daa14c4f315961e17d4de3bdba1cba6bf4c09a5d0aa52a2a6f'
-    'dotnet\configuration.winget' = 'cba2c6873cee7eff241b6d7698d773f8575cfc60a6e9d7dbb8986f4ecea5c048'
     'go\configuration.winget' = '552e6fe17baa47df8d1f429735cdd718bdb61b052a86cc47e8f8c6c2cd22232c'
     'intel-ai\openvino-smoke.py' = '0b71b5f5351dd7536c6352dc02ffd523fa89f2fa60a23ff27d45fd3e8f9c1326'
     'intel-ai\sycl-smoke.cpp' = '6ed0361d8374bcae060b84469b3b167738f016abc9f3b46ba5f19ad870bd74b7'
@@ -13,7 +12,6 @@ $Script:DevConfigWorkloadContentHashes = @{
     'rocm\hip-smoke.cpp' = 'ece1ed905b3afc7ceb918cc3ff751d624b8d681444b1c507a74cfef3d326034d'
     'sql\configuration.winget' = '99472e573c10316a17be12d45da834e22be4b1b774afc5c15fdefe3d63bb98e7'
     'typescript\configuration.winget' = '826e1755d85798e376baa00a9891c58fd2dd6da67d0f54486ad957202ee7c8b1'
-    'winappcli\configuration.winget' = 'd61b53240fbdef910ea7a92250add1793ae599f57217c83052bd6aed490ead4c'
     'winforms\configuration.winget' = '39de8aee958e1e4989fd5b484a45a36537a7f8cb72dc966fa3afa4d0e8b9e34f'
 }
 
