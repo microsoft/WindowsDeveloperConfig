@@ -12,7 +12,6 @@ $Script:DevConfigWorkloadContentHashes = @{
     'pytorch\triton-smoke.py' = 'a2d2a538b1b30315f249753ccad68d6977bf85d711e3e3541c52ae16268814f4'
     'pytorch\xpu-smoke.py' = '7cba1b04e7ecbce0c24a9188ff847cd3c2fd9792810b5fd4324728ad21786c50'
     'rocm\hip-smoke.cpp' = 'ece1ed905b3afc7ceb918cc3ff751d624b8d681444b1c507a74cfef3d326034d'
-    'rust\configuration.winget' = 'ea58a4b6dfe1aedcc1af4674b69dd376609c67140ee6a60dba0060edb266c701'
     'sql\configuration.winget' = '99472e573c10316a17be12d45da834e22be4b1b774afc5c15fdefe3d63bb98e7'
     'typescript\configuration.winget' = '826e1755d85798e376baa00a9891c58fd2dd6da67d0f54486ad957202ee7c8b1'
     'winappcli\configuration.winget' = 'd61b53240fbdef910ea7a92250add1793ae599f57217c83052bd6aed490ead4c'

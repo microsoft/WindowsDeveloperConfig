@@ -220,10 +220,17 @@ flows:
     tags: [rust, cargo, rustc, rustup]
     icon: 🦀
     onboardingUrl: https://www.rust-lang.org/tools/install
+    # PowerShell-native flow: Workloads/rust/setup.ps1 runs the Windows Dev
+    # Config engine (windows-dev-config/workloads/rust.ps1). There is no
+    # configuration.winget, so the `configuration` key is omitted (same shape
+    # as winui). manual_test because the install adds the Desktop development
+    # with C++ workload to Visual Studio Community (multi-GB, same as
+    # winforms), and the engine entry point needs a signed release cycle and
+    # elevation, which the automated matrix can't provide.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/rust/install.ps1
-      configuration: Workloads/rust/configuration.winget
+      install: Workloads/rust/setup.ps1
       build: cargo build --release --manifest-path src/tests/rust/Cargo.toml --quiet
       run: src\tests\rust\target\release\hello.exe
       expected: src/tests/rust/expected.txt

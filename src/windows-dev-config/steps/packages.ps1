@@ -162,6 +162,11 @@ function Get-DevConfigPackageCatalog {
             UninstallOrder = 15
         }
         @{
+            Name           = 'Rustup'
+            Id             = 'Rustlang.Rustup'
+            UninstallOrder = 19
+        }
+        @{
             Name           = 'PowerToys'
             Id             = 'Microsoft.PowerToys'
             Large          = $true

@@ -73,7 +73,7 @@ Command Palette extension.
 | .NET              | ✅ automated   | `Microsoft.DotNet.SDK.10`                                                               |
 | Go                | ✅ automated   | `GoLang.Go` (rolling — winget publishes Go unversioned)                                 |
 | Java              | ✅ automated   | `Microsoft.OpenJDK.25`                                                                  |
-| Rust              | ✅ automated   | `Rustlang.Rustup` (then `rustup default stable`)                                        |
+| Rust              | 🙋 manual     | PowerShell-native one-liner: Developer Mode, PowerShell 7, `Rustlang.Rustup`, Visual Studio Community 2026 with the Desktop development with C++ workload, and the stable Rust toolchain ([`workloads/rust.ps1`](../windows-dev-config/workloads/rust.ps1)) |
 | Python            | ✅ automated   | `Python.Python.3.14`, `astral-sh.uv`                                                    |
 | SQL Developer     | 🙋 manual     | Lightweight SQL Developer: SQL Server + sqlcmd + VS Code extension; no VS/SSDT           |
 | PowerShell        | ✅ automated   | `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings |
@@ -117,7 +117,7 @@ Workloads/
   dotnet/          # configuration.winget (core) + install.ps1 (thin shim)
   go/              # configuration.winget (core) + install.ps1 (thin shim)
   java/            # configuration.winget (core) + install.ps1 (thin shim)
-  rust/            # configuration.winget (core) + install.ps1 (thin shim)
+  rust/            # setup.ps1 (one-line setup via the engine)
   winforms/        # configuration.winget (core) + install.ps1 (thin shim)
   winui/           # setup.ps1 (one-line setup via the engine)
   cuda/            # x64/ARM64 CUDA + MSVC + compiled GPU-kernel readiness
