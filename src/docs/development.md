@@ -69,7 +69,7 @@ Command Palette extension.
 | Flow              | CI status     | Installs                                                                                |
 | ----------------- | ------------- | --------------------------------------------------------------------------------------- |
 | TypeScript        | ✅ automated   | `OpenJS.NodeJS.LTS` + `npm install -g typescript`                                       |
-| PHP               | ✅ automated   | `PHP.PHP.8.5`                                                                           |
+| PHP               | 🙋 manual     | PowerShell-native one-liner: PowerShell 7, `PHP.PHP.8.5` ([`workloads/php.ps1`](../windows-dev-config/workloads/php.ps1)) |
 | .NET              | ✅ automated   | `Microsoft.DotNet.SDK.10`                                                               |
 | Go                | ✅ automated   | `GoLang.Go` (rolling — winget publishes Go unversioned)                                 |
 | Java              | ✅ automated   | `Microsoft.OpenJDK.25`                                                                  |
@@ -112,7 +112,7 @@ for build + configuration details.
 Workloads/
   _common/         # shared DSC glue plus direct AI acquisition, resolver catalog, and reporting helpers
   typescript/      # configuration.winget (core) + install.ps1 (thin shim)
-  php/             # configuration.winget (core) + install.ps1 (thin shim)
+  php/             # setup.ps1 (one-line setup via the engine)
   python/          # configuration.winget (core) + install.ps1 (thin shim)
   dotnet/          # configuration.winget (core) + install.ps1 (thin shim)
   go/              # configuration.winget (core) + install.ps1 (thin shim)
@@ -276,7 +276,6 @@ These don't touch your machine state and are a good pre-commit pass:
 ```bash
 # DSC YAML parses and has the expected shape.
 python3 -c "import yaml; yaml.safe_load(open('Workloads/typescript/configuration.winget'))"
-python3 -c "import yaml; yaml.safe_load(open('Workloads/php/configuration.winget'))"
 
 # manifest.yml parses (this is what CI's `discover` job consumes).
 python3 -c "import yaml; print(yaml.safe_load(open('manifest.yml')))"
