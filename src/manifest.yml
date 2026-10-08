@@ -97,10 +97,15 @@ flows:
     tags: [php, web, scripting]
     icon: 🐘
     onboardingUrl: https://www.php.net/manual/en/install.windows.php
+    # PowerShell-native flow: Workloads/php/setup.ps1 runs the Windows Dev Config
+    # engine (windows-dev-config/workloads/php.ps1). There is no
+    # configuration.winget, so the configuration key is omitted (same shape as
+    # winui). manual_test because the engine entry point needs a signed release
+    # cycle and elevation, which the automated matrix can't provide.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/php/install.ps1
-      configuration: Workloads/php/configuration.winget
+      install: Workloads/php/setup.ps1
       build: ""
       run: php src/tests/php/hello.php
       expected: src/tests/php/expected.txt
@@ -156,10 +161,15 @@ flows:
     tags: [dotnet, csharp, winapp, winappcli, winui, windows, desktop]
     icon: 🪟
     onboardingUrl: https://learn.microsoft.com/windows/apps/dev-tools/winapp-cli/
+    # PowerShell-native flow: Workloads/winappcli/setup.ps1 runs the Windows Dev
+    # Config engine (windows-dev-config/workloads/winappcli.ps1). There is no
+    # configuration.winget, so the `configuration` key is omitted (same shape
+    # as winui). The engine entry point needs a signed release cycle and
+    # elevation, so it can't run unattended in the automated CI matrix.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/winappcli/install.ps1
-      configuration: Workloads/winappcli/configuration.winget
+      install: Workloads/winappcli/setup.ps1
       build: ""
       run: pwsh -NoProfile -File src/tests/winappcli/probe.ps1
       expected: src/tests/winappcli/expected.txt
@@ -172,10 +182,15 @@ flows:
     tags: [dotnet, csharp, fsharp, net]
     icon: 🟣
     onboardingUrl: https://learn.microsoft.com/dotnet/core/install/windows
+    # PowerShell-native flow: Workloads/dotnet/setup.ps1 runs the Windows Dev
+    # Config engine (windows-dev-config/workloads/dotnet.ps1). There is no
+    # configuration.winget, so the `configuration` key is omitted (same shape
+    # as winui). manual_test because the engine entry point needs a signed
+    # release cycle and elevation, which the automated matrix can't provide.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/dotnet/install.ps1
-      configuration: Workloads/dotnet/configuration.winget
+      install: Workloads/dotnet/setup.ps1
       build: dotnet build src/tests/dotnet/hello.csproj -c Release -v q --nologo -o src/tests/dotnet/bin
       run: src\tests\dotnet\bin\hello.exe
       expected: src/tests/dotnet/expected.txt
@@ -225,10 +240,17 @@ flows:
     tags: [rust, cargo, rustc, rustup]
     icon: 🦀
     onboardingUrl: https://www.rust-lang.org/tools/install
+    # PowerShell-native flow: Workloads/rust/setup.ps1 runs the Windows Dev
+    # Config engine (windows-dev-config/workloads/rust.ps1). There is no
+    # configuration.winget, so the `configuration` key is omitted (same shape
+    # as winui). manual_test because the install adds the Desktop development
+    # with C++ workload to Visual Studio Community (multi-GB, same as
+    # winforms), and the engine entry point needs a signed release cycle and
+    # elevation, which the automated matrix can't provide.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/rust/install.ps1
-      configuration: Workloads/rust/configuration.winget
+      install: Workloads/rust/setup.ps1
       build: cargo build --release --manifest-path src/tests/rust/Cargo.toml --quiet
       run: src\tests\rust\target\release\hello.exe
       expected: src/tests/rust/expected.txt
