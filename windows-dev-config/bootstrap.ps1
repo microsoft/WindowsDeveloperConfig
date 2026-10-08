@@ -20,6 +20,10 @@
   To apply one workload from workloads\ instead of the full Windows Dev Config setup:
 
       & ([scriptblock]::Create((irm <url>))) -Workload winui
+
+  To run a standalone AI installer with its verified dependencies:
+
+      & ([scriptblock]::Create((irm <url>))) -Scenario cuda
 #>
 
 [CmdletBinding()]
@@ -29,7 +33,13 @@ param(
     [switch] $AllowUnsigned,
     [switch] $NoLaunch,
     [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+    [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
+    [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
+    [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
+    [switch] $RequireTriton,
+    [switch] $PlanOnly,
+    [string] $ReportRoot
 )
 
 function Invoke-CalmOsBootstrap {
@@ -40,7 +50,13 @@ function Invoke-CalmOsBootstrap {
         [switch] $AllowUnsigned,
         [switch] $NoLaunch,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
+        [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
+        [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
+        [switch] $RequireTriton,
+        [switch] $PlanOnly,
+        [string] $ReportRoot
     )
 
     $ErrorActionPreference = 'Stop'
@@ -122,11 +138,61 @@ function Invoke-CalmOsBootstrap {
         }
     }
 
+    # Keep this helper identical to steps/_pwsh-bootstrap.ps1; bootstrap must work on its own.
+    function Get-DevConfigPwshExe {
+        if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7) {
+            $candidate = Join-Path $PSHOME 'pwsh.exe'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        }
+
+        foreach ($root in @($env:ProgramW6432, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+            if (-not $root) { continue }
+            $candidate = Join-Path $root 'PowerShell\7\pwsh.exe'
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+        }
+
+        foreach ($command in @(Get-Command 'pwsh.exe' -CommandType Application -All -ErrorAction SilentlyContinue)) {
+            # App execution aliases have no executable version; resolve their package below.
+            if ($command.Version -and $command.Version.Major -ge 7 -and
+                (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+                return $command.Source
+            }
+        }
+
+        if (Get-Command 'Get-AppxPackage' -ErrorAction SilentlyContinue) {
+            foreach ($package in @(Get-AppxPackage -Name Microsoft.PowerShell -ErrorAction Stop |
+                Sort-Object { [version]$_.Version } -Descending)) {
+                if (-not $package.InstallLocation -or ([version]$package.Version).Major -lt 7) { continue }
+                $candidate = Join-Path $package.InstallLocation 'pwsh.exe'
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+            }
+        }
+
+        return $null
+    }
+
     $repo = 'microsoft/WindowsDeveloperConfig'
     $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
     $Workload = $Workload.ToLowerInvariant()
     # The default workload is omitted from command lines so refs that predate workloads still accept them.
     $workloadSuffix = if ($Workload -ne 'devconfig') { " -Workload $Workload" } else { '' }
+
+    $scenarioOptionNames = @('AiBackend', 'AiRuntime', 'RequireTriton', 'PlanOnly', 'ReportRoot')
+    if (-not $Scenario -and @($scenarioOptionNames | Where-Object { $PSBoundParameters.ContainsKey($_) }).Count -gt 0) {
+        throw 'AI backend/runtime/report options require -Scenario with a supported AI workload.'
+    }
+    if ($Scenario -and $PSBoundParameters.ContainsKey('Action')) {
+        throw '-Action configures the full workstation and cannot be combined with -Scenario.'
+    }
+    if ($Scenario -and $Workload -ne 'devconfig') {
+        throw '-Workload cannot be combined with -Scenario.'
+    }
+    if ($Scenario -and $Scenario -ne 'local-ai' -and $AiRuntime -ne 'None') {
+        throw '-AiRuntime requires -Scenario local-ai.'
+    }
+    if ($Scenario -and $Scenario -notin @('local-ai', 'pytorch') -and ($AiBackend -ne 'Auto' -or $RequireTriton)) {
+        throw '-AiBackend and -RequireTriton require -Scenario local-ai or pytorch.'
+    }
 
     # Reject refs that could escape the repository path.
     if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
@@ -134,11 +200,19 @@ function Invoke-CalmOsBootstrap {
     }
 
     if (-not $InstallRoot) {
-        $InstallRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'CalmOS'
+        $defaultInstallDirectory = if ($Scenario -and $AllowUnsigned) {
+            'CalmOS-Development'
+        } else {
+            'CalmOS'
+        }
+        $InstallRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $defaultInstallDirectory
     }
     $InstallRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallRoot)
     if ($InstallRoot -notmatch '^[A-Za-z]:\\[^:]+$') {
         throw '-InstallRoot must be a local directory, not a drive root or network path.'
+    }
+    if ($ReportRoot) {
+        $ReportRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ReportRoot)
     }
 
     foreach ($scope in @('MachinePolicy', 'UserPolicy')) {
@@ -152,8 +226,10 @@ function Invoke-CalmOsBootstrap {
     }
 
     $shell = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
-    $pwsh = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'PowerShell\7\pwsh.exe'
-    if ($Action -ne 'Uninstall' -and (Test-Path -LiteralPath $pwsh)) { $shell = $pwsh }
+    if ($Action -ne 'Uninstall') {
+        $pwsh = Get-DevConfigPwshExe
+        if ($pwsh) { $shell = $pwsh }
+    }
     $escapedShell = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($shell)
     $arguments = @('-NoProfile')
     if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
@@ -165,7 +241,14 @@ function Invoke-CalmOsBootstrap {
             [switch] $AllowUnsigned,
             [switch] $NoLaunch,
             [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-            [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+            [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+            [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
+            [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
+            [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
+            [switch] $RequireTriton,
+            [switch] $PlanOnly,
+            [string] $ReportRoot,
+            [string] $ElevationErrorPath
         )
 
         $launcher = {
@@ -175,13 +258,32 @@ function Invoke-CalmOsBootstrap {
                 [switch] $AllowUnsigned,
                 [switch] $NoLaunch,
                 [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-                [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+                [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+                [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
+                [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
+                [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
+                [switch] $RequireTriton,
+                [switch] $PlanOnly,
+                [string] $ReportRoot,
+                [string] $ElevationErrorPath
             )
 
             $ErrorActionPreference = 'Stop'
             Set-StrictMode -Version Latest
             # A child shell can inherit incompatible built-in modules from another PowerShell edition.
             $env:PSModulePath = "$PSHOME\Modules;$env:PSModulePath"
+            trap {
+                if (-not $Scenario) { break }
+                try {
+                    [IO.File]::WriteAllText(
+                        $ElevationErrorPath,
+                        ($_ | Out-String),
+                        [Text.UTF8Encoding]::new($false))
+                } catch {
+                    Write-Warning "Could not save scenario diagnostics: $($_.Exception.Message)"
+                }
+                exit 1
+            }
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
             $baseUri = "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$Ref/$flow"
@@ -224,8 +326,16 @@ function Invoke-CalmOsBootstrap {
             $shellName = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh.exe' } else { 'powershell.exe' }
             $arguments = @('-NoProfile')
             if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
-            $arguments += '-File', $target, '-Ref', $Ref, '-InstallRoot', $InstallRoot, '-Action', $Action
-            if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+            $arguments += '-File', $target, '-Ref', $Ref, '-InstallRoot', $InstallRoot
+            if ($Scenario) {
+                $arguments += '-Scenario', $Scenario, '-AiBackend', $AiBackend, '-AiRuntime', $AiRuntime
+                if ($RequireTriton) { $arguments += '-RequireTriton' }
+                if ($PlanOnly) { $arguments += '-PlanOnly' }
+                if ($ReportRoot) { $arguments += '-ReportRoot', $ReportRoot }
+            } else {
+                $arguments += '-Action', $Action
+                if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+            }
             if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
             if ($NoLaunch) { $arguments += '-NoLaunch' }
             & (Join-Path $PSHOME $shellName) @arguments
@@ -238,8 +348,21 @@ function Invoke-CalmOsBootstrap {
         $escapedRef = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Ref)
         $escapedRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($InstallRoot)
         $command = "function Invoke-DevConfigWebRequest {`n${function:Invoke-DevConfigWebRequest}`n}`n" +
-            "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot' -Action '$Action'"
-        if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
+            "& {`n$launcher`n} -Ref '$escapedRef' -InstallRoot '$escapedRoot'"
+        if ($Scenario) {
+            $escapedErrorPath = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($ElevationErrorPath)
+            $command += " -Scenario '$Scenario' -AiBackend '$AiBackend' -AiRuntime '$AiRuntime'"
+            $command += " -ElevationErrorPath '$escapedErrorPath'"
+            if ($RequireTriton) { $command += ' -RequireTriton' }
+            if ($PlanOnly) { $command += ' -PlanOnly' }
+            if ($ReportRoot) {
+                $escapedReportRoot = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($ReportRoot)
+                $command += " -ReportRoot '$escapedReportRoot'"
+            }
+        } else {
+            $command += " -Action '$Action'"
+            if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
+        }
         if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
         if ($NoLaunch) { $command += ' -NoLaunch' }
         # Start-Process joins arguments; Windows quoting keeps the command intact.
@@ -306,7 +429,7 @@ function Invoke-CalmOsBootstrap {
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         # The elevated window closes on errors, so a ref without the workload is reported here, before UAC.
-        if ($Workload -ne 'devconfig') {
+        if (-not $Scenario -and $Workload -ne 'devconfig') {
             try {
                 $null = Invoke-DevConfigWebRequest -Parameters @{
                     Uri = "https://raw.githubusercontent.com/$repo/$Ref/$flow/workloads/$Workload.ps1"
@@ -320,15 +443,40 @@ function Invoke-CalmOsBootstrap {
                 throw "'$refName' doesn't contain the '$Workload' workload under $flow. Check the workload name, or pick a newer -Ref."
             }
         }
-        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch -Action $Action -Workload $Workload
+        $elevationErrorPath = if ($Scenario) {
+            Join-Path $env:TEMP "CalmOS-bootstrap-error-$([guid]::NewGuid().ToString('N')).txt"
+        } else { '' }
+        $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch `
+            -Action $Action -Workload $Workload -Scenario $Scenario -AiBackend $AiBackend -AiRuntime $AiRuntime `
+            -RequireTriton:$RequireTriton -PlanOnly:$PlanOnly -ReportRoot $ReportRoot `
+            -ElevationErrorPath $elevationErrorPath
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
-        $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait -PassThru
+        # AI runtimes can outlive setup; workstation actions still wait for the process tree.
+        $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait:(-not $Scenario) -PassThru
+        if ($Scenario) { $proc.WaitForExit() }
         if ($proc.ExitCode -ne 0) {
-            throw "Elevated setup exited with code $($proc.ExitCode). No further setup was started."
+            if (-not $Scenario) {
+                throw "Elevated setup exited with code $($proc.ExitCode). No further setup was started."
+            }
+            $detail = if (Test-Path -LiteralPath $elevationErrorPath) {
+                (Get-Content -LiteralPath $elevationErrorPath -Raw).Trim()
+            } else {
+                'The elevated process did not return diagnostic output.'
+            }
+            Remove-Item -LiteralPath $elevationErrorPath -Force -ErrorAction SilentlyContinue
+            throw "Elevated setup exited with code $($proc.ExitCode). No further setup was started.`n$detail"
+        }
+        if ($Scenario) {
+            Remove-Item -LiteralPath $elevationErrorPath -Force -ErrorAction SilentlyContinue
         }
         if ($NoLaunch) {
-            $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
-            Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+            if ($Scenario) {
+                $scenarioTarget = Join-Path $InstallRoot "Scenarios\$Scenario\Workloads\$Scenario\install.ps1"
+                Write-Host "Scenario files are ready at $scenarioTarget." -ForegroundColor Cyan
+            } else {
+                $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
+                Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+            }
         }
         return
     }
@@ -348,7 +496,9 @@ function Invoke-CalmOsBootstrap {
     }
 
     Write-Host ''
-    if ($Workload -eq 'devconfig') {
+    if ($Scenario) {
+        Write-Host "Windows Developer Config: $Scenario scenario" -ForegroundColor Cyan
+    } elseif ($Workload -eq 'devconfig') {
         Write-Host 'Calm OS setup' -ForegroundColor Cyan
     } else {
         Write-Host "Windows Developer Config: $Workload workload" -ForegroundColor Cyan
@@ -401,6 +551,74 @@ function Invoke-CalmOsBootstrap {
 
         $InstallRoot = New-DevConfigProtectedDirectory -Path $InstallRoot
 
+        if ($Scenario) {
+            $workloadsDir = if ($AllowUnsigned) {
+                Join-Path (Join-Path $top.FullName 'src') 'Workloads'
+            } else {
+                Join-Path $top.FullName 'Workloads'
+            }
+            if (-not ((Test-Path (Join-Path $workloadsDir "$Scenario\install.ps1")) -and
+                    (Test-Path (Join-Path $workloadsDir '_common\content-hashes.ps1')))) {
+                throw "'$Ref' does not contain the requested $Scenario workload under the selected signed/source tree."
+            }
+            Assert-DevConfigProtectedTree -Directory $workloadsDir
+            if (-not $AllowUnsigned) {
+                Assert-DevConfigMicrosoftSigned -Directory $workloadsDir
+            }
+            . (Join-Path $workloadsDir '_common\content-hashes.ps1')
+            Assert-DevConfigWorkloadContent -WorkloadsRoot $workloadsDir
+
+            $scenariosRoot = New-DevConfigProtectedDirectory -Path (Join-Path $InstallRoot 'Scenarios')
+            $scenarioRoot = New-DevConfigProtectedDirectory -Path (Join-Path $scenariosRoot $Scenario)
+            foreach ($existing in @('Workloads', 'windows-dev-config')) {
+                $existingPath = Join-Path $scenarioRoot $existing
+                if (Test-Path -LiteralPath $existingPath) {
+                    Remove-Item -LiteralPath $existingPath -Recurse -Force
+                }
+            }
+            Copy-Item -LiteralPath $workloadsDir -Destination $scenarioRoot -Recurse -Force
+            $scenarioWindowsDevConfig = New-Item -ItemType Directory -Path (Join-Path $scenarioRoot 'windows-dev-config') -Force
+            Copy-Item -LiteralPath (Join-Path $setupDir 'steps') -Destination $scenarioWindowsDevConfig.FullName -Recurse -Force
+            Assert-DevConfigProtectedTree -Directory $scenarioRoot
+            if (-not $AllowUnsigned) {
+                Assert-DevConfigMicrosoftSigned -Directory $scenarioRoot
+            }
+            . (Join-Path $scenarioRoot 'Workloads\_common\content-hashes.ps1')
+            Assert-DevConfigWorkloadContent -WorkloadsRoot (Join-Path $scenarioRoot 'Workloads')
+            Get-ChildItem -LiteralPath $scenarioRoot -Recurse -Filter '*.ps1' -File | Unblock-File
+
+            Remove-Item -LiteralPath $work -Recurse -Force
+            $target = Join-Path $scenarioRoot "Workloads\$Scenario\install.ps1"
+            Write-Host "  Scenario ready in $scenarioRoot" -ForegroundColor DarkGray
+            $scenarioArguments = @('-NoProfile')
+            if (-not $AllowUnsigned) { $scenarioArguments += '-ExecutionPolicy', 'RemoteSigned' }
+            $scenarioArguments += '-File', $target
+            if ($Scenario -in @('local-ai', 'pytorch')) { $scenarioArguments += '-Backend', $AiBackend }
+            if ($Scenario -eq 'local-ai') { $scenarioArguments += '-Runtime', $AiRuntime }
+            if ($RequireTriton) { $scenarioArguments += '-RequireTriton' }
+            if ($PlanOnly) { $scenarioArguments += '-PlanOnly' }
+            if ($ReportRoot) {
+                if ($Scenario -eq 'local-ai') {
+                    $scenarioArguments += '-ReportRoot', $ReportRoot
+                } else {
+                    $scenarioArguments += '-ReportPath', (Join-Path $ReportRoot "$Scenario.json")
+                }
+            }
+            if ($NoLaunch) {
+                $displayArguments = $scenarioArguments | ForEach-Object {
+                    "'$([Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($_))'"
+                }
+                Write-Host "Run when ready: & '$escapedShell' $($displayArguments -join ' ')" -ForegroundColor Cyan
+                return
+            }
+            & $shell @scenarioArguments
+            $scenarioExitCode = $LASTEXITCODE
+            if ($scenarioExitCode -ne 0) {
+                throw "$Scenario scenario finished with exit code $scenarioExitCode."
+            }
+            return
+        }
+
         # Keep logs and progress when replacing setup scripts.
         Copy-Item -LiteralPath (Join-Path $setupDir 'bootstrap.ps1'), (Join-Path $setupDir 'dev-config.ps1') -Destination $InstallRoot -Force
         Copy-Item -LiteralPath (Join-Path $setupDir 'steps') -Destination $InstallRoot -Recurse -Force
@@ -447,10 +665,10 @@ function Invoke-CalmOsBootstrap {
 Invoke-CalmOsBootstrap @PSBoundParameters
 
 # SIG # Begin signature block
-# MIInNwYJKoZIhvcNAQcCoIInKDCCJyQCAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIInUAYJKoZIhvcNAQcCoIInQTCCJz0CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAo9c+YHVgsOz8s
-# /NoYHF/NQryZzDxGxr7QQB1cnOJabKCCDMkwggYEMIID7KADAgECAhMzAAACHPrN
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBNGnTzymxGPSMD
+# EnEb6FTlVD/jdwCPGerVDkW0U7p35aCCDMkwggYEMIID7KADAgECAhMzAAACHPrN
 # xZvoL37EAAAAAAIcMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQxWhcNMjcwNDE1MTg1
@@ -518,143 +736,143 @@ Invoke-CalmOsBootstrap @PSBoundParameters
 # /fg8B2qjW88MT/WF5V5uvZGtqa9FSL2RazArA+rDPuf6JGYz4HpgMZHB4S6szWSK
 # YBv0VisCzfxgeU+dquXW9bd0auYlOB58DPcOYKdc3Se94g+xL4pcEhbB54JOgAkw
 # YTu/9dLeH2pDqeJZAABVDWRQCaXfO5LgyKwKCLYXpigrZYCjUSBcr+Ve8PFWMhVT
-# Ql0v4q8J/AUmQN5W4n101cY2L4A7GTQG1h32HHAvfQESWP0xghnEMIIZwAIBATBu
+# Ql0v4q8J/AUmQN5W4n101cY2L4A7GTQG1h32HHAvfQESWP0xghndMIIZ2QIBATBu
 # MFcxCzAJBgNVBAYTAlVTMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
 # KDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIc
 # +s3Fm+gvfsQAAAAAAhwwDQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwG
-# CisGAQQBgjcCAQQwLwYJKoZIhvcNAQkEMSIEIDPx8YHxvLUlADerl8E6aeHvtqqB
-# MS/VUGZftX6AdpmiMEIGCisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBv
+# CisGAQQBgjcCAQQwLwYJKoZIhvcNAQkEMSIEIHsU3k+bycRklbEAxPDAyJflbttn
+# uk3dBowAm3UeQry4MEIGCisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBv
 # AGYAdKEagBhodHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAE
-# ggEAz53FQ42/dPvqodP3fxwIA8RVQAaRGv4fbx5RZP+BxWPOYen8TN5YeRTCwr8h
-# 2PGKcuYgxvmknqbBSGJVDuXwSxF8tK3GBTI9BIQ2S1ZNzOilp6bBlQ0+yViUWgKq
-# agg0zujDI1Q8BNIfhH8Dw+Pzox8EZcqzwobum9A7lfmfJlWtx8aOHan4MtlzM8w3
-# oKZhqyIPSLgputFSQhJ/EfXAXtdbbBIGRtR6OZ9pvRWQNt4kBDz2bdABhw/3Ma1g
-# FpPb4+Thaeeu9ugdj3zLZbiC2Hhdk+z9wnEnfZHm6VwQIYtD4nFIc7DkAdphWDBj
-# R9wGzehtxAuyH37JCO2bNjJTOKGCF5QwgheQBgorBgEEAYI3AwMBMYIXgDCCF3wG
-# CSqGSIb3DQEHAqCCF20wghdpAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG
-# 9w0BCRABBKCCAUEEggE9MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQC
-# AQUABCA3m3BLPj2hO0Nf9WhYjmdYEclu3yihvF+l4UwRsmZdZAIGaqppheEGGBMy
-# MDI2MTAwNzAwMjgxNy43MjdaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzET
+# ggEAtwaT1ETXSZD57jib0p6OanrZM0cInc2y4LsnIUCbCO7a1kBXJb1qj2Pfdtgw
+# 7qR6Aho/3Z+vx3r3nWh74eGeSW5e3cE8XGAHAKtyxyM3GvNx7LmcKqHuvpfYfuJu
+# 7HRmELptyoZtVgobYJtjyyGslLfL5Cm7P3vZBLuczuMe1269bZ5Yo+DlngL/A+KE
+# IqyLKJAH4ps0R8kLUbh4dqFByLClR88V3zzCCu+mTHA7M6C4ynWpYPyfHBE/ncpo
+# Ybsfw+4bB8A6tKVKPnPwfGnzZYmKDx1EBhyIxqe7HYayGTEYgOr4MVtyxqXhvgtn
+# b0Ht6gMTpph9cJXSeX+E6eGiiqGCF60wghepBgorBgEEAYI3AwMBMYIXmTCCF5UG
+# CSqGSIb3DQEHAqCCF4YwgheCAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFaBgsqhkiG
+# 9w0BCRABBKCCAUkEggFFMIIBQQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQC
+# AQUABCArdgKbJz7jQqFBgFlmcfirEChCfBT4DzOUiLzBSicm7AIGaq6wwDJQGBMy
+# MDI2MTAwODAzMDIwNS4yMTZaMASAAgH0oIHZpIHWMIHTMQswCQYDVQQGEwJVUzET
 # MBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMV
-# TWljcm9zb2Z0IENvcnBvcmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmlj
-# YSBPcGVyYXRpb25zMScwJQYDVQQLEx5uU2hpZWxkIFRTUyBFU046OTYwMC0wNUUw
-# LUQ5NDcxJTAjBgNVBAMTHE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZpY2WgghHq
-# MIIHIDCCBQigAwIBAgITMwAAAiY1tD5nQ5P2HwABAAACJjANBgkqhkiG9w0BAQsF
-# ADB8MQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMH
-# UmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQD
-# Ex1NaWNyb3NvZnQgVGltZS1TdGFtcCBQQ0EgMjAxMDAeFw0yNjAyMTkxOTQwMDJa
-# Fw0yNzA1MTcxOTQwMDJaMIHLMQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGlu
-# Z3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBv
-# cmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmljYSBPcGVyYXRpb25zMScw
-# JQYDVQQLEx5uU2hpZWxkIFRTUyBFU046OTYwMC0wNUUwLUQ5NDcxJTAjBgNVBAMT
-# HE1pY3Jvc29mdCBUaW1lLVN0YW1wIFNlcnZpY2UwggIiMA0GCSqGSIb3DQEBAQUA
-# A4ICDwAwggIKAoICAQC//w+ZZIL5RFFpVI8D3ZyuNu8IzcAEOD30OLYjh337rXjc
-# rIlOSzpJc4ZeUxEyli6x6F6zm4NR8dbPb9diDp/hOUzHWGxiA1Z3RXKBb/4F/ojy
-# vN43SEGWqSfVc3I3BlsYT35ecVAJ9kVf90YOv29tFjJBBZkYvrT/DwwyRLscOyP4
-# p+9/lyJjD+ULs3YXBhVrfZ+MbQB+BYKLqRvBKbj/wR9akNrMxQINoGaD5jZO/N/n
-# SsmG2P1zv/cv4gSoMBnWeQIBkjd2I5w1DeXupp2vSiNmR5sA2ZkBK3yiQWaJvRxO
-# DlkfiyHk9Mkk/TrYTjmjPCbhe+uqhHNRy8UlbOvWsCq0tRtUykHv39DgqAfJNrE8
-# OSt835rBzDprrcAhwmgfhoVi4AKeqwikY0nUa48K0Qy80XT4fiEA3ExEZNaRFo9N
-# q/GwbfgqKqGmc9xhKuRFcjtua4KHZvnAvpWgEFSOCkovXs/BcLnkEHM9xZ8iUag5
-# CyhNqXYYE/z0pcXdYaNIkQ68EWmuvLm7g9oofV2vOm5GVNoghnkWG6nGPo/JwEgm
-# A9oSS0EfvFRMWPA/gpSvF3shArKHnaEpVSSi3DNbyiuYiEs9Ko0IkZc8xKFeQRaq
-# GRxrB+2r/7B3X81Tps99KhFwg+wD87od22F2MUg1x7twt3gaVnFk0IZIwUPCGwID
-# AQABo4IBSTCCAUUwHQYDVR0OBBYEFF3hn9fYJN2Y/Z9LVbBPIxAzXHsQMB8GA1Ud
-# IwQYMBaAFJ+nFV0AXmJdg/Tl0mWnG1M1GelyMF8GA1UdHwRYMFYwVKBSoFCGTmh0
-# dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvY3JsL01pY3Jvc29mdCUyMFRp
-# bWUtU3RhbXAlMjBQQ0ElMjAyMDEwKDEpLmNybDBsBggrBgEFBQcBAQRgMF4wXAYI
-# KwYBBQUHMAKGUGh0dHA6Ly93d3cubWljcm9zb2Z0LmNvbS9wa2lvcHMvY2VydHMv
-# TWljcm9zb2Z0JTIwVGltZS1TdGFtcCUyMFBDQSUyMDIwMTAoMSkuY3J0MAwGA1Ud
-# EwEB/wQCMAAwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwgwDgYDVR0PAQH/BAQDAgeA
-# MA0GCSqGSIb3DQEBCwUAA4ICAQA2Ux0tr9sYCjsq0FRyiVpx15OurNXv6Qk7iX+A
-# rVPlz3w4tqjcTNm1dt3tTua2wJMpJhPH8n7UXhmT98d5Du44Ll4adnse4SQfVg3Q
-# L6aRkXHnJUn8y9iftB/Py22n9xnwPFfj3QlDOSgLuHleu97U0iH2ZaluYabWXJih
-# diYpK8cPHFlqZOAiot0+GD8dP+RMuvpxt/F2LmYelpoZwriiFOUmlxEUV7xJHyZZ
-# lDquskeyuq01DTv91N4qM8cfPPhl/2pc4HeMf/nd2HouifJbDQFNd4WPhLzn0Sy3
-# u1Zh3+S3tjQdqN+dyw60RaV+RXCoOLgFZ3MAg/GoDl+fvb5hy/1a71ctX8wEad1P
-# f6def2pqfl3wFc++hkF8DXXTZofJN4YVaN3InwbAGQDDkNK4lqecCixxmSKwidPy
-# nGeE5OtvNoK1pkLsm/i8F1RjGczZ/kSF2VDkqG866iQ+jVbGOQ6Du3eyyFcFKZoD
-# J4B5mEAS9aT2SKqllLeybOboH6r67siR5B/2Hnu7+KYuYZy0BEadtA6ngG4cnSR9
-# JsrkhhsKmb11ujqwgJyNx92MsoGGwNgN1aI0QID8CsjCFwpfmMzlA44xHKYv3hmj
-# xeqBS4uU5rQeiAnVgpJeaVGKm/lzPDtnppGV+7XhRp5b1ZxT/Z7Xxc+I7H7/jCtQ
-# DZoaZTCCB3EwggVZoAMCAQICEzMAAAAVxedrngKbSZkAAAAAABUwDQYJKoZIhvcN
-# AQELBQAwgYgxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYD
-# VQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xMjAw
-# BgNVBAMTKU1pY3Jvc29mdCBSb290IENlcnRpZmljYXRlIEF1dGhvcml0eSAyMDEw
-# MB4XDTIxMDkzMDE4MjIyNVoXDTMwMDkzMDE4MzIyNVowfDELMAkGA1UEBhMCVVMx
-# EzARBgNVBAgTCldhc2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoT
-# FU1pY3Jvc29mdCBDb3Jwb3JhdGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUt
-# U3RhbXAgUENBIDIwMTAwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDk
-# 4aZM57RyIQt5osvXJHm9DtWC0/3unAcH0qlsTnXIyjVX9gF/bErg4r25PhdgM/9c
-# T8dm95VTcVrifkpa/rg2Z4VGIwy1jRPPdzLAEBjoYH1qUoNEt6aORmsHFPPFdvWG
-# UNzBRMhxXFExN6AKOG6N7dcP2CZTfDlhAnrEqv1yaa8dq6z2Nr41JmTamDu6Gnsz
-# rYBbfowQHJ1S/rboYiXcag/PXfT+jlPP1uyFVk3v3byNpOORj7I5LFGc6XBpDco2
-# LXCOMcg1KL3jtIckw+DJj361VI/c+gVVmG1oO5pGve2krnopN6zL64NF50ZuyjLV
-# wIYwXE8s4mKyzbnijYjklqwBSru+cakXW2dg3viSkR4dPf0gz3N9QZpGdc3EXzTd
-# EonW/aUgfX782Z5F37ZyL9t9X4C626p+Nuw2TPYrbqgSUei/BQOj0XOmTTd0lBw0
-# gg/wEPK3Rxjtp+iZfD9M269ewvPV2HM9Q07BMzlMjgK8QmguEOqEUUbi0b1qGFph
-# AXPKZ6Je1yh2AuIzGHLXpyDwwvoSCtdjbwzJNmSLW6CmgyFdXzB0kZSU2LlQ+QuJ
-# YfM2BjUYhEfb3BvR/bLUHMVr9lxSUV0S2yW6r1AFemzFER1y7435UsSFF5PAPBXb
-# GjfHCBUYP3irRbb1Hode2o+eFnJpxq57t7c+auIurQIDAQABo4IB3TCCAdkwEgYJ
-# KwYBBAGCNxUBBAUCAwEAATAjBgkrBgEEAYI3FQIEFgQUKqdS/mTEmr6CkTxGNSnP
-# EP8vBO4wHQYDVR0OBBYEFJ+nFV0AXmJdg/Tl0mWnG1M1GelyMFwGA1UdIARVMFMw
-# UQYMKwYBBAGCN0yDfQEBMEEwPwYIKwYBBQUHAgEWM2h0dHA6Ly93d3cubWljcm9z
-# b2Z0LmNvbS9wa2lvcHMvRG9jcy9SZXBvc2l0b3J5Lmh0bTATBgNVHSUEDDAKBggr
-# BgEFBQcDCDAZBgkrBgEEAYI3FAIEDB4KAFMAdQBiAEMAQTALBgNVHQ8EBAMCAYYw
-# DwYDVR0TAQH/BAUwAwEB/zAfBgNVHSMEGDAWgBTV9lbLj+iiXGJo0T2UkFvXzpoY
-# xDBWBgNVHR8ETzBNMEugSaBHhkVodHRwOi8vY3JsLm1pY3Jvc29mdC5jb20vcGtp
-# L2NybC9wcm9kdWN0cy9NaWNSb29DZXJBdXRfMjAxMC0wNi0yMy5jcmwwWgYIKwYB
-# BQUHAQEETjBMMEoGCCsGAQUFBzAChj5odHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20v
-# cGtpL2NlcnRzL01pY1Jvb0NlckF1dF8yMDEwLTA2LTIzLmNydDANBgkqhkiG9w0B
-# AQsFAAOCAgEAnVV9/Cqt4SwfZwExJFvhnnJL/Klv6lwUtj5OR2R4sQaTlz0xM7U5
-# 18JxNj/aZGx80HU5bbsPMeTCj/ts0aGUGCLu6WZnOlNN3Zi6th542DYunKmCVgAD
-# sAW+iehp4LoJ7nvfam++Kctu2D9IdQHZGN5tggz1bSNU5HhTdSRXud2f8449xvNo
-# 32X2pFaq95W2KFUn0CS9QKC/GbYSEhFdPSfgQJY4rPf5KYnDvBewVIVCs/wMnosZ
-# iefwC2qBwoEZQhlSdYo2wh3DYXMuLGt7bj8sCXgU6ZGyqVvfSaN0DLzskYDSPeZK
-# PmY7T7uG+jIa2Zb0j/aRAfbOxnT99kxybxCrdTDFNLB62FD+CljdQDzHVG2dY3RI
-# LLFORy3BFARxv2T5JL5zbcqOCb2zAVdJVGTZc9d/HltEAY5aGZFrDZ+kKNxnGSgk
-# ujhLmm77IVRrakURR6nxt67I6IleT53S0Ex2tVdUCbFpAUR+fKFhbHP+CrvsQWY9
-# af3LwUFJfn6Tvsv4O+S3Fb+0zj6lMVGEvL8CwYKiexcdFYmNcP7ntdAoGokLjzba
-# ukz5m/8K6TT4JDVnK+ANuOaMmdbhIurwJ0I9JZTmdHRbatGePu1+oDEzfbzL6Xu/
-# OHBE0ZDxyKs6ijoIYn/ZcGNTTY3ugm2lBRDBcQZqELQdVTNYs6FwZvKhggNNMIIC
-# NQIBATCB+aGB0aSBzjCByzELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hpbmd0
-# b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jwb3Jh
-# dGlvbjElMCMGA1UECxMcTWljcm9zb2Z0IEFtZXJpY2EgT3BlcmF0aW9uczEnMCUG
-# A1UECxMeblNoaWVsZCBUU1MgRVNOOjk2MDAtMDVFMC1EOTQ3MSUwIwYDVQQDExxN
-# aWNyb3NvZnQgVGltZS1TdGFtcCBTZXJ2aWNloiMKAQEwBwYFKw4DAhoDFQCi/fMx
-# Ftkqr7XMXdsRyWU0lSKHZ6CBgzCBgKR+MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQI
+# TWljcm9zb2Z0IENvcnBvcmF0aW9uMS0wKwYDVQQLEyRNaWNyb3NvZnQgSXJlbGFu
+# ZCBPcGVyYXRpb25zIExpbWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjo0
+# MzFBLTA1RTAtRDk0NzElMCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2Vy
+# dmljZaCCEfswggcoMIIFEKADAgECAhMzAAACHUvAkoc4hX45AAEAAAIdMA0GCSqG
+# SIb3DQEBCwUAMHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
+# DgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
+# JjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMB4XDTI1MDgx
+# NDE4NDgzM1oXDTI2MTExMzE4NDgzM1owgdMxCzAJBgNVBAYTAlVTMRMwEQYDVQQI
 # EwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3Nv
-# ZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBD
-# QSAyMDEwMA0GCSqGSIb3DQEBCwUAAgUA7m/rhzAiGA8yMDI2MTAwNjIxNDk1OVoY
-# DzIwMjYxMDA3MjE0OTU5WjB0MDoGCisGAQQBhFkKBAExLDAqMAoCBQDub+uHAgEA
-# MAcCAQACAjO1MAcCAQACAhB6MAoCBQDucT0HAgEAMDYGCisGAQQBhFkKBAIxKDAm
-# MAwGCisGAQQBhFkKAwKgCjAIAgEAAgMHoSChCjAIAgEAAgMBhqAwDQYJKoZIhvcN
-# AQELBQADggEBAIuQZbBGWLHXcN7IMTrUZqjRZfPo+wsq1jLJhlBzYf+9MBwjq6e1
-# c9AyeD4NR/GTlVGE2lCi/iQTsc7C8nanE9ptYBJhPQavNzm9wITLls2Gd9dveujO
-# J8jAYGMYFoMCsIJACn3R79kxX0ir3qqOQ+QyKKzGHYrSydIcbGIlwfl4kfEFeoCQ
-# ciU2/QdgjjmOaJaC35dnvvBrE01eAbsieb/hFjXByZmSkdh2w1bxyYvIEc6BeoSo
-# 4KRci6g2QIR1YjkkDtGXjFNqLDOXk2cGLPr6SWR7yU1xvssaqDCCZv7G+LEuERCG
-# foBy9osBPL2d30/p0NydO9lRCRuVe2147JwxggQNMIIECQIBATCBkzB8MQswCQYD
-# VQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEe
-# MBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNyb3Nv
-# ZnQgVGltZS1TdGFtcCBQQ0EgMjAxMAITMwAAAiY1tD5nQ5P2HwABAAACJjANBglg
-# hkgBZQMEAgEFAKCCAUowGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8GCSqG
-# SIb3DQEJBDEiBCDaZUW3vnk9mk5gBJHQlB1ywFm8CEM/qthkp1eereJgRjCB+gYL
-# KoZIhvcNAQkQAi8xgeowgecwgeQwgb0EIMwyXGFnTNsZRBrs6GN/BbV0okaNP3VB
-# YqLFjUsFnbgqMIGYMIGApH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hp
+# ZnQgQ29ycG9yYXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJcmVsYW5kIE9wZXJh
+# dGlvbnMgTGltaXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1MgRVNOOjQzMUEtMDVF
+# MC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFtcCBTZXJ2aWNlMIIC
+# IjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAorSgaAA8oOl4ph574zw29egU
+# N8DDepRHLX8FM1zHNJmXG6KrSqUKwzcKafopuYdPTETTCvb9aJfESuAU0iGNUFI/
+# D6R0kvdfpe2oPX+E3sbTQvGi4JPH5qdIYUaJ45V/4bqe8eNvbWzpC+ZKjH193Dei
+# I1XAI918JoQmBhlEXo/Ton1721luZJgincsf5LjMY3jX84WyXUSX3dsS7h/7xVI+
+# w1yjg7pa+0y3o/me2Tsv6UJUdSTQap5ORGSfCnclnP1z3IiiWIWr3Vo7aIPWsgJz
+# q3m5GxpxUHCQk8qzUhk50y/uB+LGE3WIK2C77iy9iFsSfSLUnyMEzGRDW9mXHT4P
+# H7Ozz6CHqQEiNvwcHqlvlCh1pHQh1NXQSAqOoVBs5mi6easf6yxWTfe5DrR79503
+# r8pU6VqC2Y9XMRU4wH9QbYXYsIUZ33Jmndy22W1LBDAbxBPQHCBlncGDU3BgdhVU
+# VLe80mggFO98FdkWho67w4kPdCTRkvdvkY8PrQYE/nQjHXCa0g7LcMttZb6ejMHf
+# Q+tUWXv6+nZ4Ynkr2OkaxclFCw4RIYNMWD26AWbQj/WEdzga18fKtw66L5gzXPza
+# 6jFBfPJeKE3H8QAuwpirmH4ms+5nUjNNQOmNgqJn0U1+3Yn7ClswD79YN0r3fdbY
+# BMDApBZJpNlK7q7HXRsCAwEAAaOCAUkwggFFMB0GA1UdDgQWBBSEWfBxNEamZtXm
+# 8gl92Yq80jfxXTAfBgNVHSMEGDAWgBSfpxVdAF5iXYP05dJlpxtTNRnpcjBfBgNV
+# HR8EWDBWMFSgUqBQhk5odHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpb3BzL2Ny
+# bC9NaWNyb3NvZnQlMjBUaW1lLVN0YW1wJTIwUENBJTIwMjAxMCgxKS5jcmwwbAYI
+# KwYBBQUHAQEEYDBeMFwGCCsGAQUFBzAChlBodHRwOi8vd3d3Lm1pY3Jvc29mdC5j
+# b20vcGtpb3BzL2NlcnRzL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0ElMjAy
+# MDEwKDEpLmNydDAMBgNVHRMBAf8EAjAAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMI
+# MA4GA1UdDwEB/wQEAwIHgDANBgkqhkiG9w0BAQsFAAOCAgEAkdweB4yxvLspLKq0
+# D+miyD4Q0EcxVFpNZuJxiR54gWRkeTDDuymNeB03JhlsBpbwSYJ5uZSgDBCvwHED
+# 2VL8lJpFlOprJzxsXWC2NTfA+O+PO5Fk5jw6LHh6jeBADDEdQAx3Hqi7Zm0JwvQ9
+# 3z5f6dtxkm29WqOcHYXRXfAQwy1hSrLXyfeblqR66jpP/9n0fCkWU4ggsUjQpQ2N
+# gj1DV09J4Y3y7p9Nd81+Xs6qYo++7RKm8qiB/5NDeigOLjlAeFgiEXIRUJW+mJyq
+# pQw+OORlaqcFjR8Hu0G+/7bMdek68YX+kPpDBk7Ue+I/xgiYJ1xcDRBn/vczLtN7
+# 2+RIlD4UgXYLuBSCk//pDEPX5z39Cr+rkc6E4Y28FPk4BhloAyvp628P4xfElQY8
+# TcxraUbZShypocE6ny95D1K1BkltZmrHVKCxmglnuOlM15NKIrXFlXCzdqpCtIwQ
+# 417wNAVF/QDPvzzbumPdTi6fb0tLbScYobV6zvbBsMsKEME4Tj1b9oIXC8dybJq4
+# nbboEXYpRwi1QAbpSNrn+PxGW9uf1q63FnMJu4gm3Oh63njW/iVf723quzyHrSij
+# WMgY0HiRiHQi0Jyu0h8MdhRUp7mxbmLQckPiOFwAlIaUN/k725y/aLWpkRU6fqmL
+# lEOyH5WpyLd23AYy9r8v+Qoba6swggdxMIIFWaADAgECAhMzAAAAFcXna54Cm0mZ
+# AAAAAAAVMA0GCSqGSIb3DQEBCwUAMIGIMQswCQYDVQQGEwJVUzETMBEGA1UECBMK
+# V2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0
+# IENvcnBvcmF0aW9uMTIwMAYDVQQDEylNaWNyb3NvZnQgUm9vdCBDZXJ0aWZpY2F0
+# ZSBBdXRob3JpdHkgMjAxMDAeFw0yMTA5MzAxODIyMjVaFw0zMDA5MzAxODMyMjVa
+# MHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdS
+# ZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMT
+# HU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMIICIjANBgkqhkiG9w0BAQEF
+# AAOCAg8AMIICCgKCAgEA5OGmTOe0ciELeaLL1yR5vQ7VgtP97pwHB9KpbE51yMo1
+# V/YBf2xK4OK9uT4XYDP/XE/HZveVU3Fa4n5KWv64NmeFRiMMtY0Tz3cywBAY6GB9
+# alKDRLemjkZrBxTzxXb1hlDcwUTIcVxRMTegCjhuje3XD9gmU3w5YQJ6xKr9cmmv
+# Haus9ja+NSZk2pg7uhp7M62AW36MEBydUv626GIl3GoPz130/o5Tz9bshVZN7928
+# jaTjkY+yOSxRnOlwaQ3KNi1wjjHINSi947SHJMPgyY9+tVSP3PoFVZhtaDuaRr3t
+# pK56KTesy+uDRedGbsoy1cCGMFxPLOJiss254o2I5JasAUq7vnGpF1tnYN74kpEe
+# HT39IM9zfUGaRnXNxF803RKJ1v2lIH1+/NmeRd+2ci/bfV+AutuqfjbsNkz2K26o
+# ElHovwUDo9Fzpk03dJQcNIIP8BDyt0cY7afomXw/TNuvXsLz1dhzPUNOwTM5TI4C
+# vEJoLhDqhFFG4tG9ahhaYQFzymeiXtcodgLiMxhy16cg8ML6EgrXY28MyTZki1ug
+# poMhXV8wdJGUlNi5UPkLiWHzNgY1GIRH29wb0f2y1BzFa/ZcUlFdEtsluq9QBXps
+# xREdcu+N+VLEhReTwDwV2xo3xwgVGD94q0W29R6HXtqPnhZyacaue7e3PmriLq0C
+# AwEAAaOCAd0wggHZMBIGCSsGAQQBgjcVAQQFAgMBAAEwIwYJKwYBBAGCNxUCBBYE
+# FCqnUv5kxJq+gpE8RjUpzxD/LwTuMB0GA1UdDgQWBBSfpxVdAF5iXYP05dJlpxtT
+# NRnpcjBcBgNVHSAEVTBTMFEGDCsGAQQBgjdMg30BATBBMD8GCCsGAQUFBwIBFjNo
+# dHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpb3BzL0RvY3MvUmVwb3NpdG9yeS5o
+# dG0wEwYDVR0lBAwwCgYIKwYBBQUHAwgwGQYJKwYBBAGCNxQCBAweCgBTAHUAYgBD
+# AEEwCwYDVR0PBAQDAgGGMA8GA1UdEwEB/wQFMAMBAf8wHwYDVR0jBBgwFoAU1fZW
+# y4/oolxiaNE9lJBb186aGMQwVgYDVR0fBE8wTTBLoEmgR4ZFaHR0cDovL2NybC5t
+# aWNyb3NvZnQuY29tL3BraS9jcmwvcHJvZHVjdHMvTWljUm9vQ2VyQXV0XzIwMTAt
+# MDYtMjMuY3JsMFoGCCsGAQUFBwEBBE4wTDBKBggrBgEFBQcwAoY+aHR0cDovL3d3
+# dy5taWNyb3NvZnQuY29tL3BraS9jZXJ0cy9NaWNSb29DZXJBdXRfMjAxMC0wNi0y
+# My5jcnQwDQYJKoZIhvcNAQELBQADggIBAJ1VffwqreEsH2cBMSRb4Z5yS/ypb+pc
+# FLY+TkdkeLEGk5c9MTO1OdfCcTY/2mRsfNB1OW27DzHkwo/7bNGhlBgi7ulmZzpT
+# Td2YurYeeNg2LpypglYAA7AFvonoaeC6Ce5732pvvinLbtg/SHUB2RjebYIM9W0j
+# VOR4U3UkV7ndn/OOPcbzaN9l9qRWqveVtihVJ9AkvUCgvxm2EhIRXT0n4ECWOKz3
+# +SmJw7wXsFSFQrP8DJ6LGYnn8AtqgcKBGUIZUnWKNsIdw2FzLixre24/LAl4FOmR
+# sqlb30mjdAy87JGA0j3mSj5mO0+7hvoyGtmW9I/2kQH2zsZ0/fZMcm8Qq3UwxTSw
+# ethQ/gpY3UA8x1RtnWN0SCyxTkctwRQEcb9k+SS+c23Kjgm9swFXSVRk2XPXfx5b
+# RAGOWhmRaw2fpCjcZxkoJLo4S5pu+yFUa2pFEUep8beuyOiJXk+d0tBMdrVXVAmx
+# aQFEfnyhYWxz/gq77EFmPWn9y8FBSX5+k77L+DvktxW/tM4+pTFRhLy/AsGConsX
+# HRWJjXD+57XQKBqJC4822rpM+Zv/Cuk0+CQ1ZyvgDbjmjJnW4SLq8CdCPSWU5nR0
+# W2rRnj7tfqAxM328y+l7vzhwRNGQ8cirOoo6CGJ/2XBjU02N7oJtpQUQwXEGahC0
+# HVUzWLOhcGbyoYIDVjCCAj4CAQEwggEBoYHZpIHWMIHTMQswCQYDVQQGEwJVUzET
+# MBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMV
+# TWljcm9zb2Z0IENvcnBvcmF0aW9uMS0wKwYDVQQLEyRNaWNyb3NvZnQgSXJlbGFu
+# ZCBPcGVyYXRpb25zIExpbWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjo0
+# MzFBLTA1RTAtRDk0NzElMCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2Vy
+# dmljZaIjCgEBMAcGBSsOAwIaAxUAuoO+BKbfXzqyfi9GLEdWHkCLeT+ggYMwgYCk
+# fjB8MQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMH
+# UmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQD
+# Ex1NaWNyb3NvZnQgVGltZS1TdGFtcCBQQ0EgMjAxMDANBgkqhkiG9w0BAQsFAAIF
+# AO5w6DUwIhgPMjAyNjEwMDcxNTQ4MDVaGA8yMDI2MTAwODE1NDgwNVowdDA6Bgor
+# BgEEAYRZCgQBMSwwKjAKAgUA7nDoNQIBADAHAgEAAgIfKzAHAgEAAgITkTAKAgUA
+# 7nI5tQIBADA2BgorBgEEAYRZCgQCMSgwJjAMBgorBgEEAYRZCgMCoAowCAIBAAID
+# B6EgoQowCAIBAAIDAYagMA0GCSqGSIb3DQEBCwUAA4IBAQBKU/4Baajfs1Y6o+S6
+# EzL8rxtparrNjt1WPeqrzGFUf89Hw1vXXn0piPfMUxDM3nsXmtz2t0pm2BSAJyCa
+# lEu3jIrZCFTUy28gZ/OHZWGNteXsqjWW1I9XNRE9sTPegM889P9ODMCkKhAkfJ61
+# I8f255I/s4CWKP1RztiGmpM2N5BrGf5EcwDyAkhB1adCpiCf62vN/90Y5GTYyGY/
+# 6LKbapa+98UKAzC37zWsDkwkBVwFumCReK5XRTv7WAlEPfuQ2HzozTEpeLV0liA1
+# vddfWNx2AmZcgIJO4mLcrnQzK6RJudA5/71man4+di1iIZDDCB6xMYNil+d3px+W
+# TJKKMYIEDTCCBAkCAQEwgZMwfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hp
 # bmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jw
 # b3JhdGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAC
-# EzMAAAImNbQ+Z0OT9h8AAQAAAiYwIgQggaUg0muDVosM/R8hh4Gxg/lg7+GXQtgd
-# 8qBjcw+8k2swDQYJKoZIhvcNAQELBQAEggIAh471vX19ukUhLng9+hWdsYMsI05D
-# EXO5YcUjmzHIXkLOcPnxwi+q1a9bsvXH22EHE/OymfWGYL/XJ9Ap7/mc+7HbK4BX
-# QlBMBAZBHKR0MzE4H+tLYzwWdkfP5wduw19OC9prhGiBtIDwkMS2r0ywN89tqW03
-# hC3xU4A3I7rfv2Ey6Ji1YMbTytGzsbppue3gwK854P5CNj6fZj+zvUP64px85UGr
-# G7IKzhe3Y+fKQcD3KROFZnObPD3gzVVGiZZdxRc+E9JhlMfm283R+1uu2udIrrU2
-# 1MhcB2jauB9EZyZN0RlTbiSTlMvFO1z6b4tGCEwq/H05XNaV9A6xqj0s3gjR5HI3
-# xkBLi9l3vL0IBzXucBYeWQmAGzyn6TIavViq5si9+AcUwdW0K956Msp/8dyOSg6h
-# mupk/pMOis0JtzG6JpmAFb1MAr+dWAzQIXQvYcy4biSoY2j/WCS9adRWsAV4j158
-# w8FsNVxASC3F8Pa00bsyg5Y7dntcwxUC0MNgkYdrRf9sKMbuOHc6YT3fuC9OqDjT
-# PlgFmMierxK9nDjqggfk72b713VhOjOGO1WZAEfnL1g5vNQ0/xUU8v+zg/NATZa8
-# cGw6laym9WK3UdpJJayx30ZeyglCKIWBx0J4oGCh/TR0RnvUnIwOyOUeW1zcaC0q
-# RclqO4esZNSACZA=
+# EzMAAAIdS8CShziFfjkAAQAAAh0wDQYJYIZIAWUDBAIBBQCgggFKMBoGCSqGSIb3
+# DQEJAzENBgsqhkiG9w0BCRABBDAvBgkqhkiG9w0BCQQxIgQg/nWOcY7/SpZ9t/a2
+# ZQOWYY2sV90KwCLAP/WSojAX5NowgfoGCyqGSIb3DQEJEAIvMYHqMIHnMIHkMIG9
+# BCCxtpXMXEiLJzrqM77ep4rTNwrMOj6gpWN9hZvpj5QFUTCBmDCBgKR+MHwxCzAJ
+# BgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25k
+# MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jv
+# c29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwAhMzAAACHUvAkoc4hX45AAEAAAIdMCIE
+# INmGHPK8W2FpABTc1nIxUgrgTrLY1rsvKA/JebTBO/XzMA0GCSqGSIb3DQEBCwUA
+# BIICACKzkkmfWPoUidrn/3Yun4w8ZRJefZgBO2pSZt9BGIZP7VeU64fiAbqAb6vi
+# kKGw+9y716A0fAN5GqRvuVner43HHjMXdsIPFstt4jZaVuc37Crk5l2s6xLFF2xc
+# YQxo0U2m2Tas3Mshd4HhKPGwQ7zd/ROroHSR/+EKTfaf0ueYJM29aqgHtLjQkPCD
+# pHH9GvsqIzWvQZ+RMRT+yfHt1mdH2sJxktPenChWz2Q1kE6jAEGKFvgyACNNFaHU
+# g265dzjuasREErzSwCd49LvIZRBty6K6EpKGCji9NSFh7nLi22uDkT6mmHH2eVC5
+# CrZazCHEfpgfDvB+KhcqD2mv8Hd+i1YRbEoK1YtsxZZgBpkKv5sm41hxjzzzMrzf
+# mtcfD6aehJ99+Y81giCqc3kneJLQlEPmlEHqaiOEOVKKmJFZyGxnY2CssoNZpnog
+# 1QR1aHcrJz1qSk2crbqEmYRMukhgSfg3bFEsG9iVcNqG9LW7Kzb6T6P06YJsss6S
+# Bhuk5JIKjBXM3wUmkPFWTZ78b62gGvvpgUbwMeSXNqhV0aOTJOhDb8yFChuDc2rT
+# c0LwCLyhcF9tdUFbEFPW0JICPJyfcgFdUuyzoQ5N9XvgJ7MMFxTbU3BPPESAbdRb
+# 7KLfmO3+WlaQjruJDRV8RFif2zLH+jg76ja8pJz9Fl4xdh20
 # SIG # End signature block
