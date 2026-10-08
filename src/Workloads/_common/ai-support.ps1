@@ -52,11 +52,6 @@ function Enable-AiUtf8Console {
     } catch {
         Write-Verbose "Could not force UTF-8 console encoding: $($_.Exception.Message)"
     }
-    try {
-        $null = & $env:ComSpec /d /c 'chcp 65001 >nul 2>&1'
-    } catch {
-        Write-Verbose "Could not set the console code page to UTF-8: $($_.Exception.Message)"
-    }
 }
 
 function ConvertFrom-AiPrefixedJsonArray {
