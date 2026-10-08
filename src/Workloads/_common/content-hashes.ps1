@@ -4,7 +4,6 @@ $Script:DevConfigWorkloadContentHashes = @{
     'intel-ai\openvino-smoke.py' = '0b71b5f5351dd7536c6352dc02ffd523fa89f2fa60a23ff27d45fd3e8f9c1326'
     'intel-ai\sycl-smoke.cpp' = '6ed0361d8374bcae060b84469b3b167738f016abc9f3b46ba5f19ad870bd74b7'
     'java\configuration.winget' = 'f36edd7ca81b9389ba490505892d6ca5068d5942a249a98f3997356300b8447e'
-    'php\configuration.winget' = '34e040193202a8cb0e4cadcefaf5bd678e9fb775bf5ad428d94c78f326604c06'
     'powershell\configuration.winget' = 'b86d0cc7dea26309a14478e5a94304dc9b037fe32220bdc83da8318ed60e220d'
     'python\configuration.winget' = 'bfec7eaad24ba3c5913e7713dafef31d6ac62c53005cc3fb6688db33dbf66f13'
     'pytorch\smoke.py' = 'f28b8ca06e0a2832684f1342626c74904c13d575ce96282f86cf66f44d3eba68'
