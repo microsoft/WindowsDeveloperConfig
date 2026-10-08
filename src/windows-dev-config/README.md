@@ -106,7 +106,7 @@ The same engine can apply one developer workload instead of the whole workstatio
 | Workload | Installs | One-liner |
 | --- | --- | --- |
 | `winui` | Developer Mode, PowerShell 7, .NET SDK 10, Windows App CLI, Visual Studio Community 2026 with the .NET desktop and WinUI application development workloads, and the WinUI `dotnet new` templates | `irm https://aka.ms/devconfig/winui/setup.ps1 \| iex` |
-| `go` | Developer Mode, PowerShell 7, and the Go toolchain | `irm https://aka.ms/devconfig/go/setup.ps1 \| iex` |
+| `go` | PowerShell 7, and the Go toolchain | `irm https://aka.ms/devconfig/go/setup.ps1 \| iex` |
 | `rust` | PowerShell 7, Rustup, Visual Studio Community 2026 with the Desktop development with C++ workload (for the msvc toolchain's linker), and the stable Rust toolchain | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
 | `winappcli` | Developer Mode, PowerShell 7, .NET SDK 10, and the Windows App Development CLI | `irm https://aka.ms/devconfig/winappcli/setup.ps1 \| iex` |
 | `dotnet` | Developer Mode, PowerShell 7, and .NET SDK 10 | `irm https://aka.ms/devconfig/dotnet/setup.ps1 \| iex` |
