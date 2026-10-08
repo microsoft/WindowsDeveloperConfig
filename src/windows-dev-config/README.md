@@ -107,6 +107,7 @@ The same engine can apply one developer workload instead of the whole workstatio
 | --- | --- | --- |
 | `winui` | Developer Mode, PowerShell 7, .NET SDK 10, Windows App CLI, Visual Studio Community 2026 with the .NET desktop and WinUI application development workloads, and the WinUI `dotnet new` templates | `irm https://aka.ms/devconfig/winui/setup.ps1 \| iex` |
 | `rust` | Developer Mode, PowerShell 7, Rustup, Visual Studio Community 2026 with the Desktop development with C++ workload (for the msvc toolchain's linker), and the stable Rust toolchain | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
+| `php` | PowerShell 7 and the PHP runtime/CLI | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
 
 The short URL points at the signed wrapper [`Workloads/winui/setup.ps1`](../Workloads/winui/setup.ps1),
 which verifies and runs `bootstrap.ps1 -Workload winui -Action Full`. To pick a workload with the
