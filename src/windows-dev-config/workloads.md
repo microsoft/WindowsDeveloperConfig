@@ -20,7 +20,7 @@ Run from any PowerShell window. Each one elevates, verifies signatures, and inst
 
 These use the same engine as [Windows Dev Config](./README.md#single-workloads): same elevation, signature checks, logging, and summary. Close Visual Studio before running WinUI, WinForms, or Rust — if the VS Installer wants a restart, the summary will say so.
 
-## From a clone
+## With Winget configure
 
 These haven't moved to one-liners yet. They run with [`winget configure`](https://learn.microsoft.com/windows/package-manager/winget/configure) from the repo root:
 

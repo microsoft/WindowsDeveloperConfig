@@ -101,7 +101,7 @@ Full details: [`wsl-comfort/readme.md`](./wsl-comfort/readme.md).
 
 Just want one toolchain? Each of these is a single command.
 
-| Workload | Run |
+| Workload | Run via IRM Powershell call |
 | --- | --- |
 | WinUI 3 | `irm https://aka.ms/devconfig/winui/setup.ps1 \| iex` |
 | WinForms | `irm https://aka.ms/devconfig/winforms/setup.ps1 \| iex` |
@@ -110,13 +110,16 @@ Just want one toolchain? Each of these is a single command.
 | Go | `irm https://aka.ms/devconfig/go/setup.ps1 \| iex` |
 | Rust | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
 | PHP | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
+
+| Workload | Run via Winget configure |
+| --- | --- |
 | TypeScript | `winget configure -f .\Workloads\typescript\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | Java | `winget configure -f .\Workloads\java\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | Python | `winget configure -f .\Workloads\python\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | SQL | `winget configure -f .\Workloads\sql\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | PowerShell | `winget configure -f .\Workloads\powershell\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 
-The `winget configure` ones haven't moved to one-liners yet, so run them from a clone of this repo. What each one installs: [Workloads](./src/windows-dev-config/workloads.md).
+The `winget configure` will soon move to one-line style. Currently, to run them from a clone of this repo. What each one installs: [Workloads](./src/windows-dev-config/workloads.md).
 
 <br/>
 
@@ -132,14 +135,6 @@ Detects your GPU, installs the matching PyTorch build (CUDA, ROCm, Intel XPU, or
 | Local AI + Foundry Local | `irm https://aka.ms/devconfig/local-ai/foundry/setup.ps1 \| iex` |
 
 Individual pieces (CUDA, ROCm, Intel AI, PyTorch, llama.cpp, Ollama, Foundry Local), hardware support, and options: [AI tooling workloads](./src/windows-dev-config/ai-workloads.md).
-
-<br/>
-
-## 🎨 Command Palette extension (coming soon)
-
-A [PowerToys Command Palette](https://learn.microsoft.com/windows/powertoys/command-palette/overview) extension lives under [`src/future/cmdpal/`](./src/future/cmdpal/). It reads the same flow list as the rest of the repo and launches DSC-backed or PowerShell-native flows from one list.
-
-See [`src/future/cmdpal/README.md`](./src/future/cmdpal/README.md) for build and install instructions.
 
 <br/>
 
