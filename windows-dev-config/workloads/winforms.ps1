@@ -1,29 +1,71 @@
+<#
+.SYNOPSIS
+  WinForms: Developer Mode, .NET SDK 10, and Visual Studio Community 2026 with the
+  .NET desktop development workload.
+
+.DESCRIPTION
+  Workload definition read by dev-config.ps1. It follows the same shape as the WinUI
+  workload, trimmed to what a Windows Forms app needs: no Windows App SDK component,
+  Windows App Development CLI, or WinUI templates. The phase files under steps\ do the work.
+#>
+
 [CmdletBinding()]
-param()
+param(
+    [string] $Action = 'Full'
+)
 
-& {
-    $ErrorActionPreference = 'Stop'
-    Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 
-    $env:PSModulePath = "$PSHOME\Modules;$env:PSModulePath"
+# Visual Studio 2026 supports Windows 11 and Windows Server 2019 or later.
+$isClient = (Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'InstallationType') -eq 'Client'
 
-    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    # Replace main with the full signed payload commit SHA before release.
-    $payloadRef = 'main'
-    $bootstrap = (Invoke-RestMethod -Uri "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$payloadRef/windows-dev-config/bootstrap.ps1" -UseBasicParsing -TimeoutSec 60).TrimStart([char]0xFEFF)
-    $signature = Get-AuthenticodeSignature -Content ([Text.Encoding]::Unicode.GetBytes($bootstrap)) -SourcePathOrExtension '.ps1'
-    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
-        $signature.SignerCertificate.Subject -ne 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') {
-        throw 'The setup bootstrap failed Microsoft signature verification. Setup was not started.'
-    }
-    & ([scriptblock]::Create($bootstrap)) -Ref $payloadRef -Scenario foundry
+@{
+    Name             = 'WinForms'
+    Actions          = @('Full')
+    MinimumOSVersion = if ($isClient) { '10.0.22000' } else { '10.0.17763' }
+    SetupNote        = 'Visual Studio is a multi-GB download'
+    Notes            = @(
+        'Open a new terminal so dotnet is on PATH.'
+        'Create an app with: dotnet new winforms -n MyApp, or the Windows Forms App template in Visual Studio.'
+    )
+    Phases           = @(
+        @{
+            File     = 'prerequisites.ps1'
+            Function = 'Invoke-PrerequisitesPhase'
+            Title    = 'Getting ready'
+        }
+        @{
+            File     = 'registry-system.ps1'
+            Function = 'Invoke-RegistrySystemPhase'
+            Title    = 'Developer Mode'
+            Steps    = @('DeveloperMode')
+        }
+        @{
+            File       = 'packages.ps1'
+            Function   = 'Invoke-PackagesPhase'
+            Title      = 'Packages'
+            # Visual Studio is last so the quick installs finish before its long download.
+            Parameters = @{ Packages = @('PowerShell', 'DotnetSdk', 'VisualStudioCommunity') }
+        }
+        @{
+            File       = 'visual-studio.ps1'
+            Function   = 'Invoke-VisualStudioPhase'
+            Title      = 'Visual Studio workloads'
+            Parameters = @{
+                Components = @(
+                    'Microsoft.VisualStudio.Workload.ManagedDesktop'
+                )
+            }
+        }
+    )
 }
 
 # SIG # Begin signature block
-# MIInUAYJKoZIhvcNAQcCoIInQTCCJz0CAQExDzANBglghkgBZQMEAgEFADB5Bgor
+# MIInUwYJKoZIhvcNAQcCoIInRDCCJ0ACAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAmZAzOCg51msrU
-# YJDePPr12RXVAjCiaHOzaenMx026iKCCDMkwggYEMIID7KADAgECAhMzAAACHPrN
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCD/u7/2BeJ5egd/
+# rhNV+2G2HQOvEZaQPIPCvnP5hunF8aCCDMkwggYEMIID7KADAgECAhMzAAACHPrN
 # xZvoL37EAAAAAAIcMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQxWhcNMjcwNDE1MTg1
@@ -91,66 +133,66 @@ param()
 # /fg8B2qjW88MT/WF5V5uvZGtqa9FSL2RazArA+rDPuf6JGYz4HpgMZHB4S6szWSK
 # YBv0VisCzfxgeU+dquXW9bd0auYlOB58DPcOYKdc3Se94g+xL4pcEhbB54JOgAkw
 # YTu/9dLeH2pDqeJZAABVDWRQCaXfO5LgyKwKCLYXpigrZYCjUSBcr+Ve8PFWMhVT
-# Ql0v4q8J/AUmQN5W4n101cY2L4A7GTQG1h32HHAvfQESWP0xghndMIIZ2QIBATBu
+# Ql0v4q8J/AUmQN5W4n101cY2L4A7GTQG1h32HHAvfQESWP0xghngMIIZ3AIBATBu
 # MFcxCzAJBgNVBAYTAlVTMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
 # KDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIc
 # +s3Fm+gvfsQAAAAAAhwwDQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwG
-# CisGAQQBgjcCAQQwLwYJKoZIhvcNAQkEMSIEIFhoSzxK2e7KM3ZqSSy+qLRgJQcE
-# 41o/hezZdrJZjMDXMEIGCisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBv
+# CisGAQQBgjcCAQQwLwYJKoZIhvcNAQkEMSIEILqfe7IjkLSzpvifrEyas8L4mS3K
+# 5SSCJ6JB0Lqvoq6JMEIGCisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBv
 # AGYAdKEagBhodHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAE
-# ggEAjT5rv/XD9bZJFB4fO0xOTjbW1S9z0204UEK5z5QJUIQMAvqCDgAfuKjNtp3b
-# VsQ4w50w+qyzyGbmvPbs7aNbiovQ8gwuhZXq3mSpj/SRTCOY+PmPS+Ipf9ZbsdlA
-# 0POf50nuTDCmxbvgfMGN8T5m1H/3lL4Bbg0xZTe7cns/vnjYXSfZjD/hnTmc8ZEj
-# qViwi8x3Qrwtvdej7SfOcqMw8Y7sRY9OFEos2+gjjn/sTS6hKq3ZMU2kD69A3P0C
-# vgYmIBX9J+0zgHIUE1Zl45rbO8FKXvvucDgCqFpG9PHhvdsOAmMcV9zhrQkHmrOn
-# 7t5uXtI46gIazRFPJcqaRqdQ0qGCF60wghepBgorBgEEAYI3AwMBMYIXmTCCF5UG
-# CSqGSIb3DQEHAqCCF4YwgheCAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFaBgsqhkiG
+# ggEASm8rwNL2+x1MnuHfCABWWg2/lAj2CKRbDhyiemJEkYVmfr8yWsvmmKn4bHIX
+# 9b/EHS+vezeVsF6GabfV9fzZ5eHqXUeq2Zo2vzmWs1b1w5QjB58gVnB1M5l/Nkk2
+# LAfMZ58DyON8MiR6aVtz5eVgksCnAxDHUajVx58NkaIM5uQXlgkr8DD0fe3X6sWB
+# bYv0U4XzW02VxdbCDeA9f6hA0fwhRBf1sLEGTzgxvSL/TCg82NSeFsoY9rj9/Hit
+# N2ds5y00SYdXumaTybPPlmIHWu8hqsCPY8LpyytLaQ3a5k+Bc9iEaNvvUv7r0RDD
+# 4TgdQjNqyL9ilfJhLD2xEvWmX6GCF7AwghesBgorBgEEAYI3AwMBMYIXnDCCF5gG
+# CSqGSIb3DQEHAqCCF4kwgheFAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFaBgsqhkiG
 # 9w0BCRABBKCCAUkEggFFMIIBQQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQC
-# AQUABCBt1p6aU2hbYaR3RCBK3zVNA8RTM0VonaBLKWLsQoqb2wIGaq6w21IxGBMy
-# MDI2MTAwOTAwMTczOS43MDNaMASAAgH0oIHZpIHWMIHTMQswCQYDVQQGEwJVUzET
+# AQUABCClWSxzTvAUcMiw3CgvtJvSr9Ml3nXyH291mAe/zf7ruQIGaq8mkbwYGBMy
+# MDI2MTAwOTAwMTkyNy4wOTdaMASAAgH0oIHZpIHWMIHTMQswCQYDVQQGEwJVUzET
 # MBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMV
 # TWljcm9zb2Z0IENvcnBvcmF0aW9uMS0wKwYDVQQLEyRNaWNyb3NvZnQgSXJlbGFu
-# ZCBPcGVyYXRpb25zIExpbWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjo0
-# MzFBLTA1RTAtRDk0NzElMCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2Vy
-# dmljZaCCEfswggcoMIIFEKADAgECAhMzAAACHUvAkoc4hX45AAEAAAIdMA0GCSqG
+# ZCBPcGVyYXRpb25zIExpbWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjo1
+# NTFBLTA1RTAtRDk0NzElMCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2Vy
+# dmljZaCCEf4wggcoMIIFEKADAgECAhMzAAACG9CyuAJn93LPAAEAAAIbMA0GCSqG
 # SIb3DQEBCwUAMHwxCzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAw
 # DgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
 # JjAkBgNVBAMTHU1pY3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwMB4XDTI1MDgx
-# NDE4NDgzM1oXDTI2MTExMzE4NDgzM1owgdMxCzAJBgNVBAYTAlVTMRMwEQYDVQQI
+# NDE4NDgzMFoXDTI2MTExMzE4NDgzMFowgdMxCzAJBgNVBAYTAlVTMRMwEQYDVQQI
 # EwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25kMR4wHAYDVQQKExVNaWNyb3Nv
 # ZnQgQ29ycG9yYXRpb24xLTArBgNVBAsTJE1pY3Jvc29mdCBJcmVsYW5kIE9wZXJh
-# dGlvbnMgTGltaXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1MgRVNOOjQzMUEtMDVF
+# dGlvbnMgTGltaXRlZDEnMCUGA1UECxMeblNoaWVsZCBUU1MgRVNOOjU1MUEtMDVF
 # MC1EOTQ3MSUwIwYDVQQDExxNaWNyb3NvZnQgVGltZS1TdGFtcCBTZXJ2aWNlMIIC
-# IjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAorSgaAA8oOl4ph574zw29egU
-# N8DDepRHLX8FM1zHNJmXG6KrSqUKwzcKafopuYdPTETTCvb9aJfESuAU0iGNUFI/
-# D6R0kvdfpe2oPX+E3sbTQvGi4JPH5qdIYUaJ45V/4bqe8eNvbWzpC+ZKjH193Dei
-# I1XAI918JoQmBhlEXo/Ton1721luZJgincsf5LjMY3jX84WyXUSX3dsS7h/7xVI+
-# w1yjg7pa+0y3o/me2Tsv6UJUdSTQap5ORGSfCnclnP1z3IiiWIWr3Vo7aIPWsgJz
-# q3m5GxpxUHCQk8qzUhk50y/uB+LGE3WIK2C77iy9iFsSfSLUnyMEzGRDW9mXHT4P
-# H7Ozz6CHqQEiNvwcHqlvlCh1pHQh1NXQSAqOoVBs5mi6easf6yxWTfe5DrR79503
-# r8pU6VqC2Y9XMRU4wH9QbYXYsIUZ33Jmndy22W1LBDAbxBPQHCBlncGDU3BgdhVU
-# VLe80mggFO98FdkWho67w4kPdCTRkvdvkY8PrQYE/nQjHXCa0g7LcMttZb6ejMHf
-# Q+tUWXv6+nZ4Ynkr2OkaxclFCw4RIYNMWD26AWbQj/WEdzga18fKtw66L5gzXPza
-# 6jFBfPJeKE3H8QAuwpirmH4ms+5nUjNNQOmNgqJn0U1+3Yn7ClswD79YN0r3fdbY
-# BMDApBZJpNlK7q7HXRsCAwEAAaOCAUkwggFFMB0GA1UdDgQWBBSEWfBxNEamZtXm
-# 8gl92Yq80jfxXTAfBgNVHSMEGDAWgBSfpxVdAF5iXYP05dJlpxtTNRnpcjBfBgNV
+# IjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAjsWd52ZZkzB5Xe5g/l2GsOjA
+# z30sg6jVxfFJV+w4xIDVyaI3LO8bIpmzYul3AZHg50UIQ8PrSRZGpQqFkRNu+o3Y
+# KJ4g2uGYBRksHnHYR0uVSCQg58ThkYyeplGX3oAvGRVuPIpQtAiTsR76A/gdoU7H
+# DwEbb73bJwTyrbKHhR+WaMy9DQHI4k5Qo4+bZDs0kj76bvhJvdGU+S8zxQBp7UAh
+# jJnFqKxIusSITE7zCCR422ELhkhVVOFqK2w6h1MAvILe76hxRIcPj0SBL2r8O9tx
+# 5njU4+tg2rAdU153pmyhqazdpUccYBE9wDRFUd/e9CoWx7TdnUicB+Mai7RT6qse
+# 7e5aGqX1B7bnj/ZHvrrfF+BJEIlS9iDXAUgekvXZ+FZmjvLwP+dN+0/crh++r4e8
+# FknF7EX6IJfnmNeDN/68Z59kbaJ1f+P5mnKYfydCeZmxrGpS0taWkDk36D3jPVZf
+# lvxrc+1rhCIlM5v9agLEFI12QiBTfpOBOBr3AGCPk+eH0+latjQajug+2/BD12qb
+# 82500LQytUWT2ota/HYnRgSv1jvZ0/dml1FsxWYzOnCrjfdB/7N6pNySt4vn+PGN
+# 6dFLim7kxos+B9WfQPezJi3fuKyyDAB9zSHPj1Zu8nZfecZJ9um4zj7DFgvJXTDT
+# nG5qlG4ZdbFRa/rrfzkCAwEAAaOCAUkwggFFMB0GA1UdDgQWBBS2vp93/lxLppNK
+# 8OkauJ2AvNmIUDAfBgNVHSMEGDAWgBSfpxVdAF5iXYP05dJlpxtTNRnpcjBfBgNV
 # HR8EWDBWMFSgUqBQhk5odHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20vcGtpb3BzL2Ny
 # bC9NaWNyb3NvZnQlMjBUaW1lLVN0YW1wJTIwUENBJTIwMjAxMCgxKS5jcmwwbAYI
 # KwYBBQUHAQEEYDBeMFwGCCsGAQUFBzAChlBodHRwOi8vd3d3Lm1pY3Jvc29mdC5j
 # b20vcGtpb3BzL2NlcnRzL01pY3Jvc29mdCUyMFRpbWUtU3RhbXAlMjBQQ0ElMjAy
 # MDEwKDEpLmNydDAMBgNVHRMBAf8EAjAAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMI
-# MA4GA1UdDwEB/wQEAwIHgDANBgkqhkiG9w0BAQsFAAOCAgEAkdweB4yxvLspLKq0
-# D+miyD4Q0EcxVFpNZuJxiR54gWRkeTDDuymNeB03JhlsBpbwSYJ5uZSgDBCvwHED
-# 2VL8lJpFlOprJzxsXWC2NTfA+O+PO5Fk5jw6LHh6jeBADDEdQAx3Hqi7Zm0JwvQ9
-# 3z5f6dtxkm29WqOcHYXRXfAQwy1hSrLXyfeblqR66jpP/9n0fCkWU4ggsUjQpQ2N
-# gj1DV09J4Y3y7p9Nd81+Xs6qYo++7RKm8qiB/5NDeigOLjlAeFgiEXIRUJW+mJyq
-# pQw+OORlaqcFjR8Hu0G+/7bMdek68YX+kPpDBk7Ue+I/xgiYJ1xcDRBn/vczLtN7
-# 2+RIlD4UgXYLuBSCk//pDEPX5z39Cr+rkc6E4Y28FPk4BhloAyvp628P4xfElQY8
-# TcxraUbZShypocE6ny95D1K1BkltZmrHVKCxmglnuOlM15NKIrXFlXCzdqpCtIwQ
-# 417wNAVF/QDPvzzbumPdTi6fb0tLbScYobV6zvbBsMsKEME4Tj1b9oIXC8dybJq4
-# nbboEXYpRwi1QAbpSNrn+PxGW9uf1q63FnMJu4gm3Oh63njW/iVf723quzyHrSij
-# WMgY0HiRiHQi0Jyu0h8MdhRUp7mxbmLQckPiOFwAlIaUN/k725y/aLWpkRU6fqmL
-# lEOyH5WpyLd23AYy9r8v+Qoba6swggdxMIIFWaADAgECAhMzAAAAFcXna54Cm0mZ
+# MA4GA1UdDwEB/wQEAwIHgDANBgkqhkiG9w0BAQsFAAOCAgEAZkU1XxQD4OTM3GTh
+# t32TXShIfPBoMfSsFsBQqFOZqLJOxyJOllIBFpmpvOtGNPkC5Z8ldG8aCpvgFNo/
+# jDWeT5FiW53dAj9KnZxpsQ3Pf5fRzSGHRcxEMOdXIVzDJwcZUX0cjfxna7ydNv8e
+# XB/Xk6G6SyrR2OH6S1LHMW11m3UvKF+eLjIPl45rximuDCoEd+ad0lOAXA5/vZOK
+# N5n/ePYeP0LRchZX0Q6H8n/ZmSPMlbli3MO851Q09RmT/ZGHa+/Fdy+WLDrwcYyk
+# V9mUy/4TbwKw6FtdR6ZPHxMdIi1pk8Y2mC/GzCq0LCsH0uTFeQ6Q7Nc3MRmER/3m
+# LWUhbaWHgX1FbYchvR22b+Bup+YPR5Q/0BhaaAN6AIBfcGs+u/nJoIByyZKA8cTy
+# CmnUI/4vW6D4vywg3XBFf4f2DwFHy/evsC+58KMl+k2wa05X2kK0T/bCPLhaov9Z
+# XyobawfNOLYGiauKT2FWvbwZzHIFCTxjBww6Pt5uRvCE/jnUcf/xhlOGMn6iKO9X
+# t49vZTE2SfIBk/34iLTRBJ6H7aGPTTQnza3OfWu1/dRycC6Wl5ons3PjnGXTSKSx
+# XllJPmg6R/ulGonP/UCYoJ6mN+EXjfyDLPXLqsr91+VTG1rYzRCjPwBFAHv4EIwa
+# E0ajCrf75eUGI3+oXU0UP6rloZ8wggdxMIIFWaADAgECAhMzAAAAFcXna54Cm0mZ
 # AAAAAAAVMA0GCSqGSIb3DQEBCwUAMIGIMQswCQYDVQQGEwJVUzETMBEGA1UECBMK
 # V2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0
 # IENvcnBvcmF0aW9uMTIwMAYDVQQDEylNaWNyb3NvZnQgUm9vdCBDZXJ0aWZpY2F0
@@ -190,44 +232,44 @@ param()
 # aQFEfnyhYWxz/gq77EFmPWn9y8FBSX5+k77L+DvktxW/tM4+pTFRhLy/AsGConsX
 # HRWJjXD+57XQKBqJC4822rpM+Zv/Cuk0+CQ1ZyvgDbjmjJnW4SLq8CdCPSWU5nR0
 # W2rRnj7tfqAxM328y+l7vzhwRNGQ8cirOoo6CGJ/2XBjU02N7oJtpQUQwXEGahC0
-# HVUzWLOhcGbyoYIDVjCCAj4CAQEwggEBoYHZpIHWMIHTMQswCQYDVQQGEwJVUzET
+# HVUzWLOhcGbyoYIDWTCCAkECAQEwggEBoYHZpIHWMIHTMQswCQYDVQQGEwJVUzET
 # MBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMV
 # TWljcm9zb2Z0IENvcnBvcmF0aW9uMS0wKwYDVQQLEyRNaWNyb3NvZnQgSXJlbGFu
-# ZCBPcGVyYXRpb25zIExpbWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjo0
-# MzFBLTA1RTAtRDk0NzElMCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2Vy
-# dmljZaIjCgEBMAcGBSsOAwIaAxUAuoO+BKbfXzqyfi9GLEdWHkCLeT+ggYMwgYCk
+# ZCBPcGVyYXRpb25zIExpbWl0ZWQxJzAlBgNVBAsTHm5TaGllbGQgVFNTIEVTTjo1
+# NTFBLTA1RTAtRDk0NzElMCMGA1UEAxMcTWljcm9zb2Z0IFRpbWUtU3RhbXAgU2Vy
+# dmljZaIjCgEBMAcGBSsOAwIaAxUAhoV6r49M4GBd41K1RYB1Z0f4zuCggYMwgYCk
 # fjB8MQswCQYDVQQGEwJVUzETMBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMH
 # UmVkbW9uZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQD
 # Ex1NaWNyb3NvZnQgVGltZS1TdGFtcCBQQ0EgMjAxMDANBgkqhkiG9w0BAQsFAAIF
-# AO5yObUwIhgPMjAyNjEwMDgxNTQ4MDVaGA8yMDI2MTAwOTE1NDgwNVowdDA6Bgor
-# BgEEAYRZCgQBMSwwKjAKAgUA7nI5tQIBADAHAgEAAgIT/DAHAgEAAgISRzAKAgUA
-# 7nOLNQIBADA2BgorBgEEAYRZCgQCMSgwJjAMBgorBgEEAYRZCgMCoAowCAIBAAID
-# B6EgoQowCAIBAAIDAYagMA0GCSqGSIb3DQEBCwUAA4IBAQBiKC5or+VRrGf0PGPs
-# oDeCZCVOuAJ262FpnIiLE8x2A1KOwLR7JkgOlmXA+6sToAX5Pk8lkJwgBenanJDv
-# qXdomCUsm4cyPLYF+9jTBiy1Rj52W7+Kkhh3NddhD7Q5VjkK4f9JoxZecH7yXNL5
-# w+LhBh3b+F+d7rBZ0jvUrNMTLbUyQGM3UhKh6zNkO/rbdzJfLVYjtrRig00xSJO8
-# xUQvvd752uYMl1bLk6vGUjh0QruNNjc8FIHODqAgch07kb6Ky3a054HOXONIugfb
-# lfXQrtqGz3oCrAJUR9Nz2UNGCLzjEWzUJ0hQsvCJwrH1cj7oDOcZ3tTohcwj4CrB
-# nmoCMYIEDTCCBAkCAQEwgZMwfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldhc2hp
-# bmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBDb3Jw
-# b3JhdGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIwMTAC
-# EzMAAAIdS8CShziFfjkAAQAAAh0wDQYJYIZIAWUDBAIBBQCgggFKMBoGCSqGSIb3
-# DQEJAzENBgsqhkiG9w0BCRABBDAvBgkqhkiG9w0BCQQxIgQgb6dZ3+gXGKkDowRR
-# 9XHIzlkWxe78yFQtH/AvZTA+hc8wgfoGCyqGSIb3DQEJEAIvMYHqMIHnMIHkMIG9
-# BCCxtpXMXEiLJzrqM77ep4rTNwrMOj6gpWN9hZvpj5QFUTCBmDCBgKR+MHwxCzAJ
-# BgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRtb25k
-# MR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1pY3Jv
-# c29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwAhMzAAACHUvAkoc4hX45AAEAAAIdMCIE
-# IFw7mBez40RyxwJv01WQm2IkdO9cEu3irNrRNU+s+pdSMA0GCSqGSIb3DQEBCwUA
-# BIICAIp2sQYy+O6xHgJS8Zv5ki2QyWxbKyhp1tzCC3ZfXiThOaD9zKKH3X608AdO
-# 8vv0ZzNB0D8TQs294y+HhJ1EUiMfeaK7+nMeKOVf4zWsuzBgfwIRbOKlMv+gOao9
-# haELZ6BHYTzt64QGjNcpEkna/A/Z+u6bQAaj6wvMgsEfVVDWCeKXOcdxeAP0o7Zj
-# S96NlpTutzlufRAX2Yc4THA8qt5mBcYl9ylPGuMj19Muwxc47VZchc9pZLp5WL2M
-# TQVnrao+c2bLzyPq/JGepo34oc8jJrmxI2Xn+Kgnovr13I9olz6nBCF4+WH6VNgg
-# MfVWdrARCJY01G2D5u/G/4N89bx7ZNC+KvMceMVjoNPAbsLF7JLEqfLEqbDDNeRa
-# zzcEuwRXhiJ47rYFY0+9RDiIgNC9PSIvU1GFRJcu/PfcOvXFkSn1XFXkfjw0nBha
-# 3WjUjSUdEDeY1jIqApHmVIb9vQ71I3SScVZFO5DHhLknjxRcAvxkni8xIly64ow1
-# TZswFGIkUbGCe20nCa8R7X/lAc1tk5r2QRxzgYcjZAuBHafNgKW2Uxd5FI32d6pD
-# ctkw4qPkqxCWC4x7nv9muL3MC2LPZGyjMOvzOT3kYlGu/ADclx5NdIDHHRMwrQsD
-# p2cLWpP0HHEJN47jMOmTmYmRw/vq5vAOPtQXQpSTTe7iLPm9
+# AO5yr2owIhgPMjAyNjEwMDkwMDEwMThaGA8yMDI2MTAxMDAwMTAxOFowdzA9Bgor
+# BgEEAYRZCgQBMS8wLTAKAgUA7nKvagIBADAKAgEAAgIYEQIB/zAHAgEAAgISIDAK
+# AgUA7nQA6gIBADA2BgorBgEEAYRZCgQCMSgwJjAMBgorBgEEAYRZCgMCoAowCAIB
+# AAIDB6EgoQowCAIBAAIDAYagMA0GCSqGSIb3DQEBCwUAA4IBAQAoqan9+QowcK9u
+# e3DJqLi2ccbsHldPzG0JyUcVv8Cay5rW/h3+xqkbXniyBUFfHwc5EM83BDECmXXh
+# RXWNOm7quU5zVVNUzZ0hUh+0eYGkW91hMkPztpslj5anj4P4pc7by00eP/EkOaUb
+# jqNhdEPl+ujP1pk7arPyxjI1e+ZodSq/6d6ZSonDwzwUh0mw25C2kw4LQ4zizvPg
+# MWzGSJiW76He1JMCiSadRnAPtgGp81eGrwwECIfktRwrps9UTVCePTiQM1wXWMNS
+# 1ZZujDI7tpKGcfO0LmjTQ2Kr1IeLx/QD60QciP2GjWLkyhlF8+tt4qPZP3ud/TCF
+# v7EF9krWMYIEDTCCBAkCAQEwgZMwfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldh
+# c2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBD
+# b3Jwb3JhdGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIw
+# MTACEzMAAAIb0LK4Amf3cs8AAQAAAhswDQYJYIZIAWUDBAIBBQCgggFKMBoGCSqG
+# SIb3DQEJAzENBgsqhkiG9w0BCRABBDAvBgkqhkiG9w0BCQQxIgQg4iqLN5JPIlM9
+# c7kbm57Z8Qjz3nhH4r9/PPIRhmIl518wgfoGCyqGSIb3DQEJEAIvMYHqMIHnMIHk
+# MIG9BCAwJRSVuD2jmMcQCFXdLuJAwDpUVNZ6bc6dfJU83Q2LgDCBmDCBgKR+MHwx
+# CzAJBgNVBAYTAlVTMRMwEQYDVQQIEwpXYXNoaW5ndG9uMRAwDgYDVQQHEwdSZWRt
+# b25kMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xJjAkBgNVBAMTHU1p
+# Y3Jvc29mdCBUaW1lLVN0YW1wIFBDQSAyMDEwAhMzAAACG9CyuAJn93LPAAEAAAIb
+# MCIEIOKI/ZXf48Y4CFDuPyVqj6+q5eyyTTqX/IM3AsmHkOsKMA0GCSqGSIb3DQEB
+# CwUABIICAAqoNIa/ZKu+VfkbXZuZQtp7eQI9FvIgbyE+WNdCj5uVWVvIkM5V0A2i
+# r9lqHB5x8za20vLRD0pMppaKrVNdzMujlL2TPxKgTKqRkH75vGJJ/OJL3jMEx/87
+# ck26q3Fx45jH69Tpa5uYwXv+O9aw+b9T9V2V/6NyYrHmkfK6fW80Rb6ODxFNLlJd
+# 9IRhg7j/cUANRPfLLPV1GXzUss3oKYW/ZwLVuBz15+MrjHtNlqcMRJdpjjOpm5CV
+# LC3Q2XDxnvWZGzhbqv2CeZLqxpTCMMWcKxkKFHY7cl8VoNqaDeQqGVJ0+3r1TVQO
+# Ennnf7t0Q8IAURPLzwK329L7NgdBD/Ns12mqTfO2Cm5/lI8D0UOReGjsibk+WQEe
+# +niCLQIF8C69kricyK7wuVc1q5A9/tGj52ijdJF2ib9GhnZVLETNAtLiP3jB5sNC
+# z7IT2QvZnRPHA8D2se/JD+LVeN1wEUKMW2G4iL0ltDMzKdua19Ql5I6DDX771/k2
+# 8wiDNmnrXU51jcZHP8KrEhfFC2f4LzCHdr0Se/3STdDboX3P3SE9/NO28VempTjL
+# hJgJ2tyu3oMhNkYyBQBtLOxNigeJc8qjDpE0iCubgCxv9iSbya1ltRIVdgbfz6rP
+# 7hKgAvaItOj6O6iE65JEM9jqrhEd7UslCPuyZmGjyd4PvbFcxi0P
 # SIG # End signature block

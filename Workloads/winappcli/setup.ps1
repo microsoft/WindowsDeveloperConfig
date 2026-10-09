@@ -8,22 +8,21 @@ param()
     $env:PSModulePath = "$PSHOME\Modules;$env:PSModulePath"
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    # Replace main with the full signed payload commit SHA before release.
-    $payloadRef = 'main'
+    $payloadRef = '2dc3d2d30953c12639ad2824c1ff11ca606175d7'
     $bootstrap = (Invoke-RestMethod -Uri "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$payloadRef/windows-dev-config/bootstrap.ps1" -UseBasicParsing -TimeoutSec 60).TrimStart([char]0xFEFF)
     $signature = Get-AuthenticodeSignature -Content ([Text.Encoding]::Unicode.GetBytes($bootstrap)) -SourcePathOrExtension '.ps1'
     if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
         $signature.SignerCertificate.Subject -ne 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') {
         throw 'The setup bootstrap failed Microsoft signature verification. Setup was not started.'
     }
-    & ([scriptblock]::Create($bootstrap)) -Ref $payloadRef -Scenario ollama
+    & ([scriptblock]::Create($bootstrap)) -Ref $payloadRef -Workload winappcli -Action Full
 }
 
 # SIG # Begin signature block
 # MIInOgYJKoZIhvcNAQcCoIInKzCCJycCAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDRjlsDXB4qPRLn
-# edhj+i053JMcmdbgNoE17DzItdyPXqCCDMkwggYEMIID7KADAgECAhMzAAACHPrN
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBGBAEs5HAUD1Iw
+# aPQ6uRpS09ddoIL2VDymQiNVpUYMlaCCDMkwggYEMIID7KADAgECAhMzAAACHPrN
 # xZvoL37EAAAAAAIcMA0GCSqGSIb3DQEBCwUAMFcxCzAJBgNVBAYTAlVTMR4wHAYD
 # VQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24xKDAmBgNVBAMTH01pY3Jvc29mdCBD
 # b2RlIFNpZ25pbmcgUENBIDIwMjQwHhcNMjYwNDE2MTg1OTQxWhcNMjcwNDE1MTg1
@@ -95,19 +94,19 @@ param()
 # MFcxCzAJBgNVBAYTAlVTMR4wHAYDVQQKExVNaWNyb3NvZnQgQ29ycG9yYXRpb24x
 # KDAmBgNVBAMTH01pY3Jvc29mdCBDb2RlIFNpZ25pbmcgUENBIDIwMjQCEzMAAAIc
 # +s3Fm+gvfsQAAAAAAhwwDQYJYIZIAWUDBAIBBQCggZAwGQYJKoZIhvcNAQkDMQwG
-# CisGAQQBgjcCAQQwLwYJKoZIhvcNAQkEMSIEIJ44tqI8xMQNiVYf4nu3IP7J3ggg
-# S+LgVDe6XBUf5vxqMEIGCisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBv
+# CisGAQQBgjcCAQQwLwYJKoZIhvcNAQkEMSIEIAL4DgTwAGo3qZ1bHuWOUWHxdh4C
+# KAjSLIDaBOGiyn/dMEIGCisGAQQBgjcCAQwxNDAyoBSAEgBNAGkAYwByAG8AcwBv
 # AGYAdKEagBhodHRwOi8vd3d3Lm1pY3Jvc29mdC5jb20wDQYJKoZIhvcNAQEBBQAE
-# ggEAfmDuxJl6Pk/BM300WihN5KP/wx42wEcYBqrw3PhkKDWnoSakh8dPhUUOgNVr
-# 3mN9eQGR083p1TF+BL43ao/kot1AXJcCKaIfO8o/icSAinvJeuX/sPb4xUhA1xt6
-# aZdovS8wMwb2KAHDySWGLAWrv5SiN/9Ksxx4RPxDx7DgcqICKZLxIHrYbGYjZWer
-# XMAagymEAYieNQ5OOAU76hKUgOMB9SykfOzAbwYGtm9XabugKubKFRf/Q2kGuLfC
-# /M9bpmgyDgc7CeGw7+1em1zk9CyJEMFzKHkPruPBnXutQW8wmB/d62uIjrMR//do
-# 2jCTPQKCyBfN9FCZB9X1ea6sY6GCF5cwgheTBgorBgEEAYI3AwMBMYIXgzCCF38G
+# ggEADULqFdQLaC2HgTsxr7aOdEKda7xJECnJ00Pyz1SUyuLZCiyE1xNFaqz1YVNA
+# p8NKi2hFb6gNFhjqGqiuwwroxIyCMiHDcbE/ERkGcKWF5iX6IUH6drsMyr2gGQot
+# kz0bx3PxcTEJSvfKB9eiApaaatQHVxbQ//5zbldC4LLrbCHqbB4Db51+08SROyzS
+# O0tACVRjZ7VfOtc0FodGNtnCW+OSyMySRFstXGrgBN17tV+6G6PbJ3HUksbupxSO
+# DaSJuO6Eu/2Zo6uU74N8MHDCbnUsRoIC/fz83KnLPHGDWtaMu0ImKCWMVvU2JHcc
+# xo5cxvhq6+F9XSmpQfS4lbj+MqGCF5cwgheTBgorBgEEAYI3AwMBMYIXgzCCF38G
 # CSqGSIb3DQEHAqCCF3AwghdsAgEDMQ8wDQYJYIZIAWUDBAIBBQAwggFSBgsqhkiG
 # 9w0BCRABBKCCAUEEggE9MIIBOQIBAQYKKwYBBAGEWQoDATAxMA0GCWCGSAFlAwQC
-# AQUABCAZtKekDwWxc31Wyjvv0Rnvv+3wn0iBQGOQun9fDj58JAIGaqn6n60RGBMy
-# MDI2MTAwOTAwMTc0OC40NzZaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzET
+# AQUABCBZ5EVPLkYVbYKCr8vCcf+jGhf1X8prW/G+rM85I3WqzgIGaqn6n7nzGBMy
+# MDI2MTAwOTAwMTkwNC42ODNaMASAAgH0oIHRpIHOMIHLMQswCQYDVQQGEwJVUzET
 # MBEGA1UECBMKV2FzaGluZ3RvbjEQMA4GA1UEBxMHUmVkbW9uZDEeMBwGA1UEChMV
 # TWljcm9zb2Z0IENvcnBvcmF0aW9uMSUwIwYDVQQLExxNaWNyb3NvZnQgQW1lcmlj
 # YSBPcGVyYXRpb25zMScwJQYDVQQLEx5uU2hpZWxkIFRTUyBFU046N0YwMC0wNUUw
@@ -212,22 +211,22 @@ param()
 # ZDEeMBwGA1UEChMVTWljcm9zb2Z0IENvcnBvcmF0aW9uMSYwJAYDVQQDEx1NaWNy
 # b3NvZnQgVGltZS1TdGFtcCBQQ0EgMjAxMAITMwAAAh6jrKRuOW98SQABAAACHjAN
 # BglghkgBZQMEAgEFAKCCAUowGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMC8G
-# CSqGSIb3DQEJBDEiBCDxmjPL63f/Hpd9ttG0M2A6A6Jm9dC4eJyC05euvXnnoDCB
+# CSqGSIb3DQEJBDEiBCAUiWXmf/lCPmjA+kqyLaTRKWwxbysHTCiiT9w2jsGzwDCB
 # +gYLKoZIhvcNAQkQAi8xgeowgecwgeQwgb0EIC+BXWrz9geMgM8Bvn8bqxHjhHXJ
 # 29EBizITIw0B9vOCMIGYMIGApH4wfDELMAkGA1UEBhMCVVMxEzARBgNVBAgTCldh
 # c2hpbmd0b24xEDAOBgNVBAcTB1JlZG1vbmQxHjAcBgNVBAoTFU1pY3Jvc29mdCBD
 # b3Jwb3JhdGlvbjEmMCQGA1UEAxMdTWljcm9zb2Z0IFRpbWUtU3RhbXAgUENBIDIw
 # MTACEzMAAAIeo6ykbjlvfEkAAQAAAh4wIgQggLJhSHoLT6aQsQQPz44kV41C/D2N
-# IKfCDNsq3JfYfL8wDQYJKoZIhvcNAQELBQAEggIAKfLz1LNentFJ92hSCviogw3Z
-# Oij5Xb8eqn2r9gWmM1mKtAuevN69IrDQu6oFY2rCLTPeZup/UFow4NLrH0ZarytY
-# mwB+lPeBBdMRGdOfTobjPP7TtHozSNHJsBQZ+II/Cqj2xFdYPQW4lB1lIqp9PK8M
-# jjxjNAcVXwnakIY413uNqOAB7mJEQzDPASIdyH1r2C5yCFMQa7HER7QQ0GhfEcvu
-# eW4runmZHptUditL58hO57riXnqInc0NZE/hJlN2gkjwyEdGkB+Po9a1WA4cbN+0
-# 0omE6LJmYaLPVuwnV0UWHs2/d4uj6+j4DH5CT6SXyvvLaS/MP22Aajqk2gmknlSw
-# EN/se8/1DoVmazAlYiQmMeVnQx5NRCsx0dEGjEi7v32niDuhLGevWSRqIOXAAvpw
-# +Wvzt99vsHQMywnVi4OqRxcmIs+TjpPYgEvyF4nRNgO7tu2xtn9dZGkljlmwaere
-# STodXjGEiBAn8ZhgG2dRbjLrBFGqFliKlIFRiJeiPIvKj7ErpKt7UX9K0HppeQsp
-# XrhQIs1zpNJOsQyVWFTM7raZYxLZT1vFBUN+hGaJ2lTnsMhqBdi7jVR45PfsQWi6
-# kkn6v6vsZeeaJkIh+6ePtFo7v3kbUja7YwBjljtHgJNqJ+1r3x/CSywvxVVhlpUM
-# H1TFFa1eLM3/u8iPiuE=
+# IKfCDNsq3JfYfL8wDQYJKoZIhvcNAQELBQAEggIATKM9k4aFGWMNpPuM1msuWUEJ
+# C1nlR9wezsGOWif834dXtT85HjPSPg3KwQli3PtjSpGvJonS0pUO9uKxI1LzFxaO
+# qnc+WInZxshK88nVCgY24kIRiOMCtxkPL+qxp7qGh8DKQ3+5phYyxJ+rMmozlOcq
+# jEsbqNdaRaFYdeWkSL6sCRkbcwVp8v8unibeVrw5i4O3AylGC56aNl4frlIe5uoS
+# mYH9uDDlEhagl0vHF3cdbKfOxLgi5mJgzOiu8JS1q5Rm7btbg+1pnDeuUMuugt52
+# 3gJ6ZoAclJGoLvBzZhK2VTeLhiQAz2yU/51UscKtvTSm74q/r0h57dW+o/v6Wuam
+# yr787BPLKABL8g71f14Rba3+yssYlkBDSDeMpLE7z6WxVkI3Ipmjn6jCNVK4VpNd
+# 7HbX5RFZlRgeGrq/NjmNbnrgwTL6JPDjdOIo9eOuOS60GeaxOQaXCRrowp1uw7U5
+# 3izXgAsOWmFgR/S33cAOh+czKs5Fi5GRovVqkYwzYoXMbGSOQmadcmVAQuuBycwJ
+# WnK2lBIdXbmRjLk/49E1wLoVGVt0NaH0rtrNWecjXJUMOqGu0g+G8Yc/otRq0BQP
+# KLWB490Xz9UdWwtJaqw4+y+gsPU8vabWyjXWErXMU0CAbxoy1GDgIZkVGJgFigKn
+# z5FhN+Jp6NT4leKpaDU=
 # SIG # End signature block
