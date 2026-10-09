@@ -2466,7 +2466,8 @@ function Wait-JsonEndpoint {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [uri] $Uri,
-        [int] $TimeoutSeconds = 30
+        [int] $TimeoutSeconds = 30,
+        [System.Diagnostics.Process] $Process
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -2474,6 +2475,9 @@ function Wait-JsonEndpoint {
         try {
             return Invoke-RestMethod -Uri $Uri -TimeoutSec 5
         } catch {
+            if ($Process -and $Process.HasExited) {
+                throw "The server process for '$Uri' exited with code $($Process.ExitCode) before it became ready."
+            }
             Start-Sleep -Seconds 1
         }
     } while ((Get-Date) -lt $deadline)

@@ -305,7 +305,14 @@ try {
             -RedirectStandardOutput $serverStdout `
             -RedirectStandardError $serverStderr `
             -PassThru
-        $version = Wait-JsonEndpoint -Uri ([uri]"$apiBase/api/version") -TimeoutSeconds 30
+        # The API waits for GPU discovery, which can take over 40 seconds on CPU-only machines.
+        Write-Host 'Waiting for the Ollama server to start. This can take up to 2 minutes.'
+        try {
+            $version = Wait-JsonEndpoint -Uri ([uri]"$apiBase/api/version") -TimeoutSeconds 120 -Process $serverProcess
+        } catch {
+            $serverLog = (Get-Content -LiteralPath $serverStderr -Tail 10 -ErrorAction SilentlyContinue) -join [Environment]::NewLine
+            throw "$($_.Exception.Message) Server log ($serverStderr):$([Environment]::NewLine)$serverLog"
+        }
     }
     if ([string]$version.version -ne [string]$manifestEvidence.Version) {
         throw "Ollama API reported version '$($version.version)', expected WinGet installer version '$($manifestEvidence.Version)'."
