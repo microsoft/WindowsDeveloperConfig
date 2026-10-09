@@ -4,7 +4,7 @@ Get a working local AI setup on Windows. These flows look at your hardware, inst
 
 This isn't a replacement for PyPI/Conda, and it won't install every vendor SDK. You get the stack that matches your machine and nothing else.
 
-← Back to [Windows Dev Config](../src/windows-dev-config/README.md) · [All workloads](./workloads.md)
+← Back to [Windows Dev Config](./README.md) · [All workloads](./workloads.md)
 
 ## Quick start
 
@@ -108,7 +108,7 @@ Already have the repo? Skip bootstrap and run the installers from an elevated sh
 .\src\Workloads\llama.cpp\install.ps1 -Backend ROCm
 ```
 
-These are unsigned source files. See [running unsigned](../src/windows-dev-config/README.md#running-it-other-ways) for the execution policy steps. The signed copies live under `.\Workloads\` (e.g. `.\Workloads\local-ai\install.ps1`).
+These are unsigned source files. See [running unsigned](./README.md#running-it-other-ways) for the execution policy steps. The signed copies live under `.\Workloads\` (e.g. `.\Workloads\local-ai\install.ps1`).
 
 Every installer accepts `-PlanOnly` and `-ReportPath`. Reports land in `%LOCALAPPDATA%\DevConfig\reports\<flow>-latest.json` by default. To see what hardware the scripts detect:
 
@@ -153,4 +153,4 @@ It downloads Qwen2.5-Coder-1.5B (~1 GB) and has it write a small Python function
 - **ARM64:** AMD and Intel don't publish Windows ARM64 toolkits.
 - **Foundry Local and Ollama** pick their own device. The report tells you what they actually used, including CPU fallback.
 
-Maintainer detail — version pinning, preview promotion, and partner hardware validation — is in [`src/docs/ai-workloads.md`](../src/docs/ai-workloads.md).
+Maintainer detail — version pinning, preview promotion, and partner hardware validation — is in [`src/docs/ai-workloads.md`](../docs/ai-workloads.md).

@@ -1,6 +1,6 @@
 # AI workloads — maintainer and partner reference
 
-> 👋 **Just want to run it?** See [AI tooling workloads](../../doc/ai-workloads.md).
+> 👋 **Just want to run it?** See [AI tooling workloads](../windows-dev-config/ai-workloads.md).
 
 This is the deep reference for the AI flows: how backends get picked, where each artifact comes from, what's still on a preview channel, and how partners validate on real hardware. See the repo-wide [Developer Guide](./development.md) for CI and the signed/source layout.
 

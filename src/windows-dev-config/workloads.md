@@ -2,7 +2,7 @@
 
 Don't need the whole dev box? Workloads set up one toolchain at a time. They're idempotent, so re-running is safe.
 
-← Back to [Windows Dev Config](../src/windows-dev-config/README.md) · Looking for AI? See [AI tooling workloads](./ai-workloads.md).
+← Back to [Windows Dev Config](./README.md) · Looking for AI? See [AI tooling workloads](./ai-workloads.md).
 
 ## One-liners
 
@@ -18,7 +18,7 @@ Run from any PowerShell window. Each one elevates, verifies signatures, and inst
 | Rust | PowerShell 7, rustup, the stable toolchain, and Visual Studio Community 2026 C++ workload (for the MSVC linker) | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
 | PHP | PowerShell 7 and PHP | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
 
-These use the same engine as [Windows Dev Config](../src/windows-dev-config/README.md#single-workloads): same elevation, signature checks, logging, and summary. Close Visual Studio before running WinUI, WinForms, or Rust — if the VS Installer wants a restart, the summary will say so.
+These use the same engine as [Windows Dev Config](./README.md#single-workloads): same elevation, signature checks, logging, and summary. Close Visual Studio before running WinUI, WinForms, or Rust — if the VS Installer wants a restart, the summary will say so.
 
 ## From a clone
 
@@ -38,7 +38,7 @@ winget configure -f .\Workloads\<name>\configuration.winget --accept-configurati
 
 Swap `<name>` for `typescript`, `java`, `python`, `sql`, or `powershell`.
 
-If `winget configure` isn't recognized, see [Troubleshooting](../README.md#-troubleshooting).
+If `winget configure` isn't recognized, see [Troubleshooting](../../README.md#-troubleshooting).
 
 ## AI tooling
 

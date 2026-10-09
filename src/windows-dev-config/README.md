@@ -107,7 +107,7 @@ The same engine can set up one toolchain instead of the whole workstation — sa
 irm https://aka.ms/devconfig/winui/setup.ps1 | iex
 ```
 
-WinUI, WinForms, WinAppCLI, .NET, Go, Rust, and PHP all have one-liners. The full list and what each installs: **[Workloads](../../doc/workloads.md)**.
+WinUI, WinForms, WinAppCLI, .NET, Go, Rust, and PHP all have one-liners. The full list and what each installs: **[Workloads](./workloads.md)**.
 
 Each short link points at a signed wrapper like [`Workloads/winui/setup.ps1`](../Workloads/winui/setup.ps1), which runs `bootstrap.ps1 -Workload winui -Action Full`. To call bootstrap directly:
 
@@ -126,7 +126,7 @@ Local AI setup uses the same bootstrap with `-Scenario` instead of `-Workload`. 
 irm https://aka.ms/devconfig/local-ai/setup.ps1 | iex
 ```
 
-Runtimes, individual pieces (CUDA, ROCm, Intel AI, and more), hardware support, and options: **[AI tooling workloads](../../doc/ai-workloads.md)**.
+Runtimes, individual pieces (CUDA, ROCm, Intel AI, and more), hardware support, and options: **[AI tooling workloads](./ai-workloads.md)**.
 ## Step-by-step quick overview
 
 Roughly **30 minutes** on a clean machine with a good connection, most of it spent downloading applications like Git, Python, Visual Studio Code, PowerToys, and Ubuntu.

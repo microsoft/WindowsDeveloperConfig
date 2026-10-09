@@ -22,7 +22,7 @@ Assert-True ($coding -match 'Qwen2\.5-Coder-1\.5B-Instruct') 'Optional coding de
 Assert-True ($coding -match 'CODING_DEMO_READY') 'Optional coding demo should emit a clear readiness marker'
 Assert-True ($coding -notmatch '\[string\]\s*\$Prompt') 'Coding demo should keep its validation prompt fixed'
 
-$readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\..\doc\ai-workloads.md') -Raw
+$readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\windows-dev-config\ai-workloads.md') -Raw
 Assert-True ($readme -match 'Workloads\\local-ai\\install\.ps1') 'AI workloads doc should lead with the local AI scenario entry point'
 Assert-True ($readme -match 'aka\.ms/devconfig/local-ai/setup\.ps1') 'AI workloads doc should provide the local AI short link'
 Assert-True ($readme -match 'bootstrap\.ps1''\s*\r?\n& \(\[scriptblock\]::Create\(\(irm \$url\)\)\) -Scenario local-ai') 'AI workloads doc should document the production product-level dispatcher'

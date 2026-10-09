@@ -169,7 +169,6 @@ This repo carries **two parallel copies** of every flow:
 | `src/docs/development.md`     | Contributor docs (CI, validation, how to add a language).         | **Yes**  | n/a      |
 | `src/docs/windows-dev-config.md` | Windows Dev Config internals: file layout, phases, releases, workloads. | **Yes**  | n/a      |
 | `src/docs/ai-workloads.md`    | AI workload internals: backend selection, acquisition channels, partner validation. | **Yes**  | n/a      |
-| `doc/`                        | End-user docs: [Workloads](../../doc/workloads.md) and [AI tooling workloads](../../doc/ai-workloads.md). | **Yes**  | n/a      |
 | `src/tests/`                  | Hello-world programs + expected stdout used by the CI harness.    | **Yes**  | CI only  |
 
 **End users**: follow the [top-level README](../../README.md). Windows Dev Config's `bootstrap.ps1` verifies Microsoft signatures and installs to `%ProgramData%\CalmOS` with Administrator/SYSTEM-only write access. It requests process-scoped `RemoteSigned` without adding trusted publishers. Organization-enforced `AllSigned` may still prompt. For development, `-AllowUnsigned` uses `src/windows-dev-config/` without signature checks.

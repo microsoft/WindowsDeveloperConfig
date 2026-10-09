@@ -111,7 +111,7 @@ Just want one toolchain? Each of these is a single command.
 | Rust | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
 | PHP | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
 
-TypeScript, Java, Python, SQL, PowerShell, and what each one installs: [Workloads](./doc/workloads.md).
+TypeScript, Java, Python, SQL, PowerShell, and what each one installs: [Workloads](./src/windows-dev-config/workloads.md).
 
 <br/>
 
@@ -126,7 +126,7 @@ irm https://aka.ms/devconfig/local-ai/llama.cpp/setup.ps1 | iex # + llama.cpp
 irm https://aka.ms/devconfig/local-ai/foundry/setup.ps1 | iex   # + Foundry Local
 ```
 
-Individual pieces (CUDA, ROCm, Intel AI, PyTorch, llama.cpp, Ollama, Foundry Local), hardware support, and options: [AI tooling workloads](./doc/ai-workloads.md).
+Individual pieces (CUDA, ROCm, Intel AI, PyTorch, llama.cpp, Ollama, Foundry Local), hardware support, and options: [AI tooling workloads](./src/windows-dev-config/ai-workloads.md).
 
 <br/>
 
