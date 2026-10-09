@@ -110,8 +110,13 @@ Just want one toolchain? Each of these is a single command.
 | Go | `irm https://aka.ms/devconfig/go/setup.ps1 \| iex` |
 | Rust | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
 | PHP | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
+| TypeScript | `winget configure -f .\Workloads\typescript\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| Java | `winget configure -f .\Workloads\java\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| Python | `winget configure -f .\Workloads\python\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| SQL | `winget configure -f .\Workloads\sql\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| PowerShell | `winget configure -f .\Workloads\powershell\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 
-TypeScript, Java, Python, SQL, PowerShell, and what each one installs: [Workloads](./src/windows-dev-config/workloads.md).
+The `winget configure` ones haven't moved to one-liners yet, so run them from a clone of this repo. What each one installs: [Workloads](./src/windows-dev-config/workloads.md).
 
 <br/>
 
@@ -119,12 +124,12 @@ TypeScript, Java, Python, SQL, PowerShell, and what each one installs: [Workload
 
 Detects your GPU, installs the matching PyTorch build (CUDA, ROCm, Intel XPU, or CPU), and proves it works. Add a local model runtime if you want one.
 
-```powershell
-irm https://aka.ms/devconfig/local-ai/setup.ps1 | iex           # PyTorch for your hardware
-irm https://aka.ms/devconfig/local-ai/ollama/setup.ps1 | iex    # + Ollama
-irm https://aka.ms/devconfig/local-ai/llama.cpp/setup.ps1 | iex # + llama.cpp
-irm https://aka.ms/devconfig/local-ai/foundry/setup.ps1 | iex   # + Foundry Local
-```
+| Workload | Run |
+| --- | --- |
+| Local AI (PyTorch for your hardware) | `irm https://aka.ms/devconfig/local-ai/setup.ps1 \| iex` |
+| Local AI + Ollama | `irm https://aka.ms/devconfig/local-ai/ollama/setup.ps1 \| iex` |
+| Local AI + llama.cpp | `irm https://aka.ms/devconfig/local-ai/llama.cpp/setup.ps1 \| iex` |
+| Local AI + Foundry Local | `irm https://aka.ms/devconfig/local-ai/foundry/setup.ps1 \| iex` |
 
 Individual pieces (CUDA, ROCm, Intel AI, PyTorch, llama.cpp, Ollama, Foundry Local), hardware support, and options: [AI tooling workloads](./src/windows-dev-config/ai-workloads.md).
 

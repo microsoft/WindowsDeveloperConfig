@@ -22,21 +22,15 @@ These use the same engine as [Windows Dev Config](./README.md#single-workloads):
 
 ## From a clone
 
-These run with [`winget configure`](https://learn.microsoft.com/windows/package-manager/winget/configure) from the repo root:
+These haven't moved to one-liners yet. They run with [`winget configure`](https://learn.microsoft.com/windows/package-manager/winget/configure) from the repo root:
 
-| Workload | Installs |
-| --- | --- |
-| TypeScript | Node.js LTS + global `typescript` |
-| Java | Microsoft Build of OpenJDK 25 LTS |
-| Python | Python 3.14 + uv |
-| SQL | SQL Server + sqlcmd + VS Code extension |
-| PowerShell | PowerShell 7 + VS Code PowerShell extension + PSScriptAnalyzer settings |
-
-```powershell
-winget configure -f .\Workloads\<name>\configuration.winget --accept-configuration-agreements --disable-interactivity
-```
-
-Swap `<name>` for `typescript`, `java`, `python`, `sql`, or `powershell`.
+| Workload | Installs | Run |
+| --- | --- | --- |
+| TypeScript | Node.js LTS + global `typescript` | `winget configure -f .\Workloads\typescript\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| Java | Microsoft Build of OpenJDK 25 LTS | `winget configure -f .\Workloads\java\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| Python | Python 3.14 + uv | `winget configure -f .\Workloads\python\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| SQL | SQL Server + sqlcmd + VS Code extension | `winget configure -f .\Workloads\sql\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| PowerShell | PowerShell 7 + VS Code PowerShell extension + PSScriptAnalyzer settings | `winget configure -f .\Workloads\powershell\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 
 If `winget configure` isn't recognized, see [Troubleshooting](../../README.md#-troubleshooting).
 

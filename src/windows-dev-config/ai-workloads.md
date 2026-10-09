@@ -8,21 +8,14 @@ This isn't a replacement for PyPI/Conda, and it won't install every vendor SDK. 
 
 ## Quick start
 
-Open PowerShell and run one of these. Each one elevates, downloads, verifies signatures, and installs.
+Open PowerShell and run one of these. Each one elevates, downloads, verifies signatures, and installs. Not sure? Start with the first one.
 
-**Local AI dev setup** — PyTorch for your hardware, plus Triton where it's supported. Start here.
-
-```powershell
-irm https://aka.ms/devconfig/local-ai/setup.ps1 | iex
-```
-
-**Local AI + a model runtime** — same as above, plus one runtime:
-
-```powershell
-irm https://aka.ms/devconfig/local-ai/ollama/setup.ps1 | iex
-irm https://aka.ms/devconfig/local-ai/llama.cpp/setup.ps1 | iex
-irm https://aka.ms/devconfig/local-ai/foundry/setup.ps1 | iex
-```
+| Workload | What you get | Run |
+| --- | --- | --- |
+| Local AI | PyTorch for your hardware, plus Triton where it's supported | `irm https://aka.ms/devconfig/local-ai/setup.ps1 \| iex` |
+| Local AI + Ollama | Local AI + Ollama and a small test model | `irm https://aka.ms/devconfig/local-ai/ollama/setup.ps1 \| iex` |
+| Local AI + llama.cpp | Local AI + the right llama.cpp build and a small test model | `irm https://aka.ms/devconfig/local-ai/llama.cpp/setup.ps1 \| iex` |
+| Local AI + Foundry Local | Local AI + Foundry Local and a small test model | `irm https://aka.ms/devconfig/local-ai/foundry/setup.ps1 \| iex` |
 
 **Just one piece:**
 

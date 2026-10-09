@@ -127,6 +127,7 @@ irm https://aka.ms/devconfig/local-ai/setup.ps1 | iex
 ```
 
 Runtimes, individual pieces (CUDA, ROCm, Intel AI, and more), hardware support, and options: **[AI tooling workloads](./ai-workloads.md)**.
+
 ## Step-by-step quick overview
 
 Roughly **30 minutes** on a clean machine with a good connection, most of it spent downloading applications like Git, Python, Visual Studio Code, PowerToys, and Ubuntu.
