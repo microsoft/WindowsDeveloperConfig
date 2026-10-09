@@ -16,6 +16,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The workload marks MSVC and the Windows SDK as recommended, so --add alone skips them.
+$architecture = Get-ItemPropertyValue -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name 'PROCESSOR_ARCHITECTURE'
+$msvcTools = switch ($architecture) {
+    'AMD64' { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
+    'ARM64' { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' }
+    default { throw "Unsupported Windows architecture: $architecture" }
+}
 Set-StrictMode -Version Latest
 
 @{
@@ -46,6 +54,8 @@ Set-StrictMode -Version Latest
             Parameters = @{
                 Components = @(
                     'Microsoft.VisualStudio.Workload.NativeDesktop'
+                    $msvcTools
+                    'Microsoft.VisualStudio.Component.Windows11SDK.26100'
                 )
             }
         }

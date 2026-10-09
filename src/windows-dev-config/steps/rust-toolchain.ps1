@@ -11,7 +11,7 @@ function Test-DevConfigRustStableToolchain {
         return $false
     }
     $r = Invoke-DevConfigNativeCommand -FilePath 'rustup' -Arguments @('toolchain', 'list')
-    return $r.ExitCode -eq 0 -and $r.Output -match '(?im)^stable-.*\(default\)\s*$'
+    return $r.ExitCode -eq 0 -and $r.Output -match '(?im)^stable-\S+\s+\((?:[^)]*,\s*)?default\)\s*$'
 }
 
 function Set-DevConfigRustStableToolchain {
