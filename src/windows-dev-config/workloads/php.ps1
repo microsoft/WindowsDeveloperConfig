@@ -34,7 +34,7 @@ Set-StrictMode -Version Latest
             File       = 'packages.ps1'
             Function   = 'Invoke-PackagesPhase'
             Title      = 'Packages'
-            Parameters = @{ Packages = @('PowerShell', 'Php') }
+            Parameters = @{ Packages = @('PowerShell', 'VCRedist', 'Php') }
         }
     )
 }

@@ -15,8 +15,8 @@ Run from any PowerShell window. Each one elevates, verifies signatures, and inst
 | WinAppCLI | Developer Mode, PowerShell 7, .NET SDK 10, and the Windows App Development CLI | `irm https://aka.ms/devconfig/winappcli/setup.ps1 \| iex` |
 | .NET | Developer Mode, PowerShell 7, and .NET SDK 10 | `irm https://aka.ms/devconfig/dotnet/setup.ps1 \| iex` |
 | Go | PowerShell 7 and Go | `irm https://aka.ms/devconfig/go/setup.ps1 \| iex` |
-| Rust | PowerShell 7, rustup, the stable toolchain, and Visual Studio Community 2026 C++ workload (for the MSVC linker) | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
-| PHP | PowerShell 7 and PHP | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
+| Rust | PowerShell 7, rustup, the stable toolchain, and Visual Studio Community 2026 with the C++ workload, MSVC build tools, and Windows 11 SDK (for the MSVC linker) | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
+| PHP | PowerShell 7, the Visual C++ Redistributable, and PHP | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
 
 These use the same engine as [Windows Dev Config](./README.md#single-workloads): same elevation, signature checks, logging, and summary. Close Visual Studio before running WinUI, WinForms, or Rust — if the VS Installer wants a restart, the summary will say so.
 
