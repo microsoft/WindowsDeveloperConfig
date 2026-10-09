@@ -1,13 +1,13 @@
 # Windows Dev Config
 
-Set up a new Windows dev box in minutes, not hours. Pick a setup below, run one command, get back to building. Everything here is **idempotent** — safe to re-run any time, on any machine, in any state.
+Set up a new Windows dev box in minutes, not hours. Pick a setup, run one command, get back to building. Everything here is safe to re-run.
 
 ## Table of contents
 
 - [Quick start](#quick-start)
 - [Setup actions](#setup-actions)
 - [Single workloads](#single-workloads)
-- [Local AI scenario](#local-ai-scenario)
+- [AI tooling workloads](#ai-tooling-workloads)
 - [Step-by-step quick overview](#step-by-step-quick-overview)
 - [Requirements](#requirements)
 - [What it changes](#what-it-changes)
@@ -101,80 +101,32 @@ Replace `setup-full.ps1` with the chosen wrapper — short URLs point at these r
 
 ## Single workloads
 
-The same engine can apply one developer workload instead of the whole workstation — same elevation, signature checks, PowerShell 7 switch, check/apply/verify steps, log, and summary.  More coming soon.
+The same engine can set up one toolchain instead of the whole workstation — same elevation, signature checks, logging, and summary. For example:
 
-| Workload | Installs | One-liner |
-| --- | --- | --- |
-| `winui` | Developer Mode, PowerShell 7, .NET SDK 10, Windows App CLI, Visual Studio Community 2026 with the .NET desktop and WinUI application development workloads, and the WinUI `dotnet new` templates | `irm https://aka.ms/devconfig/winui/setup.ps1 \| iex` |
-| `winforms` | Developer Mode, PowerShell 7, .NET SDK 10, and Visual Studio Community 2026 with the .NET desktop development workload | `irm https://aka.ms/devconfig/winforms/setup.ps1 \| iex` |
-| `go` | PowerShell 7, and the Go toolchain | `irm https://aka.ms/devconfig/go/setup.ps1 \| iex` |
-| `rust` | PowerShell 7, Rustup, Visual Studio Community 2026 with the Desktop development with C++ workload (for the msvc toolchain's linker), and the stable Rust toolchain | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
-| `winappcli` | Developer Mode, PowerShell 7, .NET SDK 10, and the Windows App Development CLI | `irm https://aka.ms/devconfig/winappcli/setup.ps1 \| iex` |
-| `dotnet` | Developer Mode, PowerShell 7, and .NET SDK 10 | `irm https://aka.ms/devconfig/dotnet/setup.ps1 \| iex` |
-| `php` | PowerShell 7 and the PHP runtime/CLI | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
+```powershell
+irm https://aka.ms/devconfig/winui/setup.ps1 | iex
+```
 
-The short URL points at the signed wrapper [`Workloads/winui/setup.ps1`](../Workloads/winui/setup.ps1),
-which verifies and runs `bootstrap.ps1 -Workload winui -Action Full`. To pick a workload with the
-bootstrap directly, pass `-Workload`:
+WinUI, WinForms, WinAppCLI, .NET, Go, Rust, and PHP all have one-liners. The full list and what each installs: **[Workloads](./workloads.md)**.
+
+Each short link points at a signed wrapper like [`Workloads/winui/setup.ps1`](../Workloads/winui/setup.ps1), which runs `bootstrap.ps1 -Workload winui -Action Full`. To call bootstrap directly:
 
 ```powershell
 $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
 & ([scriptblock]::Create((irm $url))) -Workload winui
 ```
 
-Workloads support `-Action Full` only for now. The WinUI workload adds its Visual Studio workloads to a Community 2026 install — next to any other edition, without upgrading one already there. Visual Studio must be closed while workloads are added; a restart requested by the VS Installer shows up in the summary.
+Workloads only support `-Action Full` for now. Visual Studio workloads get added to a Community 2026 install alongside any other edition, without upgrading what's already there. Close Visual Studio first; if the VS Installer wants a restart, the summary will say so.
 
-## Local AI scenario
+## AI tooling workloads
 
-`-Scenario local-ai` is a separate product-level entry point. It does not run
-the Full or Partial workstation setup. It detects AI hardware, installs the
-matching contained PyTorch backend and compatible Triton when available, then
-executes tensor and neural-network acceptance:
+Local AI setup uses the same bootstrap with `-Scenario` instead of `-Workload`. It doesn't run the workstation setup — it detects your GPU, installs the matching PyTorch build, and optionally adds Ollama, llama.cpp, or Foundry Local.
 
 ```powershell
-$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/src/windows-dev-config/bootstrap.ps1'
-& ([scriptblock]::Create((irm $url))) -Scenario local-ai
-# Expected: PYTORCH_READY ... then LOCAL_AI_SCENARIO_READY
+irm https://aka.ms/devconfig/local-ai/setup.ps1 | iex
 ```
 
-Optional model runtimes are selected explicitly:
-
-```powershell
-& ([scriptblock]::Create((irm $url))) -Scenario local-ai -AiRuntime LlamaCpp
-& ([scriptblock]::Create((irm $url))) -Scenario local-ai -AiRuntime Ollama
-& ([scriptblock]::Create((irm $url))) -Scenario local-ai -AiRuntime Foundry
-```
-
-Windows ARM64 RTX Spark golden path:
-
-```powershell
-& ([scriptblock]::Create((irm $url))) `
-  -Scenario local-ai -AiBackend Auto -RequireTriton -AiRuntime Ollama `
-  -ReportRoot (Join-Path $env:TEMP 'devconfig-local-ai')
-```
-
-Expected readiness includes `PYTORCH_READY: backend=CUDA`, `TRITON_READY`,
-`OLLAMA_READY`, and `LOCAL_AI_SCENARIO_READY`. Bootstrap is the remote verified
-downloader/protected launcher. From a repository clone, use an elevated shell
-and invoke `src\Workloads\local-ai\install.ps1` directly; `dev-config.ps1`
-continues to represent the workstation setup engine.
-
-Use `-PlanOnly -ReportRoot <directory>` to inspect hardware, selected backend,
-transitive acquisitions, and blockers without installing. `-AiBackend` accepts
-`Auto`, `CPU`, `CUDA`, `ROCm`, or `XPU`; `-RequireTriton` makes compatible
-Triton execution mandatory. Drivers remain prerequisites and are not replaced.
-
-Bootstrap downloads the complete scenario dependency tree, verifies every
-Microsoft-signed PowerShell file and the signed hash manifest for non-PowerShell
-inputs, copies the payload into an administrator-protected scenario directory,
-reverifies it, and launches only `Workloads\local-ai\install.ps1`.
-Explicit `-AllowUnsigned` scenario tests use
-`%ProgramData%\CalmOS-Development`, keeping unsigned files out of the production
-`%ProgramData%\CalmOS` tree.
-
-All bootstrap modes stream setup output. Scenario elevation waits only for its
-launcher so AI runtimes can keep running; workstation actions retain process-tree
-waiting and their existing error handling.
+Runtimes, individual pieces (CUDA, ROCm, Intel AI, and more), hardware support, and options: **[AI tooling workloads](./ai-workloads.md)**.
 
 ## Step-by-step quick overview
 
