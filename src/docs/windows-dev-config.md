@@ -69,6 +69,8 @@ The launchers in B download bootstrap and its payload from A. Short URLs keep po
 
 ### Local AI short links
 
+User-facing docs for these live in [AI tooling workloads](../../doc/ai-workloads.md); internals are in [`ai-workloads.md`](./ai-workloads.md).
+
 Point these short links at the matching signed repository-root files, not `src/`:
 
 | Short link | Signed file | Bootstrap parameters |

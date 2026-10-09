@@ -368,9 +368,9 @@ Assert-True ($catalog.Components.PyTorchRocm.NativeToolkitRelationship -match 's
 Assert-True (-not $catalog.Components.PyTorchXpu.NativeToolkitRequired) 'PyTorch XPU should not require full oneAPI'
 Assert-True ($catalog.Components.PyTorchXpu.NativeToolkitRelationship -match 'does not install full oneAPI') 'XPU metadata should explain the oneAPI separation'
 
-$readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\..\README.md') -Raw
-Assert-True ($readme -match 'pytorch-rocm-report\.json') 'README should provide the AMD partner report command'
-Assert-True ($readme -match 'pytorch-xpu-report\.json') 'README should provide the Intel partner report command'
+$readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\docs\ai-workloads.md') -Raw
+Assert-True ($readme -match 'pytorch-rocm-report\.json') 'AI reference should provide the AMD partner report command'
+Assert-True ($readme -match 'pytorch-xpu-report\.json') 'AI reference should provide the Intel partner report command'
 
 $fakeVs = Join-Path $env:TEMP "devconfig-vs-test-$([guid]::NewGuid().ToString('N'))"
 $fakeToolset = Join-Path $fakeVs 'VC\Tools\MSVC\14.99.0\bin\Hostarm64\arm64'

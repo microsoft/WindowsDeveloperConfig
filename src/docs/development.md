@@ -168,6 +168,8 @@ This repo carries **two parallel copies** of every flow:
 | `src/future/cmdpal/`          | Command Palette extension. C# project. Reads `src/manifest.yml`.  | **Yes**  | n/a      |
 | `src/docs/development.md`     | Contributor docs (CI, validation, how to add a language).         | **Yes**  | n/a      |
 | `src/docs/windows-dev-config.md` | Windows Dev Config internals: file layout, phases, releases, workloads. | **Yes**  | n/a      |
+| `src/docs/ai-workloads.md`    | AI workload internals: backend selection, acquisition channels, partner validation. | **Yes**  | n/a      |
+| `doc/`                        | End-user docs: [Workloads](../../doc/workloads.md) and [AI tooling workloads](../../doc/ai-workloads.md). | **Yes**  | n/a      |
 | `src/tests/`                  | Hello-world programs + expected stdout used by the CI harness.    | **Yes**  | CI only  |
 
 **End users**: follow the [top-level README](../../README.md). Windows Dev Config's `bootstrap.ps1` verifies Microsoft signatures and installs to `%ProgramData%\CalmOS` with Administrator/SYSTEM-only write access. It requests process-scoped `RemoteSigned` without adding trusted publishers. Organization-enforced `AllSigned` may still prompt. For development, `-AllowUnsigned` uses `src/windows-dev-config/` without signature checks.
@@ -609,9 +611,10 @@ if ((git rev-parse HEAD).Trim() -ne $ExpectedHead) {
 ```
 
 Then open elevated PowerShell in the repository root. Inventory the host and
-use the plan/apply harness from the README's **Partner validation commands**
-section. Each assigned flow must first write `<name>-plan.json`, stop on any
-blocker, then write `<name>-final.json` and satisfy `result.ready=true`.
+use the plan/apply harness from **Partner validation** in
+[`ai-workloads.md`](./ai-workloads.md#partner-validation). Each assigned flow
+must first write `<name>-plan.json`, stop on any blocker, then write
+`<name>-report.json` and satisfy `result.ready=true`.
 
 Because PR testing runs the unsigned source under `src/`, first use the
 repository's unsigned-development procedure: record the test user's current

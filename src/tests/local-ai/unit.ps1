@@ -22,17 +22,17 @@ Assert-True ($coding -match 'Qwen2\.5-Coder-1\.5B-Instruct') 'Optional coding de
 Assert-True ($coding -match 'CODING_DEMO_READY') 'Optional coding demo should emit a clear readiness marker'
 Assert-True ($coding -notmatch '\[string\]\s*\$Prompt') 'Coding demo should keep its validation prompt fixed'
 
-$readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\..\README.md') -Raw
-Assert-True ($readme -match 'Workloads\\local-ai\\install\.ps1') 'README should lead with the local AI scenario entry point'
-Assert-True ($readme -match 'bootstrap\.ps1''\s*\r?\n& \(\[scriptblock\]::Create\(\(irm \$url\)\)\) -Scenario local-ai') 'README should document the production product-level dispatcher'
-Assert-True ($readme -match '(?s)gh pr view 104.*?headRefOid') 'README should resolve the live PR head for unsigned dispatcher testing'
-Assert-True ($readme -match 'LOCAL_AI_SCENARIO_READY') 'README should document the scenario readiness marker'
-Assert-True ($readme -match '(?s)-AiBackend Auto.*?-RequireTriton.*?-AiRuntime Ollama') 'README should document the Windows ARM64 NVIDIA product golden path'
-Assert-True ($readme -match '\\src\\Workloads\\local-ai\\install\.ps1.*?-Backend Auto.*?-RequireTriton.*?-Runtime Ollama') 'README should distinguish cloned-repository scenario usage from bootstrap'
-Assert-True ($readme -match 'CODING_DEMO_READY') 'README should document the optional coding-demo readiness marker'
-Assert-True ($readme -match 'replacement for PyPI/Conda') 'README should state the scenario non-goal'
+$readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\..\doc\ai-workloads.md') -Raw
+Assert-True ($readme -match 'Workloads\\local-ai\\install\.ps1') 'AI workloads doc should lead with the local AI scenario entry point'
+Assert-True ($readme -match 'aka\.ms/devconfig/local-ai/setup\.ps1') 'AI workloads doc should provide the local AI short link'
+Assert-True ($readme -match 'bootstrap\.ps1''\s*\r?\n& \(\[scriptblock\]::Create\(\(irm \$url\)\)\) -Scenario local-ai') 'AI workloads doc should document the production product-level dispatcher'
+Assert-True ($readme -match 'LOCAL_AI_SCENARIO_READY') 'AI workloads doc should document the scenario readiness marker'
+Assert-True ($readme -match '(?s)-AiBackend Auto.*?-RequireTriton.*?-AiRuntime Ollama') 'AI workloads doc should document the Windows ARM64 NVIDIA product golden path'
+Assert-True ($readme -match '\\src\\Workloads\\local-ai\\install\.ps1.*?-Backend Auto.*?-RequireTriton.*?-Runtime Ollama') 'AI workloads doc should distinguish cloned-repository scenario usage from bootstrap'
+Assert-True ($readme -match 'CODING_DEMO_READY') 'AI workloads doc should document the optional coding-demo readiness marker'
+Assert-True ($readme -match 'replacement for PyPI/Conda') 'AI workloads doc should state the scenario non-goal'
 foreach ($entryPoint in @('local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')) {
-    Assert-True ($readme -match [regex]::Escape("| ``$entryPoint")) "README transitive-acquisition table should include $entryPoint"
+    Assert-True ($readme -match [regex]::Escape("| ``$entryPoint")) "AI workloads doc transitive-acquisition table should include $entryPoint"
 }
 
 $pytorch = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\Workloads\pytorch\install.ps1') -Raw

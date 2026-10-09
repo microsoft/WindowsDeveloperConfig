@@ -304,11 +304,11 @@ Assert-True ($probeScript -match '\$savedState\.backend') 'llama.cpp probe shoul
 Assert-True ($probeScript -match 'Get-LlamaBenchmarkBackendEvidence') 'llama.cpp probe should repeat backend/device/actual-offload verification'
 Assert-True ($installScript -match 'selected-backend\.json') 'llama.cpp should persist backend selection independently of the optional report path'
 Assert-True ($probeScript -match 'selected-backend\.json') 'llama.cpp probe should use persisted backend selection'
-$readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\..\README.md') -Raw
-Assert-True ($readme -match 'llama-cuda-plan\.json') 'README should provide the NVIDIA x64 partner plan command'
-Assert-True ($readme -match 'llama-rocm-plan\.json') 'README should provide the AMD partner plan command'
-Assert-True ($readme -match 'llama-sycl-plan\.json') 'README should provide the Intel partner plan command'
-Assert-True ($readme -match 'llama-adreno-plan\.json') 'README should provide the Qualcomm partner plan command'
+$readme = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\docs\ai-workloads.md') -Raw
+Assert-True ($readme -match 'llama-cuda-plan\.json') 'AI reference should provide the NVIDIA x64 partner plan command'
+Assert-True ($readme -match 'llama-rocm-plan\.json') 'AI reference should provide the AMD partner plan command'
+Assert-True ($readme -match 'llama-sycl-plan\.json') 'AI reference should provide the Intel partner plan command'
+Assert-True ($readme -match 'llama-adreno-plan\.json') 'AI reference should provide the Qualcomm partner plan command'
 
 $prefixedBenchmark = @'
 ggml_cuda_init: found 1 CUDA devices:
