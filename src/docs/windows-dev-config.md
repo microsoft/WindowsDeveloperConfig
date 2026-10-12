@@ -62,7 +62,7 @@ Run the isolated WSL probe checks from the repository root in Windows PowerShell
 3. Set `$payloadRef` to A's full SHA in the source launchers: `setup-full.ps1`, `setup-standard.ps1`, `uninstall.ps1`, and `Workloads/winui/setup.ps1`.
 4. Sign those updated launchers and publish their signed copies as commit B. Do not edit them after signing.
 
-Include all AI `Workloads/**/setup.ps1` launchers in the same payload pinning
+Include every `Workloads/**/setup.ps1` launcher in the same payload pinning
 and signing cycle.
 
 The launchers in B download bootstrap and its payload from A. Short URLs keep pointing at the launchers on `main` — publishing a new launcher doesn't change the payload commit an older launcher uses. Direct bootstrap calls with a branch or tag still use Git ref discovery.
