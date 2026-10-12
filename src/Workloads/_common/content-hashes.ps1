@@ -2,15 +2,10 @@ $Script:DevConfigWorkloadContentHashes = @{
     'cuda\smoke.cu' = '6252383bda8856daa14c4f315961e17d4de3bdba1cba6bf4c09a5d0aa52a2a6f'
     'intel-ai\openvino-smoke.py' = '0b71b5f5351dd7536c6352dc02ffd523fa89f2fa60a23ff27d45fd3e8f9c1326'
     'intel-ai\sycl-smoke.cpp' = '6ed0361d8374bcae060b84469b3b167738f016abc9f3b46ba5f19ad870bd74b7'
-    'java\configuration.winget' = 'f36edd7ca81b9389ba490505892d6ca5068d5942a249a98f3997356300b8447e'
-    'powershell\configuration.winget' = 'b86d0cc7dea26309a14478e5a94304dc9b037fe32220bdc83da8318ed60e220d'
-    'python\configuration.winget' = 'bfec7eaad24ba3c5913e7713dafef31d6ac62c53005cc3fb6688db33dbf66f13'
     'pytorch\smoke.py' = 'f28b8ca06e0a2832684f1342626c74904c13d575ce96282f86cf66f44d3eba68'
     'pytorch\triton-smoke.py' = 'a2d2a538b1b30315f249753ccad68d6977bf85d711e3e3541c52ae16268814f4'
     'pytorch\xpu-smoke.py' = '7cba1b04e7ecbce0c24a9188ff847cd3c2fd9792810b5fd4324728ad21786c50'
     'rocm\hip-smoke.cpp' = 'ece1ed905b3afc7ceb918cc3ff751d624b8d681444b1c507a74cfef3d326034d'
-    'sql\configuration.winget' = '99472e573c10316a17be12d45da834e22be4b1b774afc5c15fdefe3d63bb98e7'
-    'typescript\configuration.winget' = '826e1755d85798e376baa00a9891c58fd2dd6da67d0f54486ad957202ee7c8b1'
 }
 
 function Get-DevConfigCanonicalWorkloadHash {
