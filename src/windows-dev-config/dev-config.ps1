@@ -27,13 +27,12 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-# Set before anything can pause: the scoped parts run hidden, so Wait-DevConfigKeyPress returns at once.
-$Script:DevConfigScope = $Scope
-
 # A child shell can inherit incompatible built-in modules from another PowerShell edition.
 $env:PSModulePath = "$PSHOME\Modules;$env:PSModulePath"
 
 $stepsDir = Join-Path $PSScriptRoot 'steps'
+# Set before anything can pause: the scoped parts run hidden, so Wait-DevConfigKeyPress returns at once.
+$Script:DevConfigScope = $Scope
 $securityCode = [IO.File]::ReadAllText((Join-Path $stepsDir '_security.ps1'))
 if (-not $AllowUnsigned) {
     # Verify and execute the same text to avoid a file-swap race.
