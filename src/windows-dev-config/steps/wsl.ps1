@@ -19,6 +19,33 @@ function Test-DevConfigServicingRebootPending {
     return (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')
 }
 
+# The machine and user parts use the WSL package's own wsl.exe: the inbox System32 copy can offer to
+# install WSL behind a UAC prompt, which would wait forever in a hidden run.
+function Get-DevConfigWslExe {
+    if ((Get-DevConfigScope) -eq 'All') {
+        return 'wsl.exe'
+    }
+    return (Join-Path $env:ProgramFiles 'WSL\wsl.exe')
+}
+
+# /English keeps the state text stable on localized Windows.
+function Get-DevConfigWindowsFeatureState {
+    param(
+        [Parameter(Mandatory)] [string] $Name
+    )
+    $dism = Join-Path $env:SystemRoot 'System32\dism.exe'
+    $result = Invoke-DevConfigNativeCommand -FilePath $dism -TimeoutSeconds 300 `
+        -Arguments @('/online', '/english', '/get-featureinfo', "/featurename:$Name")
+    if ($result.ExitCode -ne 0) {
+        return $null
+    }
+    $match = [regex]::Match([string]$result.Output, '(?m)^State\s*:\s*(.+?)\s*$')
+    if ($match.Success) {
+        return $match.Groups[1].Value
+    }
+    return $null
+}
+
 # WSL output is redirected and bounded; exit codes are used because message text is localized.
 function Get-DevConfigWslExitCode {
     param(
@@ -26,7 +53,8 @@ function Get-DevConfigWslExitCode {
         [int] $TimeoutSeconds = 120,
         [switch] $NoInput
     )
-    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+    $wsl = Get-DevConfigWslExe
+    if (-not (Get-Command $wsl -ErrorAction SilentlyContinue)) {
         return $null
     }
 
@@ -35,7 +63,7 @@ function Get-DevConfigWslExitCode {
     $stdin = $null
     try {
         if ($NoInput) { $stdin = [System.IO.Path]::GetTempFileName() }
-        return Invoke-DevConfigProcess -FilePath 'wsl.exe' -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds `
+        return Invoke-DevConfigProcess -FilePath $wsl -Arguments $Arguments -TimeoutSeconds $TimeoutSeconds `
             -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr -RedirectStandardInput $stdin
     } catch {
         Write-Verbose "wsl $($Arguments -join ' ') could not run: $($_.Exception.Message)"
@@ -123,7 +151,8 @@ function Enable-DevConfigWslFeatures {
 
 function Test-DevConfigUbuntuInstalled {
     # Without wsl.exe, Ubuntu is treated as not installed rather than as an error.
-    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+    $wsl = Get-DevConfigWslExe
+    if (-not (Get-Command $wsl -ErrorAction SilentlyContinue)) {
         return $false
     }
 
@@ -135,7 +164,7 @@ function Test-DevConfigUbuntuInstalled {
         # Closed stdin prevents a missing WSL runtime from waiting at its installation prompt.
         $stdin = [System.IO.Path]::GetTempFileName()
         # This query is bounded and redirected so a nonresponsive listing is treated as not installed.
-        $exitCode = Invoke-DevConfigProcess -FilePath 'wsl.exe' -Arguments @('--list', '--quiet') `
+        $exitCode = Invoke-DevConfigProcess -FilePath $wsl -Arguments @('--list', '--quiet') `
             -NoNewWindow -TimeoutSeconds 120 -RedirectStandardOutput $out -RedirectStandardError $err -RedirectStandardInput $stdin
         if ($exitCode -ne 0) {
             return $false
@@ -185,7 +214,11 @@ function Install-DevConfigUbuntuVia {
 
 function Install-DevConfigUbuntu {
     # A distro install requires active platform components, so fail early when they are not active.
+    $scoped = (Get-DevConfigScope) -ne 'All'
     if (-not (Test-DevConfigWslComponentsReady)) {
+        if ($scoped) {
+            throw "WSL isn't active yet, so Ubuntu can't be installed. The machine part installs WSL, and Windows must restart once before this user part runs again."
+        }
         throw "WSL isn't active on this machine, so Ubuntu can't be installed yet (see the note above)."
     }
 
@@ -193,13 +226,16 @@ function Install-DevConfigUbuntu {
     $setting = $Script:DevConfigWslFirstRunSetting
     Set-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value
 
-    if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', $Script:DevConfigWslDistributionName, '--no-launch') -MaxAttempts 2) {
+    # The user part has a time limit, so it tries each route once.
+    $attempts = if ($scoped) { 1 } else { 2 }
+    if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', $Script:DevConfigWslDistributionName, '--no-launch') -MaxAttempts $attempts) {
         return
     }
 
     # The web-download path does not depend on Store access or Store registration timing.
     Write-Host '  The Store copy of Ubuntu did not take. Downloading Ubuntu from the web instead.' -ForegroundColor Yellow
-    if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', $Script:DevConfigWslDistributionName, '--no-launch', '--web-download')) {
+    $attempts = if ($scoped) { 1 } else { 3 }
+    if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', $Script:DevConfigWslDistributionName, '--no-launch', '--web-download') -MaxAttempts $attempts) {
         return
     }
 
@@ -213,8 +249,19 @@ function Invoke-DevConfigWslUbuntuInstall {
     )
     Invoke-DevConfigRetry -Name "wsl $($Arguments -join ' ')" -MaxAttempts $MaxAttempts -ScriptBlock {
         Write-Host "Downloading and installing Ubuntu (wsl $($Arguments -join ' '))..."
-        Write-Host '(A separate WSL window may pop up briefly -- that is normal. This can take a few minutes.)' -ForegroundColor DarkGray
-        $exitCode = Invoke-DevConfigProcess -FilePath 'wsl.exe' -Arguments $Arguments -TimeoutSeconds 1200
+        if ((Get-DevConfigScope) -eq 'All') {
+            Write-Host '(A separate WSL window may pop up briefly -- that is normal. This can take a few minutes.)' -ForegroundColor DarkGray
+            $exitCode = Invoke-DevConfigProcess -FilePath 'wsl.exe' -Arguments $Arguments -TimeoutSeconds 1200
+        } else {
+            # The hidden user part keeps wsl in its own console with no input, so nothing can wait on a prompt.
+            $stdin = [System.IO.Path]::GetTempFileName()
+            try {
+                $exitCode = Invoke-DevConfigProcess -FilePath (Get-DevConfigWslExe) -Arguments $Arguments -TimeoutSeconds 600 `
+                    -NoNewWindow -RedirectStandardInput $stdin
+            } finally {
+                Remove-Item -LiteralPath $stdin -Force -ErrorAction SilentlyContinue
+            }
+        }
         if ($exitCode -ne 0) {
             throw "wsl $($Arguments -join ' ') failed with exit code $exitCode"
         }
@@ -250,6 +297,34 @@ function Install-DevConfigWslPlatform {
     }
 
     Suspend-DevConfigForReboot -ScriptPath $OrchestratorPath
+}
+
+# As SYSTEM inside Windows Setup, wsl --install exits at once and nothing may restart Windows, so the
+# machine part turns on the features, installs the signed WSL package, and leaves the restart to Windows.
+function Test-DevConfigWslMachineComponentsReady {
+    if (-not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'WSL\wsl.exe'))) {
+        return $false
+    }
+    if (Test-DevConfigWslFeaturesActive) {
+        return $true
+    }
+    foreach ($feature in @('VirtualMachinePlatform', 'Microsoft-Windows-Subsystem-Linux')) {
+        if ((Get-DevConfigWindowsFeatureState -Name $feature) -notin @('Enabled', 'Enable Pending')) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Install-DevConfigWslMachineComponents {
+    $Script:DevConfigWslRestartSignalled = $false
+    Enable-DevConfigWslFeatures
+    if (-not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'WSL\wsl.exe'))) {
+        $null = Install-DevConfigWslMsi
+    }
+    if ($Script:DevConfigWslRestartSignalled -or (Test-DevConfigServicingRebootPending)) {
+        Add-DevConfigNote -Message 'WSL finishes turning on after Windows restarts; this part never restarts Windows itself.'
+    }
 }
 
 function Test-DevConfigWslDistributionRegistered {
@@ -297,7 +372,7 @@ function Invoke-WslPhase {
     if ($Script:DevConfigAction -eq 'Uninstall') {
         $steps = @(
             New-DevConfigRegistryStep -Setting $Script:DevConfigWslFirstRunSetting -Reset
-            New-DevConfigStep -Name 'WslCleanup' -Description "Delete $Script:DevConfigWslDistributionName and its data, then uninstall WSL" -BestEffort `
+            New-DevConfigStep -Name 'WslCleanup' -Description "Delete $Script:DevConfigWslDistributionName and its data, then uninstall WSL" -Scope Machine -BestEffort `
                 -Check { -not (Test-DevConfigWslDistributionRegistered) -and -not (Test-DevConfigWslPackageInstalled) } `
                 -Apply { Remove-DevConfigWsl }
         )
@@ -307,11 +382,17 @@ function Invoke-WslPhase {
 
     # ArgumentList binds the path at call time; BestEffort preserves prior phases if WSL cannot start.
     $steps = @(
-        New-DevConfigStep -Name 'WslComponents' -Description 'Install WSL platform components' -BestEffort `
-            -Check { Test-DevConfigWslComponentsReady } `
-            -Apply { param($OrchestratorPath) Install-DevConfigWslPlatform -OrchestratorPath $OrchestratorPath } `
-            -ArgumentList @($OrchestratorPath)
-        New-DevConfigStep -Name 'WslUbuntu' -Description 'Install the default Ubuntu distro' -BestEffort `
+        if ((Get-DevConfigScope) -eq 'Machine') {
+            New-DevConfigStep -Name 'WslComponents' -Description 'Install WSL platform components' -Scope Machine -BestEffort `
+                -Check { Test-DevConfigWslMachineComponentsReady } `
+                -Apply { Install-DevConfigWslMachineComponents }
+        } else {
+            New-DevConfigStep -Name 'WslComponents' -Description 'Install WSL platform components' -Scope Machine -BestEffort `
+                -Check { Test-DevConfigWslComponentsReady } `
+                -Apply { param($OrchestratorPath) Install-DevConfigWslPlatform -OrchestratorPath $OrchestratorPath } `
+                -ArgumentList @($OrchestratorPath)
+        }
+        New-DevConfigStep -Name 'WslUbuntu' -Description 'Install the default Ubuntu distro' -Scope User -BestEffort `
             -Check { Test-DevConfigUbuntuInstalled } `
             -Apply { Install-DevConfigUbuntu }
     )

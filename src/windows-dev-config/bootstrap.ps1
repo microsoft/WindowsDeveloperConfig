@@ -21,6 +21,13 @@
 
       & ([scriptblock]::Create((irm <url>))) -Workload winui
 
+  To run only the machine part (as SYSTEM or an administrator) or only the user part (as the
+  signed-in user, never elevated) of the standard setup, for example from Windows Setup and
+  first sign-in:
+
+      & ([scriptblock]::Create((irm <url>))) -Action Partial -Scope Machine
+      & ([scriptblock]::Create((irm <url>))) -Action Partial -Scope User
+
   To run a standalone AI installer with its verified dependencies:
 
       & ([scriptblock]::Create((irm <url>))) -Scenario cuda
@@ -34,6 +41,7 @@ param(
     [switch] $NoLaunch,
     [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
     [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+    [ValidateSet('All', 'Machine', 'User')] [string] $Scope = 'All',
     [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
     [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
     [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
@@ -51,6 +59,7 @@ function Invoke-CalmOsBootstrap {
         [switch] $NoLaunch,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [ValidateSet('All', 'Machine', 'User')] [string] $Scope = 'All',
         [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
         [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
         [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
@@ -193,6 +202,9 @@ function Invoke-CalmOsBootstrap {
     if ($Scenario -and $Scenario -notin @('local-ai', 'pytorch') -and ($AiBackend -ne 'Auto' -or $RequireTriton)) {
         throw '-AiBackend and -RequireTriton require -Scenario local-ai or pytorch.'
     }
+    if ($Scope -ne 'All' -and ($Scenario -or $Workload -ne 'devconfig' -or $Action -ne 'Partial')) {
+        throw '-Scope Machine and -Scope User apply only to the standard Windows Dev Config setup (-Action Partial).'
+    }
 
     # Reject refs that could escape the repository path.
     if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
@@ -206,6 +218,10 @@ function Invoke-CalmOsBootstrap {
             'CalmOS'
         }
         $InstallRoot = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) $defaultInstallDirectory
+        if ($Scope -eq 'User') {
+            # The user part never elevates, so it installs where the signed-in user can write.
+            $InstallRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'CalmOS\devconfig-user'
+        }
     }
     $InstallRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallRoot)
     if ($InstallRoot -notmatch '^[A-Za-z]:\\[^:]+$') {
@@ -215,11 +231,11 @@ function Invoke-CalmOsBootstrap {
         $ReportRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ReportRoot)
     }
 
-    foreach ($scope in @('MachinePolicy', 'UserPolicy')) {
-        $policy = Get-ExecutionPolicy -Scope $scope
+    foreach ($policyScope in @('MachinePolicy', 'UserPolicy')) {
+        $policy = Get-ExecutionPolicy -Scope $policyScope
         if ($policy -ne 'Undefined') {
             if ($policy -eq 'Restricted') {
-                throw "Organization policy ($scope) requires $policy. Script execution is disabled; contact your administrator."
+                throw "Organization policy ($policyScope) requires $policy. Script execution is disabled; contact your administrator."
             }
             break
         }
@@ -227,7 +243,14 @@ function Invoke-CalmOsBootstrap {
 
     $shell = Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
     if ($Action -ne 'Uninstall') {
-        $pwsh = Get-DevConfigPwshExe
+        $pwsh = $null
+        try {
+            $pwsh = Get-DevConfigPwshExe
+        } catch {
+            # SYSTEM can lack an AppX profile; the machine part then starts in Windows PowerShell.
+            if ($Scope -eq 'All') { throw }
+            Write-Verbose "Could not look for PowerShell 7: $($_.Exception.Message)"
+        }
         if ($pwsh) { $shell = $pwsh }
     }
     $escapedShell = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($shell)
@@ -427,7 +450,15 @@ function Invoke-CalmOsBootstrap {
 
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    if ($Scope -eq 'User' -and $identity.User.Value -eq 'S-1-5-18') {
+        throw 'The user part configures the signed-in user. Run it as that user, not as SYSTEM.'
+    }
+    $isAdministrator = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($Scope -eq 'Machine' -and -not $isAdministrator) {
+        throw 'The machine part needs administrator rights. Run it as SYSTEM or from an elevated PowerShell.'
+    }
+    # Only the full setup elevates: the machine part already runs elevated and the user part never elevates.
+    if ($Scope -eq 'All' -and -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         # The elevated window closes on errors, so a ref without the workload is reported here, before UAC.
         if (-not $Scenario -and $Workload -ne 'devconfig') {
             try {
@@ -495,9 +526,40 @@ function Invoke-CalmOsBootstrap {
         }
     }
 
+    function Start-CalmOsSetupProcess {
+        param(
+            [Parameter(Mandatory)] [string] $FilePath,
+            [Parameter(Mandatory)] [string[]] $ArgumentList,
+            [string] $Action = 'Full',
+            [string] $Scope = 'All'
+        )
+
+        $start = @{ FilePath = $FilePath; ArgumentList = $ArgumentList; PassThru = $true }
+        if ($Action -ne 'Uninstall') { $start.NoNewWindow = $true }
+        if ($Scope -eq 'All') {
+            $start.Wait = $true
+            return (Start-Process @start).ExitCode
+        }
+
+        # Hidden parts have nobody to answer a prompt; an empty stdin gives native prompts end-of-file.
+        $stdin = [IO.Path]::GetTempFileName()
+        try {
+            $start.RedirectStandardInput = $stdin
+            $proc = Start-Process @start
+            # -Wait would also wait for apps an installer leaves running. Cache the handle so Windows PowerShell can report ExitCode.
+            $null = $proc.Handle
+            $proc.WaitForExit()
+            return $proc.ExitCode
+        } finally {
+            Remove-Item -LiteralPath $stdin -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     Write-Host ''
     if ($Scenario) {
         Write-Host "Windows Developer Config: $Scenario scenario" -ForegroundColor Cyan
+    } elseif ($Workload -eq 'devconfig' -and $Scope -ne 'All') {
+        Write-Host "Calm OS setup: $($Scope.ToLowerInvariant()) part" -ForegroundColor Cyan
     } elseif ($Workload -eq 'devconfig') {
         Write-Host 'Calm OS setup' -ForegroundColor Cyan
     } else {
@@ -518,7 +580,12 @@ function Invoke-CalmOsBootstrap {
     }
     . ([scriptblock]::Create($securityCode))
 
-    $work = New-DevConfigProtectedDirectory -Path (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ("CalmOS-download-" + [guid]::NewGuid().ToString('N')))
+    $work = if ($Scope -eq 'User') {
+        # A standard user can't make Administrators the owner, so the user part uses its own temp folder.
+        (New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) ("CalmOS-download-" + [guid]::NewGuid().ToString('N'))) -Force).FullName
+    } else {
+        New-DevConfigProtectedDirectory -Path (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) ("CalmOS-download-" + [guid]::NewGuid().ToString('N')))
+    }
     try {
         $zip = Join-Path $work 'source.zip'
         Save-CalmOsArchive -Destination $zip
@@ -541,7 +608,10 @@ function Invoke-CalmOsBootstrap {
         if ($Workload -ne 'devconfig' -and -not (Test-Path -LiteralPath (Join-Path $workloadsDir "$Workload.ps1") -PathType Leaf)) {
             throw "'$Ref' doesn't contain the '$Workload' workload under $flow. Check the workload name, or pick a newer -Ref."
         }
-        Assert-DevConfigProtectedTree -Directory $setupDir
+        # The user part runs from folders the signed-in user owns; it never elevates or registers tasks.
+        if ($Scope -ne 'User') {
+            Assert-DevConfigProtectedTree -Directory $setupDir
+        }
         if ($AllowUnsigned) {
             Write-Host '  Using the unsigned source copy because -AllowUnsigned was passed.' -ForegroundColor Yellow
         } else {
@@ -549,7 +619,11 @@ function Invoke-CalmOsBootstrap {
             Assert-DevConfigMicrosoftSigned -Directory $setupDir
         }
 
-        $InstallRoot = New-DevConfigProtectedDirectory -Path $InstallRoot
+        $InstallRoot = if ($Scope -eq 'User') {
+            (New-Item -ItemType Directory -Path $InstallRoot -Force).FullName
+        } else {
+            New-DevConfigProtectedDirectory -Path $InstallRoot
+        }
 
         if ($Scenario) {
             $workloadsDir = if ($AllowUnsigned) {
@@ -625,7 +699,9 @@ function Invoke-CalmOsBootstrap {
         if (Test-Path -LiteralPath $workloadsDir) {
             Copy-Item -LiteralPath $workloadsDir -Destination $InstallRoot -Recurse -Force
         }
-        Assert-DevConfigProtectedTree -Directory $InstallRoot
+        if ($Scope -ne 'User') {
+            Assert-DevConfigProtectedTree -Directory $InstallRoot
+        }
         if (-not $AllowUnsigned) {
             Assert-DevConfigMicrosoftSigned -Directory $InstallRoot
         }
@@ -636,10 +712,14 @@ function Invoke-CalmOsBootstrap {
         $target = Join-Path $InstallRoot 'dev-config.ps1'
         Write-Host "  Ready in $InstallRoot" -ForegroundColor DarkGray
 
+        # The machine and user parts run hidden, so a prompt must fail instead of waiting. Host options precede -File.
+        if ($Scope -ne 'All') { $arguments += '-NonInteractive' }
+
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($target)
             $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix"
             if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
+            if ($Scope -ne 'All') { $command += " -Scope $Scope" }
             Write-Host "Run when ready: $command" -ForegroundColor Cyan
             return
         }
@@ -647,13 +727,12 @@ function Invoke-CalmOsBootstrap {
         $arguments += '-File', "`"$target`"", '-Action', $Action
         if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
         if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
-        $start = @{ FilePath = $shell; ArgumentList = $arguments; Wait = $true; PassThru = $true }
-        if ($Action -ne 'Uninstall') { $start.NoNewWindow = $true }
-        $proc = Start-Process @start
+        if ($Scope -ne 'All') { $arguments += '-Scope', $Scope }
+        $exitCode = Start-CalmOsSetupProcess -FilePath $shell -ArgumentList $arguments -Action $Action -Scope $Scope
 
         # Throw to avoid closing the caller's console.
-        if ($proc.ExitCode -ne 0) {
-            throw "Setup finished with exit code $($proc.ExitCode). The log is in $InstallRoot."
+        if ($exitCode -ne 0) {
+            throw "Setup finished with exit code $exitCode. The log is in $InstallRoot."
         }
     } finally {
         if (Test-Path -LiteralPath $work) {

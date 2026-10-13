@@ -6,6 +6,7 @@ Set up a new Windows dev box in minutes, not hours. Pick a setup, run one comman
 
 - [Quick start](#quick-start)
 - [Setup actions](#setup-actions)
+- [Machine and user parts](#machine-and-user-parts)
 - [Single workloads](#single-workloads)
 - [AI tooling workloads](#ai-tooling-workloads)
 - [Step-by-step quick overview](#step-by-step-quick-overview)
@@ -98,6 +99,73 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 ```
 
 Replace `setup-full.ps1` with the chosen wrapper — short URLs point at these repository-root release files, not `src/`, and all three require `| iex`.
+
+## Machine and user parts
+
+The standard setup can also run as two parts, for images and unattended installs where the work for the whole PC and the work for each user happen at different times.
+
+| Part | Runs as | When | Command |
+| --- | --- | --- | --- |
+| Machine | SYSTEM or an elevated administrator | After Windows Setup, before anyone signs in (for example from `SetupComplete.cmd`) | `irm https://aka.ms/devconfig/standard/machine/setup.ps1 \| iex` (link coming soon) |
+| User | The signed-in user, not elevated | At each user's first sign-in (for example from Active Setup) | `irm https://aka.ms/devconfig/standard/user/setup.ps1 \| iex` (link coming soon) |
+
+Run the machine part first; the user part expects its packages and Windows features to be in place. The links will point at the signed [`setup-standard-machine.ps1`](./setup-standard-machine.ps1) and [`setup-standard-user.ps1`](./setup-standard-user.ps1) at the repository root, which run `bootstrap.ps1 -Action Partial` with `-Scope Machine` or `-Scope User`.
+
+To test a branch before release, use the unsigned development path:
+
+```powershell
+$url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/<branch>/src/windows-dev-config/bootstrap.ps1'
+& ([scriptblock]::Create((irm $url).TrimStart([char]0xFEFF))) -Ref <branch> -AllowUnsigned -Action Partial -Scope Machine
+& ([scriptblock]::Create((irm $url).TrimStart([char]0xFEFF))) -Ref <branch> -AllowUnsigned -Action Partial -Scope User
+```
+
+`-Scope` applies only to the standard setup (`-Action Partial`, without `-Workload` or `-Scenario`). The steps only `-Action Full` adds, such as the Edge and web search policies, haven't been checked as SYSTEM or without elevation, so Full and Uninstall run only with the default `-Scope All`.
+
+| Value | Runs |
+| --- | --- |
+| `All` | Default. Every step, exactly as before. `setup-standard.ps1` and `setup-full.ps1` use it. |
+| `Machine` | Only the steps that change the whole PC. It needs SYSTEM or an elevated administrator and never asks for elevation. |
+| `User` | Only the steps for the signed-in user. It never elevates or shows a UAC prompt, and changes only the user's profile and `HKCU`. |
+
+Both parts run hidden and unattended. They:
+
+- never wait for a key press, open a window, or restart the PC;
+- give setup an empty input, so a program that asks a question gets no answer instead of waiting for one;
+- exit 0 when setup succeeds, even if a best-effort step is flagged, and non-zero otherwise, so a harness that retries knows to try again;
+- skip work that's already done, so they're safe to run again.
+
+The machine part:
+
+- installs PowerShell 7 from the Microsoft-signed MSI on its latest GitHub release, because the winget command doesn't run as SYSTEM, then continues in PowerShell 7;
+- installs packages with the Microsoft.WinGet.Client module and `-Scope SystemOrUnknown`;
+- turns on the WSL Windows features and, when `wsl --install` can't run, installs the Microsoft-signed WSL MSI. Ubuntu needs a restart first; the machine part says so and leaves the restart to Windows Setup or the user.
+
+The user part:
+
+- downloads its own copy of Dev Config into `%LOCALAPPDATA%\CalmOS\devconfig-user` and runs it from there;
+- registers App Installer when `winget.exe` isn't available yet, as on a first sign-in, then installs with `winget --scope user`;
+- uses PowerShell 7 when the machine part installed it, and Windows PowerShell 5.1 otherwise;
+- installs Ubuntu with `%ProgramFiles%\WSL\wsl.exe` once the WSL features are active after a restart. Until then, the WslUbuntu step is flagged with the reason.
+
+Standard setup steps by part:
+
+| Phase | Machine | User |
+| --- | --- | --- |
+| Getting ready | PowerShell7 | |
+| Packages | PowerShell, Git, GitHubCLI, AzureCLI, DotnetSdk, Python, VCRedist, NodeJS, Coreutils | Terminal, IntelligentTerminal, GitHubCopilot, VSCode, UV, OhMyPosh, winappCli, PowerToys, and the PowerToysAOT setting |
+| System settings | LongPaths | |
+| File Explorer tweaks | | All eight |
+| Taskbar & Start tweaks | | EndTask, StartRecommendations, StartAccountNotifications |
+| Fonts | CascadiaFonts | CascadiaDefaultFont |
+| Windows Terminal | | DarkTheme, Ps7DefaultProfile |
+| PowerShell profile | | OhMyPoshProfile |
+| GitHub Copilot | | GitHubCopilotProfile, WinSkillsMarketplace, WinUIPlugin |
+| WSL + Ubuntu | WslComponents | WslUbuntu |
+
+Two standard steps run only with `-Scope All`:
+
+- **WinGet**, the App Installer update: App Installer can't be updated as SYSTEM or without elevation.
+- **nvmForNode**: its only installer is per-user and elevates itself, so SYSTEM has no installer for it and the user part would raise a UAC prompt nobody can see.
 
 ## Single workloads
 
@@ -284,9 +352,13 @@ A machine-wide lock (`Global\WindowsDevConfigSetup`) stops a second copy from ru
 
 If a restart is needed, setup registers a scheduled task (**`WindowsDevConfigResume`**) that resumes the run at your next logon, then restarts after **10 seconds**. Sign in, accept the second UAC prompt, and it finishes with a combined summary. Only one restart is ever performed — if WSL still isn't usable afterward, the run stops and explains why rather than rebooting again.
 
+The [machine and user parts](#machine-and-user-parts) never restart the PC and register no resume task. When WSL needs a restart, the machine part says so in its summary and still exits 0; until Windows restarts, the user part flags WslUbuntu, so run the user part again after the restart.
+
 ### Logs
 
 Setup writes `devconfig-log.txt` next to `dev-config.ps1` (normally `%ProgramData%\CalmOS`) and prints the path when it finishes. [Single workloads](#single-workloads) log to `<workload>-log.txt` in the same folder.
+
+The machine part logs to `devconfig-machine-log.txt` in `%ProgramData%\CalmOS`, and the user part to `devconfig-user-log.txt` in `%LOCALAPPDATA%\CalmOS\devconfig-user`. Both add to the same file on every run, so retries stay together. The machine part's MSI installs also log to `DevConfig-<installer>.log` in `%TEMP%` (`%windir%\Temp` for SYSTEM), and winget logs under `%windir%\Temp\WinGet\defaultState` when it runs as SYSTEM.
 
 ## Running it other ways
 
@@ -542,6 +614,8 @@ Edit the files under `src\windows-dev-config` in your clone, then run the [unsig
 
 A phase is just a file plus an entry in a workload's phase list. Files prefixed with `_` are shared helpers, not phases.
 
+Every step needs a scope, so the [machine and user parts](#machine-and-user-parts) know which one runs it. Pass `-Scope Machine` (needs administrator rights), `-Scope User` (changes only the signed-in user, without elevation), or `-Scope All` (runs only with `-Scope All`) to `New-DevConfigStep`. Package catalog entries have a `Scope` field, and registry settings take theirs from the hive in `KeyPath`: `HKLM` is Machine and `HKCU` is User. `New-DevConfigStep` throws when a step has no scope, and `src\tests\calm-os\scope-checks.ps1` checks every standard, full, and cleanup step.
+
 Setup and cleanup use the same phase files and definitions. Phases marked `Uninstall = $true` provide cleanup steps.
 Package entries use `KeepOnUninstall`, `AdditionalUninstallIds`, `UninstallOrder`, and `InnoUninstall` for cleanup differences;
 registry entries are reset by default. `New-DevConfigRegistryStep -Reset` applies `ResetValue` when specified;
@@ -566,8 +640,11 @@ See [Setup actions](#setup-actions) and [What it changes](#what-it-changes) for 
 | **No package selection at run time** | `Full` and `Partial` install all packages. There's no `-Skip` switch or selection prompt. |
 | **No dry run** | There's no `-WhatIf`. The `already OK` output tells you what a re-run *would* skip, but only after the fact. |
 | **Git and GitHub CLI are installed, not configured** | No `git config user.name`, no `gh auth login`. |
-| **`%ProgramData%\CalmOS` stays behind** | Setup and its log remain for resume and reruns. Deleting them requires Administrator rights. |
+| **`%ProgramData%\CalmOS` stays behind** | Setup and its log remain for resume and reruns. Deleting them requires Administrator rights. The user part's copy in `%LOCALAPPDATA%\CalmOS\devconfig-user` stays too. |
 | **Some changes need a sign-out** | Several Explorer and taskbar values are read by Explorer at logon. |
+| **The machine part installs packages as SYSTEM** | winget doesn't validate every package for SYSTEM installs, so a package can fail or install only for the SYSTEM profile. A failed package is flagged and the part still exits 0, so check its summary or log. |
+| **The machine part needs the network during Windows Setup** | It downloads Dev Config, PowerShell 7, the WinGet module, and packages from GitHub, the PowerShell Gallery, and winget's sources. Without network access it exits non-zero, so it can be retried. |
+| **Time limits in the machine and user parts** | A command without a limit of its own is stopped after 15 minutes, and a winget command after 20 minutes. Setup runs with an empty input, so a program that asks a question gets no answer instead of waiting; a program that reads the console directly can still wait. |
 
 ## For contributors
 

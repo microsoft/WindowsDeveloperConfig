@@ -33,7 +33,7 @@ function Invoke-RustToolchainPhase {
     Show-DevConfigPhaseHeader
 
     $steps = @(
-        New-DevConfigStep -Name 'RustStableToolchain' -Description 'Install and default the stable Rust toolchain' `
+        New-DevConfigStep -Name 'RustStableToolchain' -Description 'Install and default the stable Rust toolchain' -Scope User `
             -Check { Test-DevConfigRustStableToolchain } `
             -Apply { Set-DevConfigRustStableToolchain }
     )

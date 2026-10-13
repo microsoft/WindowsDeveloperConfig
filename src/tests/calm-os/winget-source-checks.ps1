@@ -89,13 +89,14 @@ function Get-DevConfigPackageCatalog {
         @{
             Name = "Tool$index"
             Id = "Example.Tool$index"
+            Scope = 'Machine'
             AnyVersion = $true
             Settings = if ($index -eq 1) { @(@{ Name = 'LocalSetting' }) } else { @() }
         }
     }
 }
 function New-DevConfigRegistryStep($Setting) {
-    New-DevConfigStep -Name $Setting.Name -Check { $Script:LocalApplied } -Apply { $Script:LocalApplied = $true }
+    New-DevConfigStep -Name $Setting.Name -Scope User -Check { $Script:LocalApplied } -Apply { $Script:LocalApplied = $true }
 }
 function New-CliResult([int] $Code = 0, [string] $Output = '') {
     [pscustomobject]@{ ExitCode = $Code; Output = $Output }
@@ -126,7 +127,7 @@ foreach ($code in @(-1978335217, -1978335163, -1978335157)) {
         Assert $Script:LocalApplied 'Independent settings must still apply.'
         Assert (@($Script:Calls | Where-Object { $_ -notmatch '--source winget' }).Count -eq 0) 'CLI queries must target only winget.'
         $Script:LocalApplied = $false
-        Invoke-DevConfigSteps -Steps @(New-DevConfigStep -Name 'LaterPhase' -Check { $Script:LocalApplied } -Apply { $Script:LocalApplied = $true })
+        Invoke-DevConfigSteps -Steps @(New-DevConfigStep -Name 'LaterPhase' -Scope User -Check { $Script:LocalApplied } -Apply { $Script:LocalApplied = $true })
         Assert $Script:LocalApplied 'Later local phases must still run.'
     }
 }

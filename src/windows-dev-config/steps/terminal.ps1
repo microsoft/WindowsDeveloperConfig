@@ -74,7 +74,7 @@ function Invoke-TerminalPhase {
             foreach ($setting in $Script:DevConfigThemeSettings) {
                 New-DevConfigRegistryStep -Setting $setting -Reset
             }
-            New-DevConfigStep -Name 'TerminalReset' -Description 'Remove Terminal defaults and PowerShell, Copilot, and Ubuntu profiles' -BestEffort `
+            New-DevConfigStep -Name 'TerminalReset' -Description 'Remove Terminal defaults and PowerShell, Copilot, and Ubuntu profiles' -Scope User -BestEffort `
                 -Check { param($DistributionName) Reset-DevConfigTerminal -DistributionName $DistributionName -CheckOnly } `
                 -Apply { param($DistributionName) Reset-DevConfigTerminal -DistributionName $DistributionName } `
                 -ArgumentList @($Script:DevConfigWslDistributionName)
@@ -85,10 +85,10 @@ function Invoke-TerminalPhase {
 
     # These user preferences are best-effort so later setup phases can continue.
     $steps = @(
-        New-DevConfigStep -Name 'DarkTheme' -Description 'Force dark app/system theme' -BestEffort `
+        New-DevConfigStep -Name 'DarkTheme' -Description 'Force dark app/system theme' -Scope User -BestEffort `
             -Check { Test-DevConfigDarkThemeSet } `
             -Apply { Set-DevConfigDarkTheme }
-        New-DevConfigStep -Name 'Ps7DefaultProfile' -Description 'Set PowerShell 7 as the default Windows Terminal profile' -BestEffort `
+        New-DevConfigStep -Name 'Ps7DefaultProfile' -Description 'Set PowerShell 7 as the default Windows Terminal profile' -Scope User -BestEffort `
             -Check { Test-DevConfigPs7DefaultProfile } `
             -Apply { Set-DevConfigPs7DefaultProfile }
     )

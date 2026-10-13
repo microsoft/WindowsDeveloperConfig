@@ -20,17 +20,24 @@ PowerShell 7.
 PowerShell discovery and handoff without installing software. Run it in both
 Windows PowerShell 5.1 and PowerShell 7.
 
+`src\tests\calm-os\scope-checks.ps1` checks the machine and user parts with
+mocks only: every step has a scope, each part selects exactly its steps,
+`-Scope All` is unchanged, and the parts never elevate, prompt, wait for a key,
+or restart. Run it in both Windows PowerShell 5.1 and PowerShell 7.
+
 ## File layout
 
 | File | What it is |
 | --- | --- |
 | `bootstrap.ps1` | Remote entry point: elevation, verified downloads, protected installation, and launch. |
 | `setup-full.ps1`, `setup-standard.ps1`, `uninstall.ps1` | Fixed-action wrappers that verify and call the signed bootstrap. |
+| `setup-standard-machine.ps1`, `setup-standard-user.ps1` | The same wrappers for the two parts of the standard setup: `-Action Partial -Scope Machine` and `-Action Partial -Scope User`. |
 | `dev-config.ps1` | The orchestrator shared by every workload: elevation, shell selection, run lock, logging, phases, and summary. |
 | `workloads/<name>.ps1` | A workload definition: its display name, supported actions, and phase list. `devconfig` is the default. |
 | `steps/_workload.ps1` | Loads and validates workload definitions, and passes each phase its parameters and step selection. |
 | `steps/_step-runner.ps1` | The check/apply/verify engine, the tally, and the flag reporting. |
 | `steps/_security.ps1` | Signature and directory-permission checks. Its signature is verified before loading unless `-AllowUnsigned` is used. |
+| `steps/_scope.ps1` | Helpers for the machine and user parts: account checks and the Microsoft-signed MSIs from GitHub releases (PowerShell 7, WSL). |
 | `steps/_*.ps1` | Shared helpers: elevation, reboot and resume, winget, registry, Terminal settings, retry, process execution, console. |
 | `steps/<phase>.ps1` | One file per phase, each exporting a single `Invoke-<Name>Phase` function. |
 
@@ -49,6 +56,8 @@ Windows PowerShell 5.1 and PowerShell 7.
 
 Adding a phase means adding one file and one entry in a workload's phase list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.
 
+Every step needs a `-Scope`: `Machine` for work that needs administrator rights, `User` for work that changes only the signed-in user without elevation, or `All` for a step only a `-Scope All` run should apply. Package catalog entries have a `Scope` field, and registry settings take theirs from the hive (`HKLM` is Machine, `HKCU` is User). With `-Scope Machine` or `-Scope User`, which only the standard setup (`-Action Partial`) accepts, the step runner skips the other part's steps and the `All` steps, and a phase with nothing left prints nothing. Both parts run hidden: `Wait-DevConfigKeyPress` returns at once, bootstrap gives setup an empty input, and native commands without their own limit stop after 15 minutes (winget after 20). See [Machine and user parts](../windows-dev-config/README.md#machine-and-user-parts).
+
 Run the isolated WSL probe checks from the repository root in Windows PowerShell 5.1 and PowerShell 7; they do not install WSL:
 
 ```powershell
@@ -59,8 +68,13 @@ Run the isolated WSL probe checks from the repository root in Windows PowerShell
 
 1. Complete a public-content and privacy review of source, documentation, examples, fixtures, generated reports, and release notes.
 2. Sign and publish the payload files as commit A.
-3. Set `$payloadRef` to A's full SHA in the source launchers: `setup-full.ps1`, `setup-standard.ps1`, `uninstall.ps1`, and `Workloads/winui/setup.ps1`.
+3. Set `$payloadRef` to A's full SHA in the source launchers: `setup-full.ps1`, `setup-standard.ps1`, `setup-standard-machine.ps1`, `setup-standard-user.ps1`, `uninstall.ps1`, and `Workloads/winui/setup.ps1`.
 4. Sign those updated launchers and publish their signed copies as commit B. Do not edit them after signing.
+
+Point `https://aka.ms/devconfig/standard/machine/setup.ps1` and
+`https://aka.ms/devconfig/standard/user/setup.ps1` at the signed repository-root
+`windows-dev-config/setup-standard-machine.ps1` and
+`windows-dev-config/setup-standard-user.ps1`, not `src/`.
 
 Include all AI `Workloads/**/setup.ps1` launchers in the same payload pinning
 and signing cycle.

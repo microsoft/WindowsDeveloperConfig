@@ -10,7 +10,17 @@ $Script:DevConfigRunMutex = $null
 
 # The mutex prevents concurrent machine-wide WinGet and registry changes from overlapping.
 function Enter-DevConfigSingleInstance {
-    $mutex = [System.Threading.Mutex]::new($false, 'Global\WindowsDevConfigSetup')
+    param(
+        [ValidateSet('All', 'Machine', 'User')] [string] $Scope = 'All'
+    )
+    # The user part changes only its own account, so each signed-in user gets their own lock.
+    $name = if ($Scope -eq 'User') { 'Local\WindowsDevConfigSetup-User' } else { 'Global\WindowsDevConfigSetup' }
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, $name)
+    } catch [System.UnauthorizedAccessException] {
+        # Another account's run holds a lock this account can't open.
+        return $false
+    }
     try {
         $acquired = $mutex.WaitOne(0)
     } catch [System.Threading.AbandonedMutexException] {
@@ -154,9 +164,14 @@ function Get-DevConfigRelaunchArguments {
         [switch] $RequestElevation,
         [switch] $ApplyTerminalFont,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [ValidateSet('All', 'Machine', 'User')] [string] $Scope = 'All'
     )
     $arguments = @('-NoProfile')
+    # The machine and user parts run hidden, so anything that would prompt must fail instead.
+    if ($Scope -ne 'All') {
+        $arguments += '-NonInteractive'
+    }
     if (-not $AllowUnsigned) {
         $arguments += '-ExecutionPolicy', 'RemoteSigned'
     }
@@ -176,6 +191,10 @@ function Get-DevConfigRelaunchArguments {
             $arguments += '-Resumed'
         }
     }
+    # The next-sign-in font update keeps the scope too, so the user part's font runs from its own folder.
+    if ($Scope -ne 'All') {
+        $arguments += '-Scope', $Scope
+    }
     if ($AllowUnsigned) {
         $arguments += '-AllowUnsigned'
     }
@@ -189,11 +208,22 @@ function Invoke-DevConfigElevate {
         [switch] $Resumed,
         [switch] $AllowUnsigned,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [ValidateSet('All', 'Machine', 'User')] [string] $Scope = 'All'
     )
+
+    # The user part changes only the signed-in user and never asks for elevation.
+    if ($Scope -eq 'User') {
+        return
+    }
 
     if (Test-DevConfigIsAdmin) {
         return
+    }
+
+    # The machine part runs hidden, where a UAC prompt would wait forever.
+    if ($Scope -eq 'Machine') {
+        throw 'The machine part needs administrator rights. Run it as SYSTEM or from an elevated PowerShell.'
     }
 
     if ($NoElevate) {

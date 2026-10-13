@@ -67,10 +67,16 @@ function Invoke-DevConfigEnsurePwsh {
         [switch] $Resumed,
         [switch] $AllowUnsigned,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [ValidateSet('All', 'Machine', 'User')] [string] $Scope = 'All'
     )
 
     if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7) {
+        return
+    }
+
+    if ($Scope -ne 'All') {
+        Invoke-DevConfigEnsureScopedPwsh -ScriptPath $ScriptPath -AllowUnsigned:$AllowUnsigned -Action $Action -Scope $Scope
         return
     }
 
@@ -93,6 +99,53 @@ function Invoke-DevConfigEnsurePwsh {
     $proc = Start-Process -FilePath $pwsh -ArgumentList $relaunchArgs -Wait -NoNewWindow -PassThru
 
     # The relaunch performs the setup work, so this Windows PowerShell process exits with its code.
+    exit $proc.ExitCode
+}
+
+# The machine part installs PowerShell 7 from its signed MSI because the WinGet CLI does not run as
+# SYSTEM and the WinGet module needs PowerShell 7 there. The user part never installs it.
+function Invoke-DevConfigEnsureScopedPwsh {
+    param(
+        [Parameter(Mandatory)] [string] $ScriptPath,
+        [switch] $AllowUnsigned,
+        [ValidateSet('Partial')] [string] $Action = 'Partial',
+        [Parameter(Mandatory)] [ValidateSet('Machine', 'User')] [string] $Scope
+    )
+
+    $pwsh = $null
+    try {
+        $pwsh = Get-DevConfigPwshExe
+    } catch {
+        # SYSTEM has no AppX profile to search; a missing PowerShell 7 is handled below.
+        Write-Verbose "Could not look for PowerShell 7: $($_.Exception.Message)"
+    }
+
+    if (-not $pwsh -and $Scope -eq 'Machine') {
+        Write-Host 'Installing PowerShell 7 first -- the WinGet module needs it when setup runs as SYSTEM.' -ForegroundColor Yellow
+        $null = Install-DevConfigPwshMsi
+        try {
+            $pwsh = Get-DevConfigPwshExe
+        } catch {
+            Write-Verbose "Could not look for PowerShell 7: $($_.Exception.Message)"
+        }
+        if (-not $pwsh) {
+            throw 'PowerShell 7 is still missing after its installer finished, and the machine part needs it.'
+        }
+    }
+
+    if (-not $pwsh) {
+        Write-Host 'PowerShell 7 is not installed yet -- carrying on with Windows PowerShell.' -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host 'Switching this setup over to PowerShell 7...' -ForegroundColor DarkCyan
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -AllowUnsigned:$AllowUnsigned -Action $Action -Scope $Scope
+    # Start-Process -Wait would also wait for apps an installer leaves running, so wait for setup alone.
+    # Input stays whatever this process got; bootstrap gives the scoped parts an empty file.
+    $proc = Start-Process -FilePath $pwsh -ArgumentList $relaunchArgs -NoNewWindow -PassThru
+    # Holding the handle keeps the exit code readable in Windows PowerShell.
+    $null = $proc.Handle
+    $proc.WaitForExit()
     exit $proc.ExitCode
 }
 

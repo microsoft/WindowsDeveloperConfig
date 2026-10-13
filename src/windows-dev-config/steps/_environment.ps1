@@ -20,6 +20,11 @@ function Invoke-DevConfigNativeCommand {
         [string[]] $Arguments = @(),
         [ValidateRange(0, 86400)] [int] $TimeoutSeconds = 0
     )
+    # Hidden machine and user parts can't let a stalled command (sign-in, network) hold setup forever.
+    if ($TimeoutSeconds -eq 0) {
+        $runScope = Get-Variable -Name DevConfigScope -Scope Script -ValueOnly -ErrorAction Ignore
+        if ($runScope -eq 'Machine' -or $runScope -eq 'User') { $TimeoutSeconds = 900 }
+    }
     $invoke = {
         param($FilePath, $Arguments)
         $ErrorActionPreference = 'Continue'

@@ -175,7 +175,7 @@ function Invoke-CopilotPhase {
             (Join-Path $fragmentsDir 'copilot.png')
         )
         $steps = @(
-            New-DevConfigStep -Name 'CopilotFragmentCleanup' -Description 'Remove the Copilot Terminal fragment and icon' -BestEffort `
+            New-DevConfigStep -Name 'CopilotFragmentCleanup' -Description 'Remove the Copilot Terminal fragment and icon' -Scope User -BestEffort `
                 -Check { param($Paths) @($Paths | Where-Object { Test-Path -LiteralPath $_ }).Count -eq 0 } `
                 -Apply {
                     param($Paths)
@@ -186,19 +186,19 @@ function Invoke-CopilotPhase {
                     }
                 } `
                 -ArgumentList @(, $fragmentPaths)
-            New-DevConfigStep -Name 'WinUIPluginCleanup' -Description 'Uninstall the WinUI Copilot plugin' -BestEffort `
+            New-DevConfigStep -Name 'WinUIPluginCleanup' -Description 'Uninstall the WinUI Copilot plugin' -Scope User -BestEffort `
                 -Check { @(Get-DevConfigInstalledWinUIPlugin).Count -eq 0 } `
                 -Apply {
                     foreach ($plugin in @(Get-DevConfigInstalledWinUIPlugin)) {
                         Invoke-DevConfigCleanupCommand -FilePath 'copilot' -Arguments @('plugin', 'uninstall', $plugin) | Out-Null
                     }
                 }
-            New-DevConfigStep -Name 'WinSkillsMarketplaceCleanup' -Description 'Remove the win-dev-skills Copilot marketplace' -BestEffort `
+            New-DevConfigStep -Name 'WinSkillsMarketplaceCleanup' -Description 'Remove the win-dev-skills Copilot marketplace' -Scope User -BestEffort `
                 -Check { -not (Test-DevConfigWinSkillsMarketplaceRegistered) } `
                 -Apply {
                     Invoke-DevConfigCleanupCommand -FilePath 'copilot' -Arguments @('plugin', 'marketplace', 'remove', $Script:DevConfigWinSkillsMarketplace) | Out-Null
                 }
-            New-DevConfigStep -Name 'WinUITemplatesCleanup' -Description 'Uninstall the WinUI dotnet-new template package' -BestEffort `
+            New-DevConfigStep -Name 'WinUITemplatesCleanup' -Description 'Uninstall the WinUI dotnet-new template package' -Scope User -BestEffort `
                 -Check { -not (Test-DevConfigWinUITemplatePackageInstalled) } `
                 -Apply {
                     Invoke-DevConfigCleanupCommand -FilePath 'dotnet' -Arguments @('new', 'uninstall', $Script:DevConfigWinUITemplatePackage) | Out-Null
@@ -210,19 +210,19 @@ function Invoke-CopilotPhase {
 
     # BestEffort keeps network-dependent integrations from blocking the WSL and reboot phase.
     $steps = @(
-        New-DevConfigStep -Name 'GitHubCopilotProfile' -Description 'Add a GitHub Copilot profile to Windows Terminal' `
+        New-DevConfigStep -Name 'GitHubCopilotProfile' -Description 'Add a GitHub Copilot profile to Windows Terminal' -Scope User `
             -Check { Test-DevConfigCopilotTerminalProfile } `
             -Apply { Set-DevConfigCopilotTerminalProfile } `
             -BestEffort
-        New-DevConfigStep -Name 'WinUITemplates' -Description 'Install WinUI dotnet-new templates' `
+        New-DevConfigStep -Name 'WinUITemplates' -Description 'Install WinUI dotnet-new templates' -Scope User `
             -Check { Test-DevConfigWinUITemplatesInstalled } `
             -Apply { Install-DevConfigWinUITemplates } `
             -BestEffort
-        New-DevConfigStep -Name 'WinSkillsMarketplace' -Description 'Add win-dev-skills to the Copilot plugin marketplace' `
+        New-DevConfigStep -Name 'WinSkillsMarketplace' -Description 'Add win-dev-skills to the Copilot plugin marketplace' -Scope User `
             -Check { Test-DevConfigWinSkillsMarketplaceAdded } `
             -Apply { Add-DevConfigWinSkillsMarketplace } `
             -BestEffort
-        New-DevConfigStep -Name 'WinUIPlugin' -Description 'Install the WinUI Copilot plugin from win-dev-skills' `
+        New-DevConfigStep -Name 'WinUIPlugin' -Description 'Install the WinUI Copilot plugin from win-dev-skills' -Scope User `
             -Check { Test-DevConfigWinUIPluginInstalled } `
             -Apply { Install-DevConfigWinUIPlugin } `
             -BestEffort

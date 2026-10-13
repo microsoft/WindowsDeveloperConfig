@@ -44,6 +44,13 @@ function Wait-DevConfigKeyPress {
         [int] $TimeoutSeconds = 900
     )
 
+    # The machine and user parts run hidden during Windows Setup and sign-in, where a pause only
+    # holds them up: a console that never gets a key press would wait the full timeout.
+    $runScope = Get-Variable -Name DevConfigScope -Scope Script -ValueOnly -ErrorAction Ignore
+    if ($runScope -and $runScope -ne 'All') {
+        return
+    }
+
     Write-Host ''
     $minutes = [Math]::Round($TimeoutSeconds / 60)
     Write-Host "$Message (closes on its own in $minutes minutes if you step away)" -ForegroundColor DarkGray

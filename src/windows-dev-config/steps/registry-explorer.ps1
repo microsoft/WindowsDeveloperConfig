@@ -160,7 +160,7 @@ function Invoke-RegistryExplorerPhase {
         New-DevConfigRegistryStep -Setting $tweak -Reset:($Script:DevConfigAction -eq 'Uninstall')
     }
     if ($Script:DevConfigAction -eq 'Uninstall') {
-        $steps += New-DevConfigStep -Name 'ExplorerDisplayReset' -Description 'Reset hidden files, file extensions, and full-path titles' -BestEffort `
+        $steps += New-DevConfigStep -Name 'ExplorerDisplayReset' -Description 'Reset hidden files, file extensions, and full-path titles' -Scope User -BestEffort `
             -Check { Reset-DevConfigExplorerDisplay -CheckOnly } `
             -Apply { Reset-DevConfigExplorerDisplay }
     }

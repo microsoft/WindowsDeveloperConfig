@@ -124,6 +124,17 @@ function Show-DevConfigSilentSkipSummary {
     }
 }
 
+# All runs every step. Machine runs only steps that need administrator rights, and User only steps
+# that change the signed-in user, so Windows Setup and first sign-in can each run their own part.
+function Get-DevConfigScope {
+    # The variable is read, not defaulted, so loading the helpers can't reset the scope dev-config.ps1 set.
+    $runScope = Get-Variable -Name DevConfigScope -Scope Script -ValueOnly -ErrorAction Ignore
+    if ($runScope) {
+        return [string]$runScope
+    }
+    return 'All'
+}
+
 function New-DevConfigStep {
     param(
         [Parameter(Mandatory)] [string] $Name,
@@ -131,12 +142,19 @@ function New-DevConfigStep {
         [Parameter(Mandatory)] [scriptblock] $Apply,
         [string] $Description = '',
         [object[]] $ArgumentList = @(),
+        # Machine: elevated or SYSTEM work. User: per-user, non-elevated work. All: only in a full (-Scope All) run.
+        [ValidateSet('Machine', 'User', 'All')] [string] $Scope,
         [switch] $BestEffort
     )
+    # An untagged step would silently drop out of both the machine and the user part.
+    if (-not $Scope) {
+        throw "Step '$Name' has no -Scope. Tag it Machine (needs administrator rights), User (changes only the signed-in user) or All (full setup only)."
+    }
     # ArgumentList is passed positionally at call time, not captured by closure.
     [pscustomobject]@{
         Name         = $Name
         Description  = $Description
+        Scope        = $Scope
         Check        = $Check
         Apply        = $Apply
         ArgumentList = $ArgumentList
@@ -225,6 +243,15 @@ function Invoke-DevConfigSteps {
             throw "The '$Script:DevConfigPhaseTitle' phase has no step named $($unknown -join ', '). Its steps are $($names -join ', ')."
         }
         $Steps = @($Steps | Where-Object { $Script:DevConfigPhaseSteps -contains $_.Name })
+    }
+
+    # The machine and user parts run only their own steps; a phase with none left prints nothing.
+    $runScope = Get-DevConfigScope
+    if ($runScope -ne 'All') {
+        $Steps = @($Steps | Where-Object { $_.Scope -eq $runScope })
+        if ($Steps.Count -eq 0) {
+            return
+        }
     }
 
     # Fresh runs print before slow checks so the console shows why it is waiting.

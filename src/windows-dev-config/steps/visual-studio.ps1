@@ -151,7 +151,7 @@ function Invoke-VisualStudioPhase {
     $shortNames = @($Components | ForEach-Object { $_ -replace '^Microsoft\.VisualStudio\.(Workload|ComponentGroup|Component)\.', '' })
     # BestEffort lets later phases run when Visual Studio itself could not be installed.
     $steps = @(
-        New-DevConfigStep -Name 'VisualStudioWorkloads' -Description "Add to Visual Studio: $($shortNames -join ', ')" -BestEffort `
+        New-DevConfigStep -Name 'VisualStudioWorkloads' -Description "Add to Visual Studio: $($shortNames -join ', ')" -Scope Machine -BestEffort `
             -Check { param($Components) Test-DevConfigVisualStudioComponents -Components $Components } `
             -Apply { param($Components) Add-DevConfigVisualStudioComponents -Components $Components } `
             -ArgumentList @(, $Components)

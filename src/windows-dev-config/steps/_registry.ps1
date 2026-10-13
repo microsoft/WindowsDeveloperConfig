@@ -65,13 +65,31 @@ function Test-DevConfigRegistryValueAbsent {
     return (Get-Item -LiteralPath $path).GetValueNames() -notcontains $ValueName
 }
 
+# HKLM settings need administrator rights; HKCU settings belong to the signed-in user.
+function Get-DevConfigRegistryStepScope {
+    param(
+        [Parameter(Mandatory)] [hashtable] $Setting
+    )
+    if ($Setting.ContainsKey('Scope')) {
+        return $Setting.Scope
+    }
+    if ($Setting.KeyPath -match '^HKLM') {
+        return 'Machine'
+    }
+    if ($Setting.KeyPath -match '^HKCU') {
+        return 'User'
+    }
+    throw "Registry setting '$($Setting.Name)' needs a Scope of Machine or User for $($Setting.KeyPath)."
+}
+
 function New-DevConfigRegistryStep {
     param(
         [Parameter(Mandatory)] [hashtable] $Setting,
         [switch] $Reset
     )
+    $stepScope = Get-DevConfigRegistryStepScope -Setting $Setting
     if ($Reset -and -not $Setting.ContainsKey('ResetValue')) {
-        return New-DevConfigStep -Name "$($Setting.Name)Reset" -Description "Reset $($Setting.ValueName)" -BestEffort `
+        return New-DevConfigStep -Name "$($Setting.Name)Reset" -Description "Reset $($Setting.ValueName)" -Scope $stepScope -BestEffort `
             -Check {
                 param($KeyPath, $ValueName)
                 Test-DevConfigRegistryValueAbsent -KeyPath $KeyPath -ValueName $ValueName
@@ -93,7 +111,7 @@ function New-DevConfigRegistryStep {
     }
 
     $type = if ($Setting.ContainsKey('Type')) { $Setting.Type } else { 'DWord' }
-    New-DevConfigStep -Name $Setting.Name -Description $Setting.Description `
+    New-DevConfigStep -Name $Setting.Name -Description $Setting.Description -Scope $stepScope `
         -BestEffort:([bool]$Setting['BestEffort']) `
         -Check {
             param($KeyPath, $ValueName, $Value)

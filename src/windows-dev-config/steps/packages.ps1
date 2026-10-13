@@ -59,6 +59,9 @@ function Remove-DevConfigNvm {
 # Every package any workload installs; a workload lists the names it wants, in its own install order.
 # KeepOnUninstall, AdditionalUninstallIds, UninstallOrder, and InnoUninstall shape cleanup. Settings are
 # registry values that go with the package: applied after installs and reset first during cleanup.
+# Scope picks the part that installs it with -Scope Machine or User: Machine for machine-wide installers and
+# anything that needs elevation; User for per-user, MSIX, and portable installers that never need elevation;
+# All for packages that only a full (-Scope All) run installs.
 function Get-DevConfigPackageCatalog {
     # PowerShell's process architecture can differ from Windows' native architecture.
     $architecture = Get-ItemPropertyValue -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' -Name 'PROCESSOR_ARCHITECTURE'
@@ -72,43 +75,51 @@ function Get-DevConfigPackageCatalog {
         @{
             Name            = 'Terminal'
             Id              = 'Microsoft.WindowsTerminal'
+            Scope           = 'User'
             KeepOnUninstall = $true
         }
         @{
             Name           = 'IntelligentTerminal'
             Id             = 'Microsoft.IntelligentTerminal'
+            Scope          = 'User'
             UninstallOrder = 12
         }
         @{
             Name           = 'PowerShell'
             Id             = 'Microsoft.PowerShell'
+            Scope          = 'Machine'
             UninstallOrder = 16
         }
         @{
             Name           = 'Git'
             Id             = 'Git.Git'
+            Scope          = 'Machine'
             UninstallOrder = 6
             InnoUninstall  = @{ DisplayName = 'Git'; Publisher = 'The Git Development Community' }
         }
         @{
             Name           = 'GitHubCLI'
             Id             = 'GitHub.cli'
+            Scope          = 'Machine'
             UninstallOrder = 7
         }
         @{
             Name           = 'AzureCLI'
             Id             = 'Microsoft.AzureCLI'
+            Scope          = 'Machine'
             UninstallOrder = 9
         }
         @{
             Name                   = 'GitHubCopilot'
             Id                     = 'GitHub.Copilot'
+            Scope                  = 'User'
             UninstallOrder         = 4
             AdditionalUninstallIds = @('XPDC8MMRVCF73P', 'GitHub Copilot CLI')
         }
         @{
             Name           = 'VSCode'
             Id             = 'Microsoft.VisualStudioCode'
+            Scope          = 'User'
             Large          = $true
             UninstallOrder = 14
             InnoUninstall  = @{ DisplayName = 'Microsoft Visual Studio Code'; Publisher = 'Microsoft Corporation' }
@@ -116,69 +127,83 @@ function Get-DevConfigPackageCatalog {
         @{
             Name           = 'DotnetSdk'
             Id             = 'Microsoft.DotNet.SDK.10'
+            Scope          = 'Machine'
             Large          = $true
             UninstallOrder = 11
         }
         @{
             Name                   = 'Python'
             Id                     = 'Python.Python.3.14'
+            Scope                  = 'Machine'
             UninstallOrder         = 5
             AdditionalUninstallIds = @('Python.Launcher', 'Python.PythonInstallManager')
         }
         @{
             Name            = 'VCRedist'
             Id              = $vcRedistId
+            Scope           = 'Machine'
             KeepOnUninstall = $true
         }
         @{
             Name           = 'UV'
             Id             = 'astral-sh.uv'
+            Scope          = 'User'
             UninstallOrder = 1
         }
         @{
             Name                   = 'NodeJS'
             Id                     = 'OpenJS.NodeJS.LTS'
+            Scope                  = 'Machine'
             UninstallOrder         = 3
             AdditionalUninstallIds = @('OpenJS.NodeJS')
         }
+        # User-scope Inno installer that elevates itself: no SYSTEM installer, and a hidden UAC prompt per user.
         @{
             Name           = 'nvmForNode'
             Id             = 'CoreyButler.NVMforWindows'
+            Scope          = 'All'
             UninstallOrder = 2
         }
         @{
             Name           = 'Coreutils'
             Id             = 'Microsoft.Coreutils'
+            Scope          = 'Machine'
             UninstallOrder = 10
         }
         @{
             Name           = 'Go'
             Id             = 'GoLang.Go'
+            Scope          = 'Machine'
             UninstallOrder = 17
         }
         @{
             Name           = 'OhMyPosh'
             Id             = 'JanDeDobbeleer.OhMyPosh'
+            Scope          = 'User'
             UninstallOrder = 8
         }
         @{
             Name           = 'Php'
             Id             = 'PHP.PHP.8.5'
+            Scope          = 'Machine'
             UninstallOrder = 18
         }
         @{
             Name           = 'winappCli'
             Id             = 'Microsoft.WinAppCli'
+            Scope          = 'User'
             UninstallOrder = 15
         }
         @{
             Name           = 'Rustup'
             Id             = 'Rustlang.Rustup'
+            Scope          = 'User'
             UninstallOrder = 19
         }
         @{
             Name           = 'PowerToys'
             Id             = 'Microsoft.PowerToys'
+            Scope          = 'User'
             Large          = $true
             UninstallOrder = 13
             Settings       = @(
@@ -195,6 +220,7 @@ function Get-DevConfigPackageCatalog {
         @{
             Name       = 'VisualStudioCommunity'
             Id         = 'Microsoft.VisualStudio.Community'
+            Scope      = 'Machine'
             Large      = $true
             # Visual Studio updates itself, so a rerun must not start a multi-GB upgrade that needs it closed.
             AnyVersion = $true
@@ -226,6 +252,11 @@ function Invoke-PackagesPhase {
     param(
         [Parameter(Mandatory)] [string[]] $Packages
     )
+    # A machine or user part installs only its own packages and skips WinGet setup when it has none.
+    $runScope = Get-DevConfigScope
+    if ($runScope -ne 'All' -and @(Get-DevConfigPackage -Name $Packages | Where-Object { $_.Scope -eq $runScope }).Count -eq 0) {
+        return
+    }
     if ($Script:DevConfigAction -ne 'Uninstall') {
         # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
         if (-not $Script:DevConfigResumed) {
@@ -241,6 +272,9 @@ function Invoke-PackagesPhase {
     }
 
     $selected = @(Get-DevConfigPackage -Name $Packages)
+    if ($runScope -ne 'All') {
+        $selected = @($selected | Where-Object { $_.Scope -eq $runScope })
+    }
     $settings = @(foreach ($package in $selected) { if ($package['Settings']) { $package['Settings'] } })
 
     if ($Script:DevConfigAction -eq 'Uninstall') {
@@ -253,7 +287,7 @@ function Invoke-PackagesPhase {
             foreach ($package in $cleanupPackages) {
                 switch ($package.Name) {
                     'UV' {
-                        New-DevConfigStep -Name 'UvCleanup' -Description 'Remove uv executables, caches, and local data' -BestEffort `
+                        New-DevConfigStep -Name 'UvCleanup' -Description 'Remove uv executables, caches, and local data' -Scope $package.Scope -BestEffort `
                             -Check {
                                 param($Id)
                                 @(Get-DevConfigUvCleanupPath).Count -eq 0 -and
@@ -263,7 +297,7 @@ function Invoke-PackagesPhase {
                             -ArgumentList @($package.Id)
                     }
                     'nvmForNode' {
-                        New-DevConfigStep -Name 'NvmCleanup' -Description 'Uninstall NVM for Windows' -BestEffort `
+                        New-DevConfigStep -Name 'NvmCleanup' -Description 'Uninstall NVM for Windows' -Scope $package.Scope -BestEffort `
                             -Check { param($Id) Invoke-DevConfigPackageCleanup -Ids @($Id) -CheckOnly } `
                             -Apply { param($Id) Remove-DevConfigNvm } `
                             -ArgumentList @($package.Id)
@@ -273,7 +307,7 @@ function Invoke-PackagesPhase {
                         if ($package['AdditionalUninstallIds']) {
                             $ids += $package.AdditionalUninstallIds
                         }
-                        New-DevConfigStep -Name "$($package.Name)Cleanup" -Description "Uninstall $($package.Name) (user, machine, and MSIX)" -BestEffort `
+                        New-DevConfigStep -Name "$($package.Name)Cleanup" -Description "Uninstall $($package.Name) (user, machine, and MSIX)" -Scope $package.Scope -BestEffort `
                             -Check { param($Ids, $InnoUninstall) Invoke-DevConfigPackageCleanup -Ids $Ids -InnoUninstall $InnoUninstall -CheckOnly } `
                             -Apply { param($Ids, $InnoUninstall) Invoke-DevConfigPackageCleanup -Ids $Ids -InnoUninstall $InnoUninstall } `
                             -ArgumentList @($ids, $package['InnoUninstall'])
@@ -289,7 +323,7 @@ function Invoke-PackagesPhase {
     # BestEffort lets independent packages continue; dependent phases verify packages before use.
     $steps = @(
         foreach ($package in $selected) {
-            New-DevConfigStep -Name $package.Name -Description "winget install $($package.Id)" -BestEffort `
+            New-DevConfigStep -Name $package.Name -Description "winget install $($package.Id)" -Scope $package.Scope -BestEffort `
                 -Check { param($Id, $Large, $AnyVersion) Test-DevConfigWingetPackageInstalled -Id $Id -AnyVersion:$AnyVersion } `
                 -Apply {
                     param($Id, $Large, $AnyVersion)

@@ -21,6 +21,56 @@ $Script:DevConfigWinGetAssets = [ordered]@{
     'DesktopAppInstaller_Dependencies.zip' = 'BA875AFE9D190F61218985AC0292A99D1DB710BF93E13C68944CA9D89F0D82D1'
 }
 
+# dev-config.ps1 sets DevConfigScope for its machine and user parts. Workloads that load only these
+# helpers keep the unscoped behavior.
+function Get-DevConfigWingetScope {
+    $runScope = Get-Variable -Name DevConfigScope -Scope Script -ValueOnly -ErrorAction Ignore
+    if ($runScope) {
+        return $runScope
+    }
+    return 'All'
+}
+
+# At first sign-in, App Installer's per-user winget alias can appear after this process started, so the
+# user part calls it by full path.
+function Get-DevConfigWingetExe {
+    if ((Get-DevConfigWingetScope) -eq 'User') {
+        $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+        if (Test-Path -LiteralPath $alias) {
+            return $alias
+        }
+    }
+    return 'winget.exe'
+}
+
+# Windows registers App Installer for a new account in the background after its first sign-in, so the
+# user part registers it itself (no elevation needed) and waits briefly for the winget alias.
+function Register-DevConfigAppInstaller {
+    $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+    if (Test-Path -LiteralPath $alias) {
+        return
+    }
+    Write-Host '  Registering App Installer (WinGet) for this account...' -ForegroundColor DarkCyan
+    # Appx cmdlets run in Windows PowerShell, as in Invoke-DevConfigWinGetDeployment.
+    $command = "`$ErrorActionPreference = 'Stop'; `$ProgressPreference = 'SilentlyContinue'; " +
+        'Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe'
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $systemDirectory = if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) { 'Sysnative' } else { 'System32' }
+    $shell = Join-Path $env:SystemRoot "$systemDirectory\WindowsPowerShell\v1.0\powershell.exe"
+    $result = Invoke-DevConfigNativeCommand -FilePath $shell `
+        -Arguments @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) -TimeoutSeconds 300
+    if ($result.ExitCode -ne 0) {
+        Write-Host "  App Installer registration reported: $(([string]$result.Output).Trim())" -ForegroundColor Yellow
+    }
+    for ($waited = 0; $waited -lt 60; $waited += 2) {
+        if (Test-Path -LiteralPath $alias) {
+            return
+        }
+        Start-Sleep -Seconds 2
+    }
+    throw "WinGet isn't available for this account yet: App Installer didn't register within a minute. Sign out and back in, then run the user part again."
+}
+
 function Install-DevConfigWinGetModule {
     Enable-DevConfigModernTls
 
@@ -32,9 +82,11 @@ function Install-DevConfigWinGetModule {
         Register-PSRepository -Default -ErrorAction Stop
     }
 
+    # The machine part runs as SYSTEM, so its copy goes where every account's PowerShell finds it.
+    $moduleScope = if ((Get-DevConfigWingetScope) -eq 'Machine') { 'AllUsers' } else { 'CurrentUser' }
     # Retry module download because it is the most network-dependent call in the run.
     Invoke-DevConfigRetry -Name 'WinGet module download' -MaxAttempts 4 -InitialDelaySeconds 10 -ScriptBlock {
-        Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop | Out-Null
+        Install-Module -Name Microsoft.WinGet.Client -Repository PSGallery -Scope $moduleScope -Force -AllowClobber -ErrorAction Stop | Out-Null
     }
 }
 
@@ -44,6 +96,14 @@ function Initialize-DevConfigWinGet {
         return
     }
     if ($Script:DevConfigWinGetMode -eq 'Cli') {
+        return
+    }
+
+    # The user part uses the winget command, the route proven at first sign-in, and skips the module's
+    # PowerShell Gallery download in a run that has a time limit.
+    if ((Get-DevConfigWingetScope) -eq 'User') {
+        Register-DevConfigAppInstaller
+        $Script:DevConfigWinGetMode = 'Cli'
         return
     }
 
@@ -70,6 +130,9 @@ function Initialize-DevConfigWinGet {
         $reason = $_.Exception.Message
     }
 
+    if ((Get-DevConfigWingetScope) -eq 'Machine') {
+        throw "The WinGet PowerShell module isn't usable ($reason). The machine part runs as SYSTEM, where only the module can install packages. Check the internet connection or proxy settings, then run it again."
+    }
     if (-not (Test-DevConfigWingetCliUsable)) {
         throw "The WinGet PowerShell module isn't usable on this machine ($reason), and the built-in winget command isn't working either. Check your internet connection or proxy settings, then run this again."
     }
@@ -204,6 +267,8 @@ function Confirm-DevConfigWinGetReady {
             return
         } catch {
             $moduleError = $_.Exception.Message
+            # As SYSTEM the module runs WinGet in-process: there's no App Installer to repair and no command to fall back to.
+            if ((Get-DevConfigWingetScope) -eq 'Machine') { throw }
             if ($AllowCliFallback -and
                 $_.Exception.GetType().FullName -eq 'Microsoft.WinGet.Client.Engine.Exceptions.WinGetIntegrityException' -and
                 [string]$_.Exception.Category -eq 'AppInstallerNotInstalled') {
@@ -244,7 +309,11 @@ function Invoke-DevConfigWingetCli {
     param(
         [Parameter(Mandatory)] [string[]] $Arguments
     )
-    return Invoke-DevConfigNativeCommand -FilePath 'winget.exe' -Arguments $Arguments
+    if ((Get-DevConfigWingetScope) -eq 'All') {
+        return Invoke-DevConfigNativeCommand -FilePath 'winget.exe' -Arguments $Arguments
+    }
+    # The hidden parts have a time limit, so a stalled winget call is stopped after 20 minutes.
+    return Invoke-DevConfigNativeCommand -FilePath (Get-DevConfigWingetExe) -Arguments $Arguments -TimeoutSeconds 1200
 }
 
 function Test-DevConfigWingetSourceFailure {
@@ -290,7 +359,11 @@ function Invoke-DevConfigWingetSourceOperation {
 
 # App Execution Alias stubs can exist without a registered App Installer package, so invoke winget.exe.
 function Test-DevConfigWingetCliUsable {
-    if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) {
+    # The winget command isn't supported as SYSTEM, where the machine part runs.
+    if ((Get-DevConfigWingetScope) -eq 'Machine') {
+        return $false
+    }
+    if (-not (Get-Command (Get-DevConfigWingetExe) -ErrorAction SilentlyContinue)) {
         return $false
     }
     try {
@@ -500,11 +573,13 @@ function Test-DevConfigWingetUpgradeAvailable {
 function Get-DevConfigWingetInstallArguments {
     param(
         [Parameter(Mandatory)] [string] $Id,
-        [switch] $DisableInteractivity
+        [switch] $DisableInteractivity,
+        [switch] $UserScope
     )
     return @(
         'install', '--id', $Id, '--exact', '--source', 'winget', '--silent',
         '--accept-package-agreements', '--accept-source-agreements'
+        if ($UserScope) { '--scope', 'user' }
         if ($DisableInteractivity) { '--disable-interactivity' }
     )
 }
@@ -512,11 +587,13 @@ function Get-DevConfigWingetInstallArguments {
 function Get-DevConfigWingetUpgradeArguments {
     param(
         [Parameter(Mandatory)] [string] $Id,
-        [switch] $DisableInteractivity
+        [switch] $DisableInteractivity,
+        [switch] $UserScope
     )
     return @(
         'upgrade', '--id', $Id, '--exact', '--source', 'winget', '--silent',
         '--accept-package-agreements', '--accept-source-agreements'
+        if ($UserScope) { '--scope', 'user' }
         if ($DisableInteractivity) { '--disable-interactivity' }
     )
 }
@@ -527,9 +604,18 @@ function Install-DevConfigWingetPackage {
         [switch] $AllowCliFallback,
         [switch] $DisableInteractivity
     )
+    # The user part never picks a machine-wide installer: it would wait on a UAC prompt nobody can see.
+    $runScope = Get-DevConfigWingetScope
+    $userScope = $runScope -eq 'User'
+    $noPrompt = $DisableInteractivity -or $runScope -ne 'All'
+    # As SYSTEM there's no signed-in user, so only machine-wide or unscoped installers apply.
+    $scopeParameters = @{}
+    if ($runScope -eq 'Machine') {
+        $scopeParameters.Scope = 'SystemOrUnknown'
+    }
     Invoke-DevConfigWingetSourceOperation -Name "winget install $Id" -RetryPackageFailure -ScriptBlock {
         if ($Script:DevConfigWinGetMode -eq 'Cli') {
-            $r = Invoke-DevConfigWingetCli -Arguments (Get-DevConfigWingetInstallArguments -Id $Id -DisableInteractivity:$DisableInteractivity)
+            $r = Invoke-DevConfigWingetCli -Arguments (Get-DevConfigWingetInstallArguments -Id $Id -DisableInteractivity:$noPrompt -UserScope:$userScope)
             if ($r.ExitCode -ne 0 -and $r.ExitCode -ne $Script:DevConfigWingetNoUpgrade) {
                 throw [Runtime.InteropServices.COMException]::new("winget install $Id failed with exit code $($r.ExitCode)", $r.ExitCode)
             }
@@ -537,7 +623,7 @@ function Install-DevConfigWingetPackage {
         }
 
         try {
-            $result = Install-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive -ErrorAction Stop
+            $result = Install-WinGetPackage -Id $Id -Source winget -Mode Silent -MatchOption EqualsCaseInsensitive -ErrorAction Stop @scopeParameters
             # NoApplicableUpgrade means the package is already installed and current.
             if (-not $result.Succeeded() -and $result.Status -ne 'NoApplicableUpgrade') {
                 throw [InvalidOperationException]::new("winget install $Id failed: $($result.ErrorMessage())", $result.ExtendedErrorCode)
@@ -564,9 +650,12 @@ function Update-DevConfigWingetPackage {
         [switch] $AllowCliFallback,
         [switch] $DisableInteractivity
     )
+    $runScope = Get-DevConfigWingetScope
+    $userScope = $runScope -eq 'User'
+    $noPrompt = $DisableInteractivity -or $runScope -ne 'All'
     Invoke-DevConfigWingetSourceOperation -Name "winget upgrade $Id" -RetryPackageFailure -ScriptBlock {
         if ($Script:DevConfigWinGetMode -eq 'Cli') {
-            $r = Invoke-DevConfigWingetCli -Arguments (Get-DevConfigWingetUpgradeArguments -Id $Id -DisableInteractivity:$DisableInteractivity)
+            $r = Invoke-DevConfigWingetCli -Arguments (Get-DevConfigWingetUpgradeArguments -Id $Id -DisableInteractivity:$noPrompt -UserScope:$userScope)
             if ($r.ExitCode -ne 0 -and $r.ExitCode -ne $Script:DevConfigWingetNoUpgrade) {
                 throw [Runtime.InteropServices.COMException]::new("winget upgrade $Id failed with exit code $($r.ExitCode)", $r.ExitCode)
             }

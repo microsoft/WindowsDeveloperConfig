@@ -10,6 +10,7 @@ if (-not $StepsDirectory) {
 }
 . (Join-Path $StepsDirectory '_environment.ps1')
 . (Join-Path $StepsDirectory '_retry.ps1')
+. (Join-Path $StepsDirectory '_step-runner.ps1')
 . (Join-Path $StepsDirectory 'wsl.ps1')
 $nativeProcess = ${function:Invoke-DevConfigProcess}
 $originalUtf8 = $env:WSL_UTF8

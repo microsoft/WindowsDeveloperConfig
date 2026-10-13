@@ -24,6 +24,12 @@ function Suspend-DevConfigForReboot {
         [Parameter(Mandatory)] [string] $ScriptPath
     )
 
+    # The machine part runs inside Windows Setup and the user part during sign-in; neither may restart Windows.
+    $runScope = Get-Variable -Name DevConfigScope -Scope Script -ValueOnly -ErrorAction Ignore
+    if ($runScope -and $runScope -ne 'All') {
+        throw 'This part of the setup never restarts Windows. Restart Windows to finish, then run it again.'
+    }
+
     $shell = Get-DevConfigTaskShellExe
     # The limited task requires fresh UAC consent before any resumed code runs elevated.
     $arguments = (Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed -AllowUnsigned:$Script:DevConfigAllowUnsigned -RequestElevation -Action $Script:DevConfigAction -Workload $Script:DevConfigWorkload) -join ' '

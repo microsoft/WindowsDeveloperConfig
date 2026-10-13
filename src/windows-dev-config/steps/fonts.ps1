@@ -207,7 +207,7 @@ function Set-DevConfigCascadiaDefaultFont {
 
     $ScriptPath = (Get-Item -LiteralPath $ScriptPath -ErrorAction Stop).FullName
     $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $arguments = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -ApplyTerminalFont -AllowUnsigned:$Script:DevConfigAllowUnsigned
+    $arguments = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -ApplyTerminalFont -AllowUnsigned:$Script:DevConfigAllowUnsigned -Scope (Get-DevConfigScope)
     $command = "`"$shell`" $($arguments -join ' ')"
     if ($command.Length -gt 260) {
         throw 'The setup path is too long for the next-sign-in font update. Use a shorter install directory.'
@@ -284,11 +284,11 @@ function Invoke-DevConfigPendingTerminalFont {
 function Invoke-FontsPhase {
     # BestEffort keeps later setup phases running if the font download or settings update cannot complete.
     $steps = @(
-        New-DevConfigStep -Name 'CascadiaFonts' -Description 'Install Cascadia Code Nerd Fonts' `
+        New-DevConfigStep -Name 'CascadiaFonts' -Description 'Install Cascadia Code Nerd Fonts' -Scope Machine `
             -Check { Test-DevConfigCascadiaFontsInstalled } `
             -Apply { Install-DevConfigCascadiaFonts } `
             -BestEffort
-        New-DevConfigStep -Name 'CascadiaDefaultFont' -Description 'Configure Cascadia Mono NF for the next sign-in' `
+        New-DevConfigStep -Name 'CascadiaDefaultFont' -Description 'Configure Cascadia Mono NF for the next sign-in' -Scope User `
             -Check { Test-DevConfigCascadiaDefaultFont } `
             -Apply { Set-DevConfigCascadiaDefaultFont } `
             -BestEffort

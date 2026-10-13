@@ -6,6 +6,11 @@
   -Workload picks a definition from workloads\. The default, devconfig, is the complete
   Windows Dev Config setup; other workloads, such as winui, reuse the same phases, helpers,
   elevation, logging, and summary.
+
+  -Scope Machine and -Scope User split the standard setup (-Action Partial) in two. Machine runs
+  only the steps that need administrator rights (for example as SYSTEM from Windows Setup), and
+  User only the steps for the signed-in user, never elevating. Both run unattended: no pauses,
+  prompts, windows, or restarts. -Scope All (the default) runs everything.
 #>
 
 [CmdletBinding()]
@@ -15,11 +20,15 @@ param(
     [switch] $AllowUnsigned,
     [switch] $ApplyTerminalFont,
     [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+    [ValidateSet('All', 'Machine', 'User')] [string] $Scope = 'All'
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+# Set before anything can pause: the scoped parts run hidden, so Wait-DevConfigKeyPress returns at once.
+$Script:DevConfigScope = $Scope
 
 # A child shell can inherit incompatible built-in modules from another PowerShell edition.
 $env:PSModulePath = "$PSHOME\Modules;$env:PSModulePath"
@@ -36,7 +45,10 @@ if (-not $AllowUnsigned) {
 }
 . ([scriptblock]::Create($securityCode))
 if (-not $AllowUnsigned) {
-    Assert-DevConfigProtectedTree -Directory $PSScriptRoot
+    # The user part never elevates or registers tasks, so it can run from a folder the user owns.
+    if ($Scope -ne 'User') {
+        Assert-DevConfigProtectedTree -Directory $PSScriptRoot
+    }
     Assert-DevConfigMicrosoftSigned -Directory $PSScriptRoot
 }
 
@@ -56,12 +68,20 @@ try {
 . (Join-Path $stepsDir '_registry.ps1')
 . (Join-Path $stepsDir '_environment.ps1')
 . (Join-Path $stepsDir '_retry.ps1')
+. (Join-Path $stepsDir '_scope.ps1')
 . (Join-Path $stepsDir '_terminal.ps1')
 . (Join-Path $stepsDir '_winget.ps1')
 . (Join-Path $stepsDir '_pwsh-bootstrap.ps1')
 . (Join-Path $stepsDir '_workload.ps1')
 
 $Script:DevConfigAllowUnsigned = [bool]$AllowUnsigned
+if ($Scope -ne 'All') {
+    # The next-sign-in font update keeps -Scope User so it can run from the user part's own folder.
+    if (-not $ApplyTerminalFont -and ($Action -ne 'Partial' -or $Workload -ne 'devconfig')) {
+        throw '-Scope Machine and -Scope User apply only to the standard Windows Dev Config setup (-Action Partial).'
+    }
+    Assert-DevConfigScopeAccount -Scope $Scope
+}
 if ($ApplyTerminalFont) {
     . (Join-Path $stepsDir 'fonts.ps1')
     $pendingPath = Get-DevConfigPendingTerminalFontPath
@@ -104,18 +124,18 @@ $workloadName = $definition['Name']
 # TLS is configured before any download step runs.
 Enable-DevConfigModernTls
 
-Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Scope $Scope
 
 if ($Action -eq 'Uninstall') {
     Invoke-DevConfigEnsureCleanupShell -ScriptPath $PSCommandPath -AllowUnsigned:$AllowUnsigned -Workload $Workload
 } else {
     # WinGet module behavior is more consistent in PowerShell 7 than in Windows PowerShell 5.1.
-    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Scope $Scope
 }
 
 # The lock starts after relaunches so the worker process owns the log file.
 # Workloads share one lock because they install through the same WinGet and registry paths.
-if (-not (Enter-DevConfigSingleInstance)) {
+if (-not (Enter-DevConfigSingleInstance -Scope $Scope)) {
     Write-Host ''
     Write-Host 'Setup is already running in another window.' -ForegroundColor Yellow
     Write-Host 'Switch to it rather than starting a second copy -- they would fight over the same installs.' -ForegroundColor DarkGray
@@ -123,7 +143,12 @@ if (-not (Enter-DevConfigSingleInstance)) {
     exit 1
 }
 
-Start-DevConfigLog -Path (Join-Path $PSScriptRoot "$Workload-log.txt") -Append:$Resumed
+# Each part keeps its own log, appended across retries so earlier attempts stay readable.
+if ($Scope -eq 'All') {
+    Start-DevConfigLog -Path (Join-Path $PSScriptRoot "$Workload-log.txt") -Append:$Resumed
+} else {
+    Start-DevConfigLog -Path (Join-Path $PSScriptRoot "$Workload-$($Scope.ToLowerInvariant())-log.txt") -Append
+}
 
 # Any prior resume task for this workload is stale once this run starts.
 Clear-DevConfigResume
@@ -148,7 +173,8 @@ if ($Action -eq 'Uninstall') {
     Write-Host "Welcome back. Resuming $workloadName setup ($Action) after the reboot..." -ForegroundColor Cyan
 } else {
     $setupNote = if ($definition['SetupNote']) { ", $($definition['SetupNote'])" } else { '' }
-    Write-Host "$workloadName setup ($Action) -- $($phases.Count) phases$setupNote" -ForegroundColor Cyan
+    $partNote = if ($Scope -ne 'All') { ", $($Scope.ToLowerInvariant()) part" } else { '' }
+    Write-Host "$workloadName setup ($Action$partNote) -- $($phases.Count) phases$setupNote" -ForegroundColor Cyan
 }
 
 $failure = $null

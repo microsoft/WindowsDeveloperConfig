@@ -156,7 +156,7 @@ function Remove-DevConfigOhMyPoshProfile {
 function Invoke-PowerShellProfilePhase {
     if ($Script:DevConfigAction -eq 'Uninstall') {
         $steps = @(
-            New-DevConfigStep -Name 'OhMyPoshProfileCleanup' -Description 'Remove managed Oh My Posh profile initialization' -BestEffort `
+            New-DevConfigStep -Name 'OhMyPoshProfileCleanup' -Description 'Remove managed Oh My Posh profile initialization' -Scope User -BestEffort `
                 -Check { Remove-DevConfigOhMyPoshProfile -CheckOnly } `
                 -Apply { Remove-DevConfigOhMyPoshProfile }
         )
@@ -166,7 +166,7 @@ function Invoke-PowerShellProfilePhase {
 
     # BestEffort keeps prompt customization from blocking later phases.
     $steps = @(
-        New-DevConfigStep -Name 'OhMyPoshProfile' -Description 'Add Oh My Posh init to the PowerShell 7 profile' -BestEffort `
+        New-DevConfigStep -Name 'OhMyPoshProfile' -Description 'Add Oh My Posh init to the PowerShell 7 profile' -Scope User -BestEffort `
             -Check { Test-DevConfigOhMyPoshProfileConfigured } `
             -Apply { Set-DevConfigOhMyPoshProfile }
     )
