@@ -62,7 +62,7 @@ Run the isolated WSL probe checks from the repository root in Windows PowerShell
 3. Set `$payloadRef` to A's full SHA in the source launchers: `setup-full.ps1`, `setup-standard.ps1`, `uninstall.ps1`, and `Workloads/winui/setup.ps1`.
 4. Sign those updated launchers and publish their signed copies as commit B. Do not edit them after signing.
 
-Include all AI `Workloads/**/setup.ps1` launchers in the same payload pinning
+Include every `Workloads/**/setup.ps1` launcher in the same payload pinning
 and signing cycle, along with the WSL Comfort launcher `wsl-comfort/setup.ps1`.
 That launcher downloads `wsl-comfort/` from A directly instead of calling bootstrap;
 point `https://aka.ms/devconfig/wsl-comfort/setup.ps1` at the signed repository-root

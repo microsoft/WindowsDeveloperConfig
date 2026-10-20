@@ -7,15 +7,12 @@
 Opinionated, CI-validated configurations for bootstrapping developer
 toolchains and Windows-desktop personalities.
 
-Most language and desktop flows are built around a [winget DSC configuration
+Some language and desktop flows use a [winget DSC configuration
 file](https://learn.microsoft.com/windows/package-manager/configuration/)
-(`configuration.winget`) — a declarative, idempotent description of the
-machine state required for that flow. Where winget alone is not enough
-(e.g. `npm install --global typescript` or a registry tweak) the
-configuration calls a DSC `Script` / `RunCommandOnSet` / `Registry`
-resource, so everything the flow needs lives in one YAML file. A small
-`install.ps1` shim next to it applies the config with `winget configure`
-and handles session-level glue (PATH refresh, CI sentinel).
+(`configuration.winget`) for declarative package installation. Newer
+single-workload flows use Windows Dev Config's PowerShell engine, which
+handles package installation and any required tool or editor configuration
+through idempotent check → apply → verify steps.
 
 The AI workloads are PowerShell-native. They follow Windows Dev Config's
 check → apply → verify contracts and reuse its WinGet, retry, process,
@@ -46,9 +43,9 @@ current state, acts only when needed, and verifies the result.
 
 Windows Dev Config's engine also runs **single workloads** through
 `bootstrap.ps1 -Workload <name>`, so a workload gets the same one-line,
-signed, elevated setup without `winget configure`. WinUI 3 is the first
-(`irm https://aka.ms/devconfig/winui/setup.ps1 | iex`) and no longer ships a
-`configuration.winget`. See [Adding a workload](./windows-dev-config.md#adding-a-workload).
+signed, elevated setup without `winget configure`. TypeScript, Java, Python,
+SQL Developer, PowerShell, and several desktop workloads now use this path.
+See [Adding a workload](./windows-dev-config.md#adding-a-workload).
 
 Every automated flow is **exercised on a real GitHub-hosted runner** on every
 push, pull request, and nightly: the flow is applied, then a canonical "hello
@@ -68,15 +65,15 @@ Command Palette extension.
 
 | Flow              | CI status     | Installs                                                                                |
 | ----------------- | ------------- | --------------------------------------------------------------------------------------- |
-| TypeScript        | ✅ automated   | `OpenJS.NodeJS.LTS` + `npm install -g typescript`                                       |
+| TypeScript        | 🙋 manual     | PowerShell-native one-liner: Node.js LTS + `npm install -g typescript` ([`workloads/typescript.ps1`](../windows-dev-config/workloads/typescript.ps1)) |
 | PHP               | 🙋 manual     | PowerShell-native one-liner: PowerShell 7, `PHP.PHP.8.5` ([`workloads/php.ps1`](../windows-dev-config/workloads/php.ps1)) |
 | .NET              | ✅ automated   | `Microsoft.DotNet.SDK.10`                                                               |
 | Go                | ✅ automated   | `GoLang.Go` (rolling — winget publishes Go unversioned)                                 |
-| Java              | ✅ automated   | `Microsoft.OpenJDK.25`                                                                  |
+| Java              | 🙋 manual     | PowerShell-native one-liner: `Microsoft.OpenJDK.25` ([`workloads/java.ps1`](../windows-dev-config/workloads/java.ps1)) |
 | Rust              | 🙋 manual     | PowerShell-native one-liner: Developer Mode, PowerShell 7, `Rustlang.Rustup`, Visual Studio Community 2026 with the Desktop development with C++ workload, and the stable Rust toolchain ([`workloads/rust.ps1`](../windows-dev-config/workloads/rust.ps1)) |
-| Python            | ✅ automated   | `Python.Python.3.14`, `astral-sh.uv`                                                    |
+| Python            | 🙋 manual     | PowerShell-native one-liner: `Python.Python.3.14`, `astral-sh.uv` ([`workloads/python.ps1`](../windows-dev-config/workloads/python.ps1)) |
 | SQL Developer     | 🙋 manual     | Lightweight SQL Developer: SQL Server + sqlcmd + VS Code extension; no VS/SSDT           |
-| PowerShell        | ✅ automated   | `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings |
+| PowerShell        | 🙋 manual     | PowerShell-native one-liner: `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings ([`workloads/powershell.ps1`](../windows-dev-config/workloads/powershell.ps1)) |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinAppCLI         | ✅ automated   | Developer Mode + `Microsoft.DotNet.SDK.10` + `Microsoft.WinAppCli` |
 | WinUI 3           | 🙋 manual     | PowerShell-native one-liner: Developer Mode, PowerShell 7, `Microsoft.DotNet.SDK.10`, `Microsoft.WinAppCli`, Visual Studio Community 2026 with the WinUI workloads, and the WinUI `dotnet new` templates ([`workloads/winui.ps1`](../windows-dev-config/workloads/winui.ps1)) |
@@ -111,14 +108,16 @@ for build + configuration details.
 ```
 Workloads/
   _common/         # shared DSC glue plus direct AI acquisition, resolver catalog, and reporting helpers
-  typescript/      # configuration.winget (core) + install.ps1 (thin shim)
+  typescript/      # setup.ps1 (one-line setup via the engine)
   php/             # setup.ps1 (one-line setup via the engine)
-  python/          # configuration.winget (core) + install.ps1 (thin shim)
+  python/          # setup.ps1 (one-line setup via the engine)
   go/              # setup.ps1 (one-line setup via the engine)
   dotnet/          # setup.ps1 (one-line setup via the engine)
-  java/            # configuration.winget (core) + install.ps1 (thin shim)
+  java/            # setup.ps1 (one-line setup via the engine)
+  sql/             # setup.ps1 (one-line SQL Server developer setup)
+  powershell/      # setup.ps1 (PowerShell, VS Code, and analyzer configuration)
   rust/            # setup.ps1 (one-line setup via the engine)
-  winforms/        # configuration.winget (core) + install.ps1 (thin shim)
+  winforms/        # setup.ps1 (one-line setup via the engine)
   winui/           # setup.ps1 (one-line setup via the engine)
   cuda/            # x64/ARM64 CUDA + MSVC + compiled GPU-kernel readiness
   rocm/            # Windows x64 AMD ROCm Core SDK + compiled HIP kernel
@@ -196,18 +195,17 @@ Maintainers: once this guard has landed, add **`Signed copy guard`** to the requ
 
 ## Prerequisites (Windows)
 
-DSC-backed language/desktop flows install through `winget configure`. The
-PowerShell-native AI and workstation flows do not require the configure
-subcommand; they use WinGet's package API/CLI directly when a package is
-available and verified vendor artifacts otherwise.
+Legacy DSC-backed flows install through `winget configure`. PowerShell-native
+workloads, including language and desktop flows, use the engine's WinGet
+package phase and do not require the configure subcommand.
 
 - **App Installer (winget)** must be current. Update from the Microsoft
   Store, or grab the latest MSIX from
   [microsoft/winget-cli releases](https://github.com/microsoft/winget-cli/releases/latest).
-- **Configuration feature** must be enabled. On recent winget this is GA
+- For legacy DSC flows, the **Configuration feature** must be enabled. On recent winget this is GA
   and on by default; on older builds you may need to run `winget settings`
   and set `experimentalFeatures.configuration = true`.
-- **Group Policy / MDM** must allow it. If the registry value
+- **Group Policy / MDM** must allow legacy `winget configure`. If the registry value
   `HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppInstaller\
   EnableWindowsPackageManagerConfiguration` is `0`, configure is blocked
   machine-wide and needs a policy change before anything here will work.
@@ -218,32 +216,22 @@ Quick smoke test:
 winget configure --help | Select-Object -First 3
 ```
 
-If the help text prints, you're good. If it errors or prints
-"Unrecognized command", fix the above before running any flow. Each
-`install.ps1` shim runs
-[`Workloads/_common/assert-winget-configure.ps1`](../Workloads/_common/assert-winget-configure.ps1)
-first and will emit an actionable message describing exactly which of the
-three conditions above needs attention.
+If the help text prints, WinGet configure is available for any legacy DSC
+flow. PowerShell-native workloads do not depend on this subcommand.
 
 ## Running a flow locally (Windows)
 
-Apply the DSC configuration directly with winget:
+Run a native workload from a source checkout (from `src/`, elevated):
 
 ```powershell
-winget configure --file ./Workloads/typescript/configuration.winget `
-    --accept-configuration-agreements `
-    --disable-interactivity
+.\windows-dev-config\dev-config.ps1 -AllowUnsigned -Workload typescript
 ```
 
-…or run the shim, which does the same plus rehydrates PATH in your current
-session and prints a CI-friendly sentinel:
+Then run its smoke test:
 
 ```powershell
-./Workloads/typescript/install.ps1
-./tests/_harness/run-flow.ps1 -Id typescript `
-    -Build 'tsc tests/typescript/hello.ts' `
-    -Run   'node tests/typescript/hello.js' `
-    -Expected tests/typescript/expected.txt
+tsc tests/typescript/hello.ts
+node tests/typescript/hello.js
 ```
 
 AI flows are always launched through their PowerShell entry point:
@@ -275,9 +263,6 @@ problems before pushing.
 These don't touch your machine state and are a good pre-commit pass:
 
 ```bash
-# DSC YAML parses and has the expected shape.
-python3 -c "import yaml; yaml.safe_load(open('Workloads/typescript/configuration.winget'))"
-
 # manifest.yml parses (this is what CI's `discover` job consumes).
 python3 -c "import yaml; print(yaml.safe_load(open('manifest.yml')))"
 ```
@@ -723,42 +708,32 @@ Neither vendor publishes a native Windows ARM64 stack today.
 | AMD ROCm | AMD / x64 | Stable | AMD stable feed `rocm[...] == 10.0.0` | Exact supported GPU `gfx` tuple | Official HTTPS allowlist + wheel RECORD; feed has no SHA-256 fragments | pip cache → contained venv | No confirmed WinGet ID/default PyPI package | AMD stable feed; WinGet unconfirmed | newer Windows matrix + HIP kernel | Replace contained environment |
 | Intel OpenVINO / oneAPI | Intel / x64 | Stable | PyPI OpenVINO 2026.3.1 tuple; WinGet `Intel.OneAPI.Toolkit` | Exact matched tuple / qualified stable package | wheel RECORD; WinGet hash/signature | pip/WinGet cache → contained venv/oneAPI root | N/A | same official channels | selected-device inference/SYCL kernel | Replace venv; WinGet upgrade |
 
-### 2. Validate the DSC config without applying it (Windows)
+### 2. Validate a workload definition without applying it (Windows)
 
-`winget configure` has a `test` verb that evaluates each resource's
-`TestScript` / test logic and reports whether the system is already in the
-desired state — useful for "will this config do what I think?" without
-actually installing anything:
+The engine can load and validate a workload definition without starting any
+phases or changing the machine:
 
 ```powershell
-winget configure test --file ./Workloads/typescript/configuration.winget `
-    --accept-configuration-agreements `
-    --disable-interactivity
+. .\windows-dev-config\steps\_workload.ps1
+Get-DevConfigWorkload -Directory .\windows-dev-config\workloads -Workload typescript
 ```
-
-On a fresh machine this should report that `Node` and `InstallTypeScript` are
-out of the desired state; on a machine where the flow has already been applied
-it should report both as in the desired state.
 
 ### 3. Apply + verify one flow end-to-end (Windows)
 
-This is exactly what CI does and is the definitive local test:
+Run from the `src` directory in an elevated PowerShell session:
 
 ```powershell
-# a) Apply the DSC config via the shim (this is what CI invokes).
-./Workloads/typescript/install.ps1
-# Expected tail of output: "INSTALL_OK: typescript"
+# a) Apply the PowerShell-native workload.
+.\windows-dev-config\dev-config.ps1 -AllowUnsigned -Workload typescript
 
-# b) Build + run the hello-world and diff its stdout against expected.txt.
-./tests/_harness/run-flow.ps1 -Id typescript `
+# b) Build + run the hello-world and compare its stdout to expected.txt.
+.\tests\_harness\run-flow.ps1 -Id typescript `
     -Build 'tsc tests/typescript/hello.ts' `
     -Run   'node tests/typescript/hello.js' `
     -Expected tests/typescript/expected.txt
-# Expected tail of output: "FLOW_OK: typescript"
 
-# c) Re-run the install to prove idempotence — it should succeed again and
-#    report no packages changed.
-./Workloads/typescript/install.ps1
+# c) Re-run the workload to verify idempotence.
+.\windows-dev-config\dev-config.ps1 -AllowUnsigned -Workload typescript
 ```
 
 Swap `typescript` for `php` (and the matching build/run args from
@@ -809,29 +784,13 @@ PY
 
 ## How to add a new language
 
-Adding a language is a **data change**, not a workflow change:
-
-1. Add a `configuration.winget` at `Workloads/<lang>/` describing the
-   winget packages and any PowerShell (via `Microsoft.DSC.Transitional/RunCommandOnSet`
-   or `PSDscResources/Script` resources) needed to reach the desired state.
-   This file is the core artifact — it should be readable on its own and
-   applyable with `winget configure`.
-2. Add a thin `install.ps1` shim next to it that delegates to
-   `Workloads/_common/apply-configuration.ps1` with the flow id, config
-   path, and list of commands that must be on PATH afterwards. The shim ends
-   with `INSTALL_OK: <lang>`, which CI asserts on.
-3. Add a hello world under `tests/<lang>/` together with an `expected.txt`
-   containing its exact stdout.
-4. Append an entry to `manifest.yml` describing the build command, run
-   command, and expected-output path for each supported OS.
-
-That's it — `discover` in CI picks up the new flow automatically.
-
-To give a workload a one-line setup on the PowerShell engine (like
-`irm https://aka.ms/devconfig/winui/setup.ps1 | iex`), add a workload
-definition under `windows-dev-config/workloads/` and a `setup.ps1` wrapper
-next to its `configuration.winget`. The steps are in
-[Adding a workload](./windows-dev-config.md#adding-a-workload).
+Add a hello-world probe and expected output under `tests/<id>/`, then add an
+entry to `manifest.yml` with its install entry point, build/run commands, and
+expected output. For a package-only flow, use a WinGet configuration and
+shim. For a standalone workload or setup beyond package installation, add an
+engine definition under `windows-dev-config/workloads/`, reuse or add phase
+steps, and create `Workloads/<id>/setup.ps1`. The engine approach is described
+in [Adding a workload](./windows-dev-config.md#adding-a-workload).
 
 ## How to add a hardware-aware AI workload
 

@@ -8,7 +8,7 @@
 #     build + run a canonical "hello world" to prove the install worked
 #     (consumed by CI and the build-run-diff harness).
 #
-# Adding a new flow = one entry here + an install.ps1 entry point per OS
+# Adding a new flow = one entry here + a PowerShell setup entry point per OS
 # + configuration.winget when declarative DSC is appropriate + a smoke probe
 # under tests/<id>/.
 # No workflow edits required.
@@ -59,7 +59,7 @@
 #                   shows up in the CmdPal extension and in the CI summary
 #                   under a "manual" bucket.
 #   windows:        (object, required if "windows" in os)
-#     install:        path to PowerShell install shim
+#     install:        path to the PowerShell setup entry point
 #                     CI runs this from the `src/` directory, while CmdPal
 #                     assumes the extension's root is the repo root.
 #     configuration:  (optional) path to winget DSC configuration.winget the
@@ -81,10 +81,11 @@ flows:
     tags: [typescript, node, javascript, npm]
     icon: 🟦
     onboardingUrl: https://www.typescriptlang.org/download
+    # PowerShell-native flow; manual until the signed payload is refreshed.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/typescript/install.ps1
-      configuration: Workloads/typescript/configuration.winget
+      install: Workloads/typescript/setup.ps1
       build: tsc src/tests/typescript/hello.ts
       run: node src/tests/typescript/hello.js
       expected: src/tests/typescript/expected.txt
@@ -226,10 +227,11 @@ flows:
     tags: [java, jdk, openjdk, jvm]
     icon: ☕
     onboardingUrl: https://learn.microsoft.com/java/openjdk/install
+    # PowerShell-native flow; manual until the signed payload is refreshed.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/java/install.ps1
-      configuration: Workloads/java/configuration.winget
+      install: Workloads/java/setup.ps1
       build: ""
       run: java src/tests/java/Hello.java
       expected: src/tests/java/expected.txt
@@ -265,10 +267,11 @@ flows:
     tags: [python, uv, scripting]
     icon: 🐍
     onboardingUrl: https://docs.python.org/3/using/windows.html
+    # PowerShell-native flow; manual until the signed payload is refreshed.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/python/install.ps1
-      configuration: Workloads/python/configuration.winget
+      install: Workloads/python/setup.ps1
       build: ""
       run: python src/tests/python/hello.py
       expected: src/tests/python/expected.txt
@@ -414,8 +417,7 @@ flows:
     manual_test: true
     os: [windows]
     windows:
-      install: Workloads/sql/install.ps1
-      configuration: Workloads/sql/configuration.winget
+      install: Workloads/sql/setup.ps1
       build: ""
       run: pwsh -NoProfile -File src/tests/sql/probe.ps1
       expected: src/tests/sql/expected.txt
@@ -428,10 +430,11 @@ flows:
     tags: [powershell, pwsh, pester, psscriptanalyzer, vscode]
     icon: 💙
     onboardingUrl: https://learn.microsoft.com/powershell/scripting/overview
+    # PowerShell-native flow; manual until the signed payload is refreshed.
+    manual_test: true
     os: [windows]
     windows:
-      install: Workloads/powershell/install.ps1
-      configuration: Workloads/powershell/configuration.winget
+      install: Workloads/powershell/setup.ps1
       build: ""
       run: pwsh -NoProfile -File src/tests/powershell/hello.ps1
       expected: src/tests/powershell/expected.txt

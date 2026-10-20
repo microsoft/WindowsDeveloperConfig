@@ -63,8 +63,11 @@ function Invoke-Shell {
         [Parameter(Mandatory)] [string] $Label
     )
     Write-Host "> $Command"
-    if ($IsWindows -or ($null -eq $IsWindows)) {
-        # Windows PowerShell 5.1 doesn't define $IsWindows but is always Windows.
+    $isWindowsHost = $PSVersionTable.PSEdition -eq 'Desktop'
+    if (-not $isWindowsHost) {
+        $isWindowsHost = $IsWindows
+    }
+    if ($isWindowsHost) {
         $output = & cmd.exe /d /c $Command 2>&1 | Out-String
     } else {
         # Useful for local testing on non-Windows hosts.

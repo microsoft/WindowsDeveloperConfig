@@ -10,6 +10,11 @@ Run from any PowerShell window. Each one elevates, verifies signatures, and inst
 
 | Workload | Installs | Run |
 | --- | --- | --- |
+| TypeScript | PowerShell 7, Node.js LTS, and the global TypeScript compiler | `irm https://aka.ms/devconfig/typescript/setup.ps1 \| iex` |
+| Java | PowerShell 7 and Microsoft Build of OpenJDK 25 LTS | `irm https://aka.ms/devconfig/java/setup.ps1 \| iex` |
+| Python | PowerShell 7, Python 3.14, and uv | `irm https://aka.ms/devconfig/python/setup.ps1 \| iex` |
+| SQL Developer | PowerShell 7, SQL Server Developer 2025, sqlcmd, VS Code, and SQL Database Projects | `irm https://aka.ms/devconfig/sql/setup.ps1 \| iex` |
+| PowerShell | PowerShell 7, VS Code, PowerShell and Pester extensions, and PSScriptAnalyzer settings | `irm https://aka.ms/devconfig/powershell/setup.ps1 \| iex` |
 | WinUI 3 | Developer Mode, PowerShell 7, .NET SDK 10, Windows App CLI, Visual Studio Community 2026 with the .NET desktop and WinUI workloads, and the WinUI `dotnet new` templates | `irm https://aka.ms/devconfig/winui/setup.ps1 \| iex` |
 | WinForms | Developer Mode, PowerShell 7, .NET SDK 10, and Visual Studio Community 2026 with the .NET desktop workload | `irm https://aka.ms/devconfig/winforms/setup.ps1 \| iex` |
 | WinAppCLI | Developer Mode, PowerShell 7, .NET SDK 10, and the Windows App Development CLI | `irm https://aka.ms/devconfig/winappcli/setup.ps1 \| iex` |
@@ -19,20 +24,6 @@ Run from any PowerShell window. Each one elevates, verifies signatures, and inst
 | PHP | PowerShell 7, the Visual C++ Redistributable, and PHP | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
 
 These use the same engine as [Windows Dev Config](./README.md#single-workloads): same elevation, signature checks, logging, and summary. Close Visual Studio before running WinUI, WinForms, or Rust — if the VS Installer wants a restart, the summary will say so.
-
-## With Winget configure
-
-These haven't moved to one-liners yet. They run with [`winget configure`](https://learn.microsoft.com/windows/package-manager/winget/configure) from the repo root:
-
-| Workload | Installs | Run |
-| --- | --- | --- |
-| TypeScript | Node.js LTS + global `typescript` | `winget configure -f .\Workloads\typescript\configuration.winget --accept-configuration-agreements --disable-interactivity` |
-| Java | Microsoft Build of OpenJDK 25 LTS | `winget configure -f .\Workloads\java\configuration.winget --accept-configuration-agreements --disable-interactivity` |
-| Python | Python 3.14 + uv | `winget configure -f .\Workloads\python\configuration.winget --accept-configuration-agreements --disable-interactivity` |
-| SQL | SQL Server + sqlcmd + VS Code extension | `winget configure -f .\Workloads\sql\configuration.winget --accept-configuration-agreements --disable-interactivity` |
-| PowerShell | PowerShell 7 + VS Code PowerShell extension + PSScriptAnalyzer settings | `winget configure -f .\Workloads\powershell\configuration.winget --accept-configuration-agreements --disable-interactivity` |
-
-If `winget configure` isn't recognized, see [Troubleshooting](../../README.md#-troubleshooting).
 
 ## AI tooling
 
