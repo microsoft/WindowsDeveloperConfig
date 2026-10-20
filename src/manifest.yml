@@ -29,8 +29,7 @@
 #                     - "user-experience"  : OS-feel / shell flows that
 #                                            shape the desktop rather than
 #                                            install dev toolchains
-#                                            (wsl-comfort, calm-os,
-#                                            common-adjustments).
+#                                            (comfort-shell, calm-os).
 #                     - "shell"            : legacy alias for
 #                                            "user-experience"; new flows
 #                                            should pick one of the values

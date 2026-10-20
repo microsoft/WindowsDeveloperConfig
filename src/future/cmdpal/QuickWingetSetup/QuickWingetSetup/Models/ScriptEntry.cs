@@ -109,8 +109,8 @@ public class WindowsTarget
     /// Optional PowerShell step that runs in the same Windows Terminal tab
     /// after <c>winget configure</c> succeeds. Use when a flow's DSC
     /// installs the machine-side prerequisites but the real setup is an
-    /// interactive script (e.g. <c>mac-my-wsl.ps1 -Interactive</c>). The
-    /// script path is repo-relative; args are appended verbatim.
+    /// interactive script. The script path is repo-relative; args are
+    /// appended verbatim.
     /// </summary>
     [JsonPropertyName("postConfigure")]
     public PostConfigureStep? PostConfigure { get; set; }

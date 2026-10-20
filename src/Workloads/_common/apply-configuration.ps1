@@ -36,9 +36,8 @@ param(
     [Parameter(Mandatory)] [string]   $Id,
     [Parameter(Mandatory)] [string]   $ConfigFile,
     # AllowEmptyCollection: Windows PowerShell 5.1 rejects empty arrays
-    # bound to Mandatory parameters. Some flows (e.g. mac-comfort-shell)
-    # have no post-install CLI to verify - the DSC only installs a font
-    # and pwsh - so they legitimately pass @() here.
+    # bound to Mandatory parameters. A flow with no post-install CLI to
+    # verify can legitimately pass @() here.
     [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]] $RequireCommands,
     [switch] $DeferSentinel
 )

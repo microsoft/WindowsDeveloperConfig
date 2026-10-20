@@ -34,9 +34,9 @@ internal sealed partial class ScriptDetailPage : ListPage
             var winSubtitle = $"winget configure {winPath}";
 
             // Flows that need WSL even though they register as Windows-only
-            // (e.g. mac-comfort-shell installs a font via DSC but the
-            // follow-up manual step runs inside a WSL distro). Surface the
-            // same ⚠️ affordances we show on Linux items.
+            // (e.g. comfort-shell runs its Windows-side installer, then
+            // bootstraps inside a WSL distro). Surface the same ⚠️
+            // affordances we show on Linux items.
             if (_script.RequiresWsl)
             {
                 var wslStatus = WslDetectionService.Status;
@@ -240,9 +240,9 @@ internal sealed partial class RunWinGetCommand : InvokableCommand, IConfirmation
             return CommandResult.Dismiss();
         }
 
-        // Resolve an optional post-configure step (e.g. mac-my-wsl.ps1
-        // -Interactive) and chain it in the same wt tab so the user gets
-        // one continuous experience instead of a manual follow-up.
+        // Resolve an optional post-configure step and chain it in the same
+        // wt tab so the user gets one continuous experience instead of a
+        // manual follow-up.
         string? postPath = null;
         string? postArgs = null;
         var post = _script.Windows?.PostConfigure;

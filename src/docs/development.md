@@ -1,4 +1,4 @@
-# WindowsDevSetupScripts — Developer Guide
+# Windows Developer Config — Developer Guide
 
 > 👋 **Just want to run something?** See the
 > [top-level README](../../README.md). This file is the contributor /
@@ -11,8 +11,8 @@ Most language and desktop flows are built around a [winget DSC configuration
 file](https://learn.microsoft.com/windows/package-manager/configuration/)
 (`configuration.winget`) — a declarative, idempotent description of the
 machine state required for that flow. Where winget alone is not enough
-(e.g. `npm install --global typescript` or a registry tweak) the
-configuration calls a DSC `Script` / `RunCommandOnSet` / `Registry`
+(e.g. `npm install --global typescript` or a VS Code settings change) the
+configuration calls a DSC `PowerShellScript` / `RunCommandOnSet`
 resource, so everything the flow needs lives in one YAML file. A small
 `install.ps1` shim next to it applies the config with `winget configure`
 and handles session-level glue (PATH refresh, CI sentinel).
