@@ -2,17 +2,18 @@
 
 Turns a fresh Windows + WSL machine into a cozy, themed shell: an Ubuntu distro running zsh + Starship + modern CLI tools, surfaced through a Windows Terminal profile in Cascadia Code Nerd Font. Everything is opt-in — pick what you want, skip the rest.
 
-The Windows half (`install.ps1`) handles WSL, the distro, the font, and the terminal profile. The Linux half (`comfort-shell-bootstrap.sh`) configures the shell itself, and also runs standalone — copy it onto any Ubuntu host and run it directly.
+The Windows half (`install.ps1`) handles WSL, the distro, the font, and the terminal profile. The Linux half (`comfort-shell-bootstrap.sh`) configures the shell itself, and also runs standalone — copy it onto any Ubuntu host and run it directly. `setup.ps1` is the one-line entry point: it downloads and verifies both, then runs `install.ps1`.
 
 ## Table of Contents
 
 - [Quick start](#quick-start)
-  - [Interactive mode](#interactive-mode)
   - [What this configures](#what-this-configures)
+  - [From a clone](#from-a-clone)
 - [Advanced setup](#advanced-setup)
   - [install.ps1 parameters](#installps1-parameters)
   - [Bootstrap options](#bootstrap-options)
 - [Scripts](#scripts)
+- [setup.ps1 (one-line setup)](#setupps1-one-line-setup)
 - [install.ps1 (Windows side)](#installps1-windows-side)
   - [Step-by-step](#step-by-step)
   - [Reboot + auto-resume](#reboot--auto-resume)
@@ -27,13 +28,14 @@ The Windows half (`install.ps1`) handles WSL, the distro, the font, and the term
 
 ## Quick start
 
-### Interactive mode
+Open any PowerShell window and run:
 
 ```powershell
-git clone https://github.com/microsoft/WindowsDeveloperConfig.git
-cd WindowsDeveloperConfig\wsl-comfort
-.\install.ps1
+irm https://aka.ms/devconfig/wsl-comfort/setup.ps1 | iex
 ```
+
+Nothing to clone. It's interactive by default: pick a distro, then choose each component as it runs. See [setup.ps1](#setupps1-one-line-setup) for what it downloads and verifies.
+
 <details>
 <summary><strong>What this configures</strong></summary>
 
@@ -49,12 +51,26 @@ cd WindowsDeveloperConfig\wsl-comfort
 - **A Windows Terminal profile fragment** named `Comfort Shell - <distro>`, with a custom Catppuccin-ish dark scheme, the sunglasses icon, and `wsl.exe -d <distro>` as the command line.
 </details>
 
+### From a clone
+
+```powershell
+git clone https://github.com/microsoft/WindowsDeveloperConfig.git
+cd WindowsDeveloperConfig\wsl-comfort
+.\install.ps1
+```
+
 ---
 
 ## Advanced setup
 
 ```powershell
-# Example of PS param
+# Pass install.ps1 parameters through the one-liner
+& ([scriptblock]::Create((irm https://aka.ms/devconfig/wsl-comfort/setup.ps1))) -NonInteractive
+& ([scriptblock]::Create((irm https://aka.ms/devconfig/wsl-comfort/setup.ps1))) -Distro Ubuntu-24.04 -BootstrapArgs '--shell=bash','--no-brew'
+```
+
+```powershell
+# The same parameters from a clone
 .\install.ps1 -NonInteractive
 
 # Example of passing params to the bootstrap
@@ -71,6 +87,8 @@ cd WindowsDeveloperConfig\wsl-comfort
 ```
 
 ### install.ps1 parameters
+
+`setup.ps1` accepts `-NonInteractive`, `-Distro`, and `-BootstrapArgs` too, and passes them through to `install.ps1`.
 
 | Parameter | Default | Description |
 | --- | --- | --- |
@@ -100,8 +118,26 @@ cd WindowsDeveloperConfig\wsl-comfort
 
 | Script | Runs on | Role |
 | --- | --- | --- |
+| `setup.ps1` | Windows (PowerShell 5.1 or 7) | One-line entry point: downloads the signed release copy of this folder, verifies it, and runs `install.ps1` from a per-user copy. |
 | `install.ps1` | Windows (PowerShell 5.1 or 7) | Orchestrator: ensures WSL, picks/installs a distro, invokes the bootstrap inside it, installs the font, drops the WT profile. |
 | `comfort-shell-bootstrap.sh` | Ubuntu (inside WSL or bare-metal) | Installer: configures the shell, prompt, tools, shims, Homebrew, git defaults, and dotfiles. |
+| `content-hashes.psd1` | — (data) | Signed SHA-256 list for files that can't carry a signature, such as `comfort-shell-bootstrap.sh`. `setup.ps1` won't run a file that doesn't match. |
+
+---
+
+## setup.ps1 (one-line setup)
+
+`irm https://aka.ms/devconfig/wsl-comfort/setup.ps1 | iex` runs this launcher. It:
+
+1. Stops early if organization policy sets PowerShell script execution to `Restricted`.
+2. Downloads `install.ps1` and `content-hashes.psd1` from the signed `wsl-comfort/` release copy at a pinned commit, and checks that both carry a valid Microsoft Authenticode signature.
+3. Downloads each file listed in `content-hashes.psd1` and checks its SHA-256, after converting CRLF line endings to LF.
+4. Stages the verified files in a new folder under `%LOCALAPPDATA%\DevConfig\wsl-comfort`. Later runs never change it, so the [reboot auto-resume](#reboot--auto-resume) can come back to it.
+5. Runs `install.ps1` from that folder in the same console and PowerShell edition, with process-scoped `RemoteSigned`, passing through `-NonInteractive`, `-Distro`, and `-BootstrapArgs`. From 32-bit PowerShell, which can't see `wsl.exe`, it uses 64-bit Windows PowerShell instead.
+
+If any check fails, nothing runs and the new folder is removed. The launcher doesn't elevate: the font, Terminal profile, distro, and resume entry all belong to the signed-in user, and `wsl --install` asks for administrator approval itself when WSL is missing.
+
+The one-liner always downloads the published files. They're checked when downloaded; a resume after the reboot reuses them without checking again. To run a customized `comfort-shell-bootstrap.sh`, use a [clone](#from-a-clone).
 
 ---
 
@@ -125,7 +161,7 @@ Parameters are listed in [Advanced setup](#advanced-setup).
 
 When `wsl.exe --install` requires a reboot, the script:
 
-1. Registers `HKCU\...\RunOnce\ComfortShellResume` with an encoded launcher that re-opens Windows Terminal and re-invokes `install.ps1`.
+1. Registers `HKCU\...\RunOnce\ComfortShellResume` with an encoded launcher that re-opens Windows Terminal and re-invokes `install.ps1` from where it ran: your clone, or that run's folder under `%LOCALAPPDATA%\DevConfig\wsl-comfort` when you used the one-liner.
 2. Round-trips `NonInteractive`, `Distro`, and `BootstrapArgs` as base64-JSON via `-ResumeEncodedArgs` so the post-reboot run picks up the original intent.
 3. Optionally reboots immediately (10-second cancellable countdown) or hands control back to the user.
 
@@ -174,10 +210,12 @@ This lets `install.ps1` bootstrap a fresh distro as root before any user exists 
 - **Change the prompt.** Edit the `write_file "$cfg" 644 ...` block in `install_prompt` (or set `INSTALL_PROMPT="no"` and bring your own).
 - **Change the Terminal theme or font.** Edit `Install-TerminalProfile` in `install.ps1` — the color scheme is inline, and `font.face`/`font.size` are right there too.
 
+These edits apply when you run `.\install.ps1` from a clone; the one-liner always downloads the published files. Contributing a change to `comfort-shell-bootstrap.sh`? Update its hash in `src\wsl-comfort\content-hashes.psd1` too — `src\tests\comfort-shell\unit.ps1` checks it and prints the expected value.
+
 ## Philosophy
 
 - **Opt-in, not all-or-nothing.** Every piece — starship, the CLI bundle, clipboard shims, Homebrew, git defaults — can be skipped independently, or all at once with `--minimal`.
-- **One command end-to-end.** `.\install.ps1` from a fresh Windows machine gets you to a fully configured, themed Windows Terminal profile.
+- **One command end-to-end.** The one-liner (or `.\install.ps1` from a clone) takes a fresh Windows machine to a fully configured, themed Windows Terminal profile.
 - **Idempotent.** Re-running is always safe — managed dotfile blocks are replaced in place, the WT fragment is rewritten with a deterministic GUID, and already-installed packages are skipped.
 - **Standalone halves.** `comfort-shell-bootstrap.sh` doesn't need `install.ps1` — drop it on any Ubuntu host (WSL or not) and it works on its own.
 
@@ -186,6 +224,8 @@ This lets `install.ps1` bootstrap a fresh distro as root before any user exists 
 | Decision | Rationale |
 | --- | --- |
 | Two scripts instead of one | The bootstrap is genuinely useful on its own (any Ubuntu host). Splitting it means `install.ps1` is a thin orchestrator and the actual shell setup is portable. |
+| Separate one-line launcher (`setup.ps1`) | Matches the repo's other one-liners: a pinned payload commit and Microsoft signature checks before anything runs. Unlike Windows Dev Config's `bootstrap.ps1`, it doesn't elevate or install under `%ProgramData%`, because Comfort Shell configures the signed-in user's profile. Each run stages into its own folder, so a later run never changes files a pending resume will use. |
+| Signed hash list for the bootstrap | `.sh` files can't carry an Authenticode signature, so the signed `content-hashes.psd1` pins their SHA-256. Hashing with LF line endings keeps the result independent of Git checkout settings. |
 | Auto-resume via RunOnce + base64-JSON | `wsl --install` always requires a reboot on a fresh machine. Manually re-running the script with the same arguments is friction; RunOnce + a base64-encoded payload restores the exact original invocation. |
 | Win32 Input Mode reset after every `wsl.exe` | `wsl.exe` enables Win32 Input Mode and focus reporting on the parent console and doesn't restore them. Without `Reset-TerminalInputMode`, follow-up `Read-Host` prompts echo `^[[I` etc. |
 | `Invoke-NativeConsole` (Start-Process -NoNewWindow -Wait) | We need the child to see a real TTY so `/dev/tty` reads inside the bootstrap (interactive prompts) work. Plain `& wsl.exe` over a pipeline breaks this. |
@@ -203,6 +243,8 @@ This lets `install.ps1` bootstrap a fresh distro as root before any user exists 
 | --- | --- |
 | **Windows Terminal required** | The script hard-fails if `wt.exe` is not on PATH. A Comfort Shell without a WT profile would be half the experience, so we don't degrade. |
 | **Internet access required** | Needed for the WSL distro download, Homebrew, starship, and apt. There's no offline mode. |
+| **One-liner keeps a copy** | Each run keeps its verified files in a new folder under `%LOCALAPPDATA%\DevConfig\wsl-comfort` so the post-reboot resume can find them. They're checked when downloaded, not again on resume. Delete the folder once setup is done if you like. |
+| **`AllSigned` policy** | If your organization enforces `AllSigned`, PowerShell may ask you to trust the Microsoft publisher before `install.ps1` runs. |
 | **WSL install requires a reboot** | First-time WSL installs always reboot. The script registers RunOnce and offers to reboot for you; cancelling the countdown is fine — the auto-resume will fire after any subsequent logon. |
 | **Ubuntu only** | Both halves bail on non-Ubuntu distros. Debian would mostly work but is untested; other families would not. |
 | **`wsl -l -q` UTF-16 quirk** | `wsl.exe --list --quiet` emits UTF-16LE with embedded NUL bytes. The script strips NULs in `Get-InstalledWslDistros`; do the same in any new code that parses `wsl -l -q`. |

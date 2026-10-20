@@ -86,7 +86,7 @@ Command Palette extension.
 | Local AI development | 🙋 manual  | Scenario: hardware inventory + contained PyTorch/Triton + one optional model runtime |
 | llama.cpp         | 🙋 manual     | SHA-256-verified official rolling CUDA/ROCm/SYCL/OpenVINO/Vulkan/OpenCL/CPU assets + pinned GGUF |
 | Ollama            | 🙋 manual     | Architecture-applicable WinGet `Ollama.Ollama` application + model inference |
-| Comfort Shell     | 🙋 manual     | WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
+| Comfort Shell     | 🙋 manual     | PowerShell-native one-liner: WSL distro + zsh/bash + starship + modern CLI bundle + Cascadia Code Nerd Font + themed Windows Terminal profile (see [`wsl-comfort/readme.md`](../wsl-comfort/readme.md)) |
 
 See [`manifest.yml`](../manifest.yml) for the canonical declarative
 list (paths, build/run commands, onboarding URLs).
@@ -127,7 +127,7 @@ Workloads/
   llama.cpp/       # hardware-selected official rolling backend + pinned GGUF inference
   ollama/          # architecture-specific direct acquisition + library-model inference
 windows-dev-config/    # Windows Dev Config — bootstrap.ps1 + dev-config.ps1 + steps/*.ps1 + workloads/*.ps1 + README.md
-wsl-comfort/           # Comfort Shell — install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + readme.md
+wsl-comfort/           # Comfort Shell — setup.ps1 (one-line launcher) + install.ps1 (Windows side) + comfort-shell-bootstrap.sh (Linux side, self-contained) + content-hashes.psd1 (signed hashes) + readme.md
 tests/
   _harness/          # build-run-diff harness used by CI:
                      #   run-flow.ps1   - all flows (build + run + diff stdout)
@@ -143,7 +143,7 @@ tests/
   winforms/          # hello.csproj + Program.cs + expected.txt
   winui/             # hello.csproj + Program.cs + expected.txt
   calm-os/           # probe.ps1 + expected.txt (manual-only flow)
-  comfort-shell/     # hello.sh + expected.txt (manual-only flow)
+  comfort-shell/     # hello.sh + expected.txt (manual-only flow) + unit.ps1 (one-line launcher and hash checks)
 manifest.yml         # declarative list of flows consumed by CI **and** by the extension
 future/
   cmdpal/            # PowerToys Command Palette extension (reads manifest.yml)
@@ -170,9 +170,9 @@ This repo carries **two parallel copies** of every flow:
 | `src/docs/ai-workloads.md`    | AI workload internals: backend selection, acquisition channels, partner validation. | **Yes**  | n/a      |
 | `src/tests/`                  | Hello-world programs + expected stdout used by the CI harness.    | **Yes**  | CI only  |
 
-**End users**: follow the [top-level README](../../README.md). Windows Dev Config's `bootstrap.ps1` verifies Microsoft signatures and installs to `%ProgramData%\CalmOS` with Administrator/SYSTEM-only write access. It requests process-scoped `RemoteSigned` without adding trusted publishers. Organization-enforced `AllSigned` may still prompt. For development, `-AllowUnsigned` uses `src/windows-dev-config/` without signature checks.
+**End users**: follow the [top-level README](../../README.md). Windows Dev Config's `bootstrap.ps1` verifies Microsoft signatures and installs to `%ProgramData%\CalmOS` with Administrator/SYSTEM-only write access. It requests process-scoped `RemoteSigned` without adding trusted publishers. Organization-enforced `AllSigned` may still prompt. For development, `-AllowUnsigned` uses `src/windows-dev-config/` without signature checks. Comfort Shell's `wsl-comfort/setup.ps1` runs unelevated because it only configures the signed-in user: it verifies the same Microsoft signatures, checks `comfort-shell-bootstrap.sh` against the signed `content-hashes.psd1`, and stages each run in a new folder under `%LOCALAPPDATA%\DevConfig\wsl-comfort` so `install.ps1` can resume after the WSL reboot.
 
-**Contributors**: edit `src/`. The top-level paths are **regenerated** by [`.pipelines/OneBranch.SignAndPackage.yml`](../../.pipelines/OneBranch.SignAndPackage.yml), which Authenticode-signs every `src/**/*.ps1` and `src/**/*.psd1` and ships them (plus the `.winget` configs and the manifest) as the release artifact. Production setup verifies Microsoft signatures on scripts and data files; other workload content is checked against the signed hash manifest. A change to a `src/` script becomes a new signed top-level copy on the next sign cycle, not at PR merge, so the two can briefly disagree on a script's body until that cycle runs.
+**Contributors**: edit `src/`. The top-level paths are **regenerated** by [`.pipelines/OneBranch.SignAndPackage.yml`](../../.pipelines/OneBranch.SignAndPackage.yml), which Authenticode-signs every `src/**/*.ps1` and `src/**/*.psd1` and ships them (plus the `.winget` configs and the manifest) as the release artifact. Production setup verifies Microsoft signatures on scripts and data files; other workload content is checked against a signed hash manifest (`Workloads/_common/content-hashes.ps1`, or `wsl-comfort/content-hashes.psd1` for Comfort Shell). A change to a `src/` script becomes a new signed top-level copy on the next sign cycle, not at PR merge, so the two can briefly disagree on a script's body until that cycle runs.
 
 **Deleting a file is the one case where you must touch both trees.** The sign pipeline only adds and overwrites — it never deletes. A file removed from `src/` therefore stays at the top level forever, still published and still runnable, until someone removes it by hand. So when you delete or rename a flow artifact, `git rm` it from **both** `src/…` and the matching top-level path in the same PR. (The drift guard won't catch this for you: a file that exists in neither tree produces no report entry at all.)
 

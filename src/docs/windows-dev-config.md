@@ -63,7 +63,10 @@ Run the isolated WSL probe checks from the repository root in Windows PowerShell
 4. Sign those updated launchers and publish their signed copies as commit B. Do not edit them after signing.
 
 Include every `Workloads/**/setup.ps1` launcher in the same payload pinning
-and signing cycle.
+and signing cycle, along with the WSL Comfort launcher `wsl-comfort/setup.ps1`.
+That launcher downloads `wsl-comfort/` from A directly instead of calling bootstrap;
+point `https://aka.ms/devconfig/wsl-comfort/setup.ps1` at the signed repository-root
+`wsl-comfort/setup.ps1`.
 
 The launchers in B download bootstrap and its payload from A. Short URLs keep pointing at the launchers on `main` — publishing a new launcher doesn't change the payload commit an older launcher uses. Direct bootstrap calls with a branch or tag still use Git ref discovery.
 

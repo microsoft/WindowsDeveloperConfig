@@ -74,11 +74,19 @@ Every tool and setting, how to undo them, and troubleshooting: [Windows Dev Conf
 
 *Also known as Comfort Shell. A polished Windows + WSL shell setup — zsh/bash, Starship prompt, modern CLI tools, themed terminal.*
 
+Open any PowerShell window and run:
+
 ```powershell
-.\wsl-comfort\install.ps1
+irm https://aka.ms/devconfig/wsl-comfort/setup.ps1 | iex
 ```
 
-Interactive by default — pick and choose components as it runs. Use `-NonInteractive` for unattended installs. The Linux half (`comfort-shell-bootstrap.sh`) is standalone, so you can also copy it onto any Ubuntu host and run it directly.
+Interactive by default — pick and choose components as it runs. For unattended installs, pass `-NonInteractive`:
+
+```powershell
+& ([scriptblock]::Create((irm https://aka.ms/devconfig/wsl-comfort/setup.ps1))) -NonInteractive
+```
+
+Nothing to clone: it downloads the signed scripts, verifies them, and installs WSL first if it's missing. Already have a clone? `.\wsl-comfort\install.ps1` works too. The Linux half (`comfort-shell-bootstrap.sh`) is standalone, so you can also copy it onto any Ubuntu host and run it directly.
 
 <details>
 <summary><strong>What you can pick</strong></summary>
@@ -181,7 +189,7 @@ A scheduled task resumes the run about 30 seconds after you sign back in and fin
 <details>
 <summary><strong>Comfort Shell bootstrap fails because WSL is missing</strong></summary>
 
-Run `.\wsl-comfort\install.ps1` on the Windows side instead. It installs WSL first.
+Run the [WSL Comfort one-liner](#-wsl-comfort) from PowerShell on the Windows side instead. It installs WSL first.
 
 </details>
 

@@ -450,6 +450,10 @@ flows:
     # The bootstrap runs entirely inside a WSL distro; cannot be tested on
     # headless CI without a distro present. manual_test keeps it out of the
     # automated matrix while still surfacing it in CmdPal.
+    # wsl-comfort/setup.ps1 is the one-line entry point
+    # (irm https://aka.ms/devconfig/wsl-comfort/setup.ps1 | iex); it verifies
+    # and stages the signed copy, then runs install.ps1, which stays the
+    # entry point for a clone.
     manual_test: true
     os: [windows]
     windows:
