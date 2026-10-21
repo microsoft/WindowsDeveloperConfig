@@ -162,11 +162,6 @@ function Get-DevConfigPackageCatalog {
             UninstallOrder = 8
         }
         @{
-            Name           = 'Php'
-            Id             = 'PHP.PHP.8.5'
-            UninstallOrder = 18
-        }
-        @{
             Name           = 'winappCli'
             Id             = 'Microsoft.WinAppCli'
             UninstallOrder = 15

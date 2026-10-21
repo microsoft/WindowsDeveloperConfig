@@ -69,7 +69,6 @@ Command Palette extension.
 | Flow              | CI status     | Installs                                                                                |
 | ----------------- | ------------- | --------------------------------------------------------------------------------------- |
 | TypeScript        | ✅ automated   | `OpenJS.NodeJS.LTS` + `npm install -g typescript`                                       |
-| PHP               | 🙋 manual     | PowerShell-native one-liner: PowerShell 7, `PHP.PHP.8.5` ([`workloads/php.ps1`](../windows-dev-config/workloads/php.ps1)) |
 | .NET              | ✅ automated   | `Microsoft.DotNet.SDK.10`                                                               |
 | Go                | ✅ automated   | `GoLang.Go` (rolling — winget publishes Go unversioned)                                 |
 | Java              | ✅ automated   | `Microsoft.OpenJDK.25`                                                                  |
@@ -112,7 +111,6 @@ for build + configuration details.
 Workloads/
   _common/         # shared DSC glue plus direct AI acquisition, resolver catalog, and reporting helpers
   typescript/      # configuration.winget (core) + install.ps1 (thin shim)
-  php/             # setup.ps1 (one-line setup via the engine)
   python/          # configuration.winget (core) + install.ps1 (thin shim)
   go/              # setup.ps1 (one-line setup via the engine)
   dotnet/          # setup.ps1 (one-line setup via the engine)
@@ -135,7 +133,6 @@ tests/
                      #   run-server.ps1 - helper for future server scenarios
                      #                    (kept idle; no flow currently uses it)
   typescript/        # hello.ts + expected.txt
-  php/               # hello.php + expected.txt
   python/            # hello.py + expected.txt
   dotnet/            # hello.csproj + Program.cs + expected.txt
   go/                # hello.go + expected.txt
@@ -761,8 +758,8 @@ This is exactly what CI does and is the definitive local test:
 ./Workloads/typescript/install.ps1
 ```
 
-Swap `typescript` for `php` (and the matching build/run args from
-[`manifest.yml`](../manifest.yml)) to verify the PHP flow the same way.
+Swap `typescript` for another flow id (and the matching build/run args from
+[`manifest.yml`](../manifest.yml)) to verify that flow the same way.
 
 ### 4. Drive every flow from the manifest (Windows)
 

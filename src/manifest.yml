@@ -90,27 +90,6 @@ flows:
       expected: src/tests/typescript/expected.txt
       version: "node --version; tsc --version"
 
-  - id: php
-    name: PHP
-    description: PHP runtime and CLI
-    category: languages
-    tags: [php, web, scripting]
-    icon: 🐘
-    onboardingUrl: https://www.php.net/manual/en/install.windows.php
-    # PowerShell-native flow: Workloads/php/setup.ps1 runs the Windows Dev Config
-    # engine (windows-dev-config/workloads/php.ps1). There is no
-    # configuration.winget, so the configuration key is omitted (same shape as
-    # winui). manual_test because the engine entry point needs a signed release
-    # cycle and elevation, which the automated matrix can't provide.
-    manual_test: true
-    os: [windows]
-    windows:
-      install: Workloads/php/setup.ps1
-      build: ""
-      run: php src/tests/php/hello.php
-      expected: src/tests/php/expected.txt
-      version: "php --version"
-
   - id: winforms
     name: WinForms
     description: .NET SDK with Windows Forms desktop workload
