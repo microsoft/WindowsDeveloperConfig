@@ -189,6 +189,8 @@ A package counts as done only when winget reports it installed **and** current, 
 
 The Visual C++ runtime is installed before uv, matching Windows' native architecture.
 
+After nvm installs, setup stores `NVM_HOME` and `NVM_SYMLINK` as plain strings. nvm's installer writes them as expandable strings, and Windows doesn't expand a variable inside PATH when that variable is itself expandable, so new terminals wouldn't find nvm through its `%NVM_HOME%` and `%NVM_SYMLINK%` PATH entries.
+
 <details>
 <summary><strong>Windows registry settings</strong></summary>
 
