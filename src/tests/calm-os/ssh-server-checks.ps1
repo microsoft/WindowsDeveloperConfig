@@ -124,6 +124,17 @@ Check 'Firewall apply narrows an existing rule or creates a Private-only rule' {
     $text.Count -eq 2 -and $text[0] -like 'Set *-Profile: Private*' -and $text[1] -like 'New *-Profile: Private*' -and
         @($text | Where-Object { $_ -notlike '*-LocalPort: 22*' }).Count -eq 0
 }
+function Remove-NetFirewallRule { $script:firewallCalls += [pscustomobject]@{ Verb = 'Remove'; Args = $args } }
+Check 'Firewall cleanup tolerates a rule already removed with the capability' {
+    $script:firewallCalls = @()
+    $script:rule = $null
+    Remove-DevConfigSshFirewallRule
+    $gone = $script:firewallCalls.Count -eq 0
+    $script:rule = [pscustomobject]@{ Enabled = 'True' }
+    Remove-DevConfigSshFirewallRule
+    $script:rule = $null
+    $gone -and $script:firewallCalls.Count -eq 1 -and $script:firewallCalls[0].Verb -eq 'Remove'
+}
 
 Check 'Relaunch arguments carry -EnableSshServer only when set' {
     $on = (Get-DevConfigRelaunchArguments -ScriptPath 'C:\Setup\dev-config.ps1' -EnableSshServer -Resumed) -join ' '

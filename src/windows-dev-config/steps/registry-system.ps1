@@ -98,6 +98,13 @@ function Remove-DevConfigSshServer {
     }
 }
 
+# Removing the capability usually deletes the rule too, after this step's check already ran.
+function Remove-DevConfigSshFirewallRule {
+    if (Get-NetFirewallRule -Name $Script:DevConfigSshFirewallRule -ErrorAction SilentlyContinue) {
+        Remove-NetFirewallRule -Name $Script:DevConfigSshFirewallRule -ErrorAction Stop
+    }
+}
+
 function Get-DevConfigSshServerSteps {
     param(
         [switch] $Reset
@@ -110,7 +117,7 @@ function Get-DevConfigSshServerSteps {
                 -Apply { Remove-DevConfigSshServer }
             New-DevConfigStep -Name 'SshFirewallRuleCleanup' -Description "Remove the $Script:DevConfigSshFirewallRule firewall rule" -BestEffort `
                 -Check { -not (Get-NetFirewallRule -Name $Script:DevConfigSshFirewallRule -ErrorAction SilentlyContinue) } `
-                -Apply { Remove-NetFirewallRule -Name $Script:DevConfigSshFirewallRule -ErrorAction Stop }
+                -Apply { Remove-DevConfigSshFirewallRule }
         )
     }
 
