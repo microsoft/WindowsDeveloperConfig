@@ -14,6 +14,8 @@ param(
     [switch] $Resumed,
     [switch] $AllowUnsigned,
     [switch] $ApplyTerminalFont,
+    # Full only: installs OpenSSH Server and allows SSH on Private networks.
+    [switch] $EnableSshServer,
     [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
     [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
 )
@@ -92,6 +94,9 @@ if ($ApplyTerminalFont) {
 $Workload = $Workload.ToLowerInvariant()
 $Script:DevConfigWorkload = $Workload
 try {
+    if ($EnableSshServer -and ($Action -ne 'Full' -or $Workload -ne 'devconfig')) {
+        throw '-EnableSshServer applies only to the full Calm OS setup (-Action Full).'
+    }
     $definition = Get-DevConfigWorkload -Directory (Join-Path $PSScriptRoot 'workloads') -Workload $Workload -Action $Action
 } catch {
     # Pause so the reason stays readable when this runs in a window that closes on exit.
@@ -104,13 +109,13 @@ $workloadName = $definition['Name']
 # TLS is configured before any download step runs.
 Enable-DevConfigModernTls
 
-Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -EnableSshServer:$EnableSshServer -Action $Action -Workload $Workload
 
 if ($Action -eq 'Uninstall') {
     Invoke-DevConfigEnsureCleanupShell -ScriptPath $PSCommandPath -AllowUnsigned:$AllowUnsigned -Workload $Workload
 } else {
     # WinGet module behavior is more consistent in PowerShell 7 than in Windows PowerShell 5.1.
-    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -EnableSshServer:$EnableSshServer -Action $Action -Workload $Workload
 }
 
 # The lock starts after relaunches so the worker process owns the log file.
@@ -130,6 +135,7 @@ Clear-DevConfigResume
 
 $Script:DevConfigResumed = [bool]$Resumed -and $Action -ne 'Uninstall'
 $Script:DevConfigAction = $Action
+$Script:DevConfigEnableSshServer = [bool]$EnableSshServer
 if ($Script:DevConfigResumed) {
     # Restore the pre-reboot tally so the final summary covers the whole run.
     Restore-DevConfigTally -Path (Get-DevConfigTallyPath -Directory $PSScriptRoot)
@@ -149,6 +155,9 @@ if ($Action -eq 'Uninstall') {
 } else {
     $setupNote = if ($definition['SetupNote']) { ", $($definition['SetupNote'])" } else { '' }
     Write-Host "$workloadName setup ($Action) -- $($phases.Count) phases$setupNote" -ForegroundColor Cyan
+    if ($EnableSshServer) {
+        Write-Host 'OpenSSH Server will be installed and allowed on Private networks.' -ForegroundColor DarkGray
+    }
 }
 
 $failure = $null

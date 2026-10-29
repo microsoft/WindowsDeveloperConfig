@@ -21,6 +21,10 @@
 
       & ([scriptblock]::Create((irm <url>))) -Workload winui
 
+  To also install OpenSSH Server and allow SSH on Private networks (Full only):
+
+      & ([scriptblock]::Create((irm <url>))) -EnableSshServer
+
   To run a standalone AI installer with its verified dependencies:
 
       & ([scriptblock]::Create((irm <url>))) -Scenario cuda
@@ -34,6 +38,7 @@ param(
     [switch] $NoLaunch,
     [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
     [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+    [switch] $EnableSshServer,
     [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
     [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
     [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
@@ -51,6 +56,7 @@ function Invoke-CalmOsBootstrap {
         [switch] $NoLaunch,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [switch] $EnableSshServer,
         [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
         [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
         [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
@@ -176,6 +182,11 @@ function Invoke-CalmOsBootstrap {
     $Workload = $Workload.ToLowerInvariant()
     # The default workload is omitted from command lines so refs that predate workloads still accept them.
     $workloadSuffix = if ($Workload -ne 'devconfig') { " -Workload $Workload" } else { '' }
+    $sshSuffix = if ($EnableSshServer) { ' -EnableSshServer' } else { '' }
+
+    if ($EnableSshServer -and ($Scenario -or $Action -ne 'Full' -or $Workload -ne 'devconfig')) {
+        throw '-EnableSshServer applies only to the full Calm OS setup (-Action Full, without -Workload or -Scenario).'
+    }
 
     $scenarioOptionNames = @('AiBackend', 'AiRuntime', 'RequireTriton', 'PlanOnly', 'ReportRoot')
     if (-not $Scenario -and @($scenarioOptionNames | Where-Object { $PSBoundParameters.ContainsKey($_) }).Count -gt 0) {
@@ -242,6 +253,7 @@ function Invoke-CalmOsBootstrap {
             [switch] $NoLaunch,
             [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
             [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+            [switch] $EnableSshServer,
             [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
             [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
             [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
@@ -259,6 +271,7 @@ function Invoke-CalmOsBootstrap {
                 [switch] $NoLaunch,
                 [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
                 [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+                [switch] $EnableSshServer,
                 [ValidateSet('', 'local-ai', 'pytorch', 'cuda', 'rocm', 'intel-ai', 'llama.cpp', 'ollama', 'foundry')] [string] $Scenario = '',
                 [ValidateSet('Auto', 'CPU', 'CUDA', 'ROCm', 'XPU')] [string] $AiBackend = 'Auto',
                 [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
@@ -335,6 +348,7 @@ function Invoke-CalmOsBootstrap {
             } else {
                 $arguments += '-Action', $Action
                 if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+                if ($EnableSshServer) { $arguments += '-EnableSshServer' }
             }
             if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
             if ($NoLaunch) { $arguments += '-NoLaunch' }
@@ -362,6 +376,7 @@ function Invoke-CalmOsBootstrap {
         } else {
             $command += " -Action '$Action'"
             if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
+            if ($EnableSshServer) { $command += ' -EnableSshServer' }
         }
         if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
         if ($NoLaunch) { $command += ' -NoLaunch' }
@@ -447,7 +462,7 @@ function Invoke-CalmOsBootstrap {
             Join-Path $env:TEMP "CalmOS-bootstrap-error-$([guid]::NewGuid().ToString('N')).txt"
         } else { '' }
         $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch `
-            -Action $Action -Workload $Workload -Scenario $Scenario -AiBackend $AiBackend -AiRuntime $AiRuntime `
+            -Action $Action -Workload $Workload -EnableSshServer:$EnableSshServer -Scenario $Scenario -AiBackend $AiBackend -AiRuntime $AiRuntime `
             -RequireTriton:$RequireTriton -PlanOnly:$PlanOnly -ReportRoot $ReportRoot `
             -ElevationErrorPath $elevationErrorPath
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
@@ -475,7 +490,7 @@ function Invoke-CalmOsBootstrap {
                 Write-Host "Scenario files are ready at $scenarioTarget." -ForegroundColor Cyan
             } else {
                 $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
-                Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+                Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$sshSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
             }
         }
         return
@@ -638,7 +653,7 @@ function Invoke-CalmOsBootstrap {
 
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($target)
-            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix"
+            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$sshSuffix"
             if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
             Write-Host "Run when ready: $command" -ForegroundColor Cyan
             return
@@ -646,6 +661,7 @@ function Invoke-CalmOsBootstrap {
 
         $arguments += '-File', "`"$target`"", '-Action', $Action
         if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+        if ($EnableSshServer) { $arguments += '-EnableSshServer' }
         if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
         $start = @{ FilePath = $shell; ArgumentList = $arguments; Wait = $true; PassThru = $true }
         if ($Action -ne 'Uninstall') { $start.NoNewWindow = $true }
