@@ -172,6 +172,32 @@ function Get-DevConfigPackageCatalog {
             UninstallOrder = 19
         }
         @{
+            Name           = 'Java'
+            Id             = 'Microsoft.OpenJDK.25'
+            UninstallOrder = 20
+        }
+        @{
+            Name           = 'Sqlcmd'
+            Id             = 'Microsoft.Sqlcmd'
+            UninstallOrder = 21
+        }
+        @{
+            Name           = 'SQLServerDeveloper'
+            Id             = 'Microsoft.SQLServer.2025.Developer'
+            Large          = $true
+            # SQL Setup reports an unknown version to WinGet; don't reinstall and create another instance.
+            AnyVersion     = $true
+            UninstallOrder = 22
+        }
+        @{
+            Name           = 'SSMS'
+            Id             = 'Microsoft.SQLServerManagementStudio.22'
+            Large          = $true
+            # SSMS updates itself through the Visual Studio Installer, so a rerun must not start an upgrade that needs it closed.
+            AnyVersion     = $true
+            UninstallOrder = 23
+        }
+        @{
             Name           = 'PowerToys'
             Id             = 'Microsoft.PowerToys'
             Large          = $true
