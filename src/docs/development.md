@@ -66,7 +66,6 @@ Command Palette extension.
 | Flow              | CI status     | Installs                                                                                |
 | ----------------- | ------------- | --------------------------------------------------------------------------------------- |
 | TypeScript        | 🙋 manual     | PowerShell-native one-liner: Node.js LTS + `npm install -g typescript` ([`workloads/typescript.ps1`](../windows-dev-config/workloads/typescript.ps1)) |
-| PHP               | 🙋 manual     | PowerShell-native one-liner: PowerShell 7, `PHP.PHP.8.5` ([`workloads/php.ps1`](../windows-dev-config/workloads/php.ps1)) |
 | .NET              | ✅ automated   | `Microsoft.DotNet.SDK.10`                                                               |
 | Go                | ✅ automated   | `GoLang.Go` (rolling — winget publishes Go unversioned)                                 |
 | Java              | 🙋 manual     | PowerShell-native one-liner: `Microsoft.OpenJDK.25` ([`workloads/java.ps1`](../windows-dev-config/workloads/java.ps1)) |
@@ -109,7 +108,6 @@ for build + configuration details.
 Workloads/
   _common/         # shared DSC glue plus direct AI acquisition, resolver catalog, and reporting helpers
   typescript/      # setup.ps1 (one-line setup via the engine)
-  php/             # setup.ps1 (one-line setup via the engine)
   python/          # setup.ps1 (one-line setup via the engine)
   go/              # setup.ps1 (one-line setup via the engine)
   dotnet/          # setup.ps1 (one-line setup via the engine)
@@ -134,7 +132,6 @@ tests/
                      #   run-server.ps1 - helper for future server scenarios
                      #                    (kept idle; no flow currently uses it)
   typescript/        # hello.ts + expected.txt
-  php/               # hello.php + expected.txt
   python/            # hello.py + expected.txt
   dotnet/            # hello.csproj + Program.cs + expected.txt
   go/                # hello.go + expected.txt
@@ -736,8 +733,8 @@ Run from the `src` directory in an elevated PowerShell session:
 .\windows-dev-config\dev-config.ps1 -AllowUnsigned -Workload typescript
 ```
 
-Swap `typescript` for `php` (and the matching build/run args from
-[`manifest.yml`](../manifest.yml)) to verify the PHP flow the same way.
+Swap `typescript` for another flow id (and the matching build/run args from
+[`manifest.yml`](../manifest.yml)) to verify that flow the same way.
 
 ### 4. Drive every flow from the manifest (Windows)
 

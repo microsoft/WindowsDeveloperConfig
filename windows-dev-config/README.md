@@ -107,7 +107,7 @@ The same engine can set up one toolchain instead of the whole workstation — sa
 irm https://aka.ms/devconfig/winui/setup.ps1 | iex
 ```
 
-WinUI, WinForms, WinAppCLI, .NET, Go, Rust, and PHP all have one-liners. The full list and what each installs: **[Workloads](./workloads.md)**.
+WinUI, WinForms, WinAppCLI, .NET, Go, and Rust all have one-liners. The full list and what each installs: **[Workloads](./workloads.md)**.
 
 Each short link points at a signed wrapper like [`Workloads/winui/setup.ps1`](../Workloads/winui/setup.ps1), which runs `bootstrap.ps1 -Workload winui -Action Full`. To call bootstrap directly:
 

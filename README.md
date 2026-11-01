@@ -117,7 +117,6 @@ Just want one toolchain? Each of these is a single command.
 | .NET | `irm https://aka.ms/devconfig/dotnet/setup.ps1 \| iex` |
 | Go | `irm https://aka.ms/devconfig/go/setup.ps1 \| iex` |
 | Rust | `irm https://aka.ms/devconfig/rust/setup.ps1 \| iex` |
-| PHP | `irm https://aka.ms/devconfig/php/setup.ps1 \| iex` |
 
 | Workload | Run via Winget configure |
 | --- | --- |
