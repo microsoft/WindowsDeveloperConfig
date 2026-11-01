@@ -407,9 +407,9 @@ flows:
 
   - id: sql
     name: Lightweight SQL Developer
-    description: SQL Server Developer + sqlcmd + VS Code SQL database projects extension
+    description: SQL Server Developer + sqlcmd + SSMS + VS Code SQL database projects extension
     category: languages
-    tags: [sql, sqlserver, sqlcmd, database, vscode]
+    tags: [sql, sqlserver, sqlcmd, ssms, database, vscode]
     icon: 🗄️
     onboardingUrl: https://learn.microsoft.com/sql/sql-server/
     # Installs full SQL Server Developer, so keep it out of automated CI even

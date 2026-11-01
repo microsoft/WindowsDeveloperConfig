@@ -13,7 +13,7 @@ Run from any PowerShell window. Each one elevates, verifies signatures, and inst
 | TypeScript | PowerShell 7, Node.js LTS, and the global TypeScript compiler | `irm https://aka.ms/devconfig/typescript/setup.ps1 \| iex` |
 | Java | PowerShell 7 and Microsoft Build of OpenJDK 25 LTS | `irm https://aka.ms/devconfig/java/setup.ps1 \| iex` |
 | Python | PowerShell 7, Python 3.14, and uv | `irm https://aka.ms/devconfig/python/setup.ps1 \| iex` |
-| SQL Developer | PowerShell 7, SQL Server Developer 2025, sqlcmd, VS Code, and SQL Database Projects | `irm https://aka.ms/devconfig/sql/setup.ps1 \| iex` |
+| SQL Developer | PowerShell 7, SQL Server Developer 2025, sqlcmd, SQL Server Management Studio 22, VS Code, and SQL Database Projects | `irm https://aka.ms/devconfig/sql/setup.ps1 \| iex` |
 | PowerShell | PowerShell 7, VS Code, PowerShell and Pester extensions, and PSScriptAnalyzer settings | `irm https://aka.ms/devconfig/powershell/setup.ps1 \| iex` |
 | WinUI 3 | Developer Mode, PowerShell 7, .NET SDK 10, Windows App CLI, Visual Studio Community 2026 with the .NET desktop and WinUI workloads, and the WinUI `dotnet new` templates | `irm https://aka.ms/devconfig/winui/setup.ps1 \| iex` |
 | WinForms | Developer Mode, PowerShell 7, .NET SDK 10, and Visual Studio Community 2026 with the .NET desktop workload | `irm https://aka.ms/devconfig/winforms/setup.ps1 \| iex` |

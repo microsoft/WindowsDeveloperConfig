@@ -3,8 +3,9 @@
   Lightweight SQL developer workload.
 
 .DESCRIPTION
-  Installs SQL Server Developer, sqlcmd, VS Code, and the SQL Database
-  Projects extension without installing Visual Studio or SSDT.
+  Installs SQL Server Developer, sqlcmd, SQL Server Management Studio (SSMS),
+  VS Code, and the SQL Database Projects extension without installing Visual
+  Studio or SSDT.
 #>
 
 [CmdletBinding()]
@@ -32,7 +33,7 @@ Set-StrictMode -Version Latest
             File       = 'packages.ps1'
             Function   = 'Invoke-PackagesPhase'
             Title      = 'Packages'
-            Parameters = @{ Packages = @('PowerShell', 'VSCode', 'Sqlcmd', 'SQLServerDeveloper') }
+            Parameters = @{ Packages = @('PowerShell', 'VSCode', 'Sqlcmd', 'SQLServerDeveloper', 'SSMS') }
         }
         @{
             File       = 'vscode-extensions.ps1'

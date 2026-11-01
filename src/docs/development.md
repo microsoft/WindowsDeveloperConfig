@@ -72,7 +72,7 @@ Command Palette extension.
 | Java              | 🙋 manual     | PowerShell-native one-liner: `Microsoft.OpenJDK.25` ([`workloads/java.ps1`](../windows-dev-config/workloads/java.ps1)) |
 | Rust              | 🙋 manual     | PowerShell-native one-liner: Developer Mode, PowerShell 7, `Rustlang.Rustup`, Visual Studio Community 2026 with the Desktop development with C++ workload, and the stable Rust toolchain ([`workloads/rust.ps1`](../windows-dev-config/workloads/rust.ps1)) |
 | Python            | 🙋 manual     | PowerShell-native one-liner: `Python.Python.3.14`, `astral-sh.uv` ([`workloads/python.ps1`](../windows-dev-config/workloads/python.ps1)) |
-| SQL Developer     | 🙋 manual     | Lightweight SQL Developer: SQL Server + sqlcmd + VS Code extension; no VS/SSDT           |
+| SQL Developer     | 🙋 manual     | Lightweight SQL Developer: SQL Server + sqlcmd + SSMS + VS Code extension; no VS/SSDT    |
 | PowerShell        | 🙋 manual     | PowerShell-native one-liner: `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings ([`workloads/powershell.ps1`](../windows-dev-config/workloads/powershell.ps1)) |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinAppCLI         | ✅ automated   | Developer Mode + `Microsoft.DotNet.SDK.10` + `Microsoft.WinAppCli` |
