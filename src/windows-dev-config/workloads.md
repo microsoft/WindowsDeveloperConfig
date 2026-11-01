@@ -28,7 +28,7 @@ These haven't moved to one-liners yet. They run with [`winget configure`](https:
 | TypeScript | Node.js LTS + global `typescript` | `winget configure -f .\Workloads\typescript\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | Java | Microsoft Build of OpenJDK 25 LTS | `winget configure -f .\Workloads\java\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | Python | Python 3.14 + uv | `winget configure -f .\Workloads\python\configuration.winget --accept-configuration-agreements --disable-interactivity` |
-| SQL | SQL Server + sqlcmd + VS Code extension | `winget configure -f .\Workloads\sql\configuration.winget --accept-configuration-agreements --disable-interactivity` |
+| SQL | SQL Server + sqlcmd + SSMS + VS Code extension | `winget configure -f .\Workloads\sql\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 | PowerShell | PowerShell 7 + VS Code PowerShell extension + PSScriptAnalyzer settings | `winget configure -f .\Workloads\powershell\configuration.winget --accept-configuration-agreements --disable-interactivity` |
 
 If `winget configure` isn't recognized, see [Troubleshooting](../../README.md#-troubleshooting).
