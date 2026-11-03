@@ -12,8 +12,8 @@ param(
     $env:PSModulePath = "$PSHOME\Modules;$env:PSModulePath"
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    # Replace main with the full signed payload commit SHA before release.
-    $payloadRef = 'main'
+    # Update only after publishing the signed payload.
+    $payloadRef = '6b1c5a1dadd429570dd50ff44b15c0b5b86bc414'
     $baseUri = "https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/$payloadRef/wsl-comfort"
     $microsoftSignerSubject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
 
