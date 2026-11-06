@@ -5,8 +5,10 @@
 #         --disable-interactivity
 #
 # Lightweight SQL developer workload: installs SQL Server Developer, sqlcmd,
-# VS Code, and the SQL database projects extension. It intentionally does not
-# install Visual Studio or SSDT tools.
+# SQL Server Management Studio (SSMS), VS Code, and the SQL database projects
+# extension. It intentionally does not install Visual Studio or SSDT tools.
+#
+# SSMS id tracks the SSMS major release line. Bump it when a new major ships.
 #
 $schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
 metadata:
@@ -56,6 +58,17 @@ resources:
       acceptAgreements: true
     metadata:
       description: Install SQL Server 2025 Developer
+      winget:
+        securityContext: elevated
+
+  - name: SSMS
+    type: Microsoft.WinGet/Package
+    properties:
+      id: Microsoft.SQLServerManagementStudio.22
+      source: winget
+      acceptAgreements: true
+    metadata:
+      description: Install SQL Server Management Studio 22
       winget:
         securityContext: elevated
 

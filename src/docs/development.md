@@ -75,7 +75,7 @@ Command Palette extension.
 | Java              | ✅ automated   | `Microsoft.OpenJDK.25`                                                                  |
 | Rust              | 🙋 manual     | PowerShell-native one-liner: Developer Mode, PowerShell 7, `Rustlang.Rustup`, Visual Studio Community 2026 with the Desktop development with C++ workload, and the stable Rust toolchain ([`workloads/rust.ps1`](../windows-dev-config/workloads/rust.ps1)) |
 | Python            | ✅ automated   | `Python.Python.3.14`, `astral-sh.uv`                                                    |
-| SQL Developer     | 🙋 manual     | Lightweight SQL Developer: SQL Server + sqlcmd + VS Code extension; no VS/SSDT           |
+| SQL Developer     | 🙋 manual     | Lightweight SQL Developer: SQL Server + sqlcmd + SSMS + VS Code extension; no VS/SSDT    |
 | PowerShell        | ✅ automated   | `Microsoft.PowerShell`, `Microsoft.VisualStudioCode`, VS Code PowerShell/Pester extensions + PSScriptAnalyzer settings |
 | WinForms          | 🙋 manual     | `Microsoft.DotNet.SDK.10` + the .NET desktop workload (multi-GB; manual to spare CI minutes) |
 | WinAppCLI         | ✅ automated   | Developer Mode + `Microsoft.DotNet.SDK.10` + `Microsoft.WinAppCli` |

@@ -5,8 +5,9 @@
 .DESCRIPTION
   This script is a thin CI/dev shim. The core artifact for the SQL flow is
   `configuration.winget` in this directory - a winget DSC configuration that
-  installs SQL Server Developer, sqlcmd, VS Code, and the SQL Database Projects
-  extension without installing Visual Studio or SSDT.
+  installs SQL Server Developer, sqlcmd, SQL Server Management Studio (SSMS),
+  VS Code, and the SQL Database Projects extension without installing Visual
+  Studio or SSDT.
 #>
 
 [CmdletBinding()]
