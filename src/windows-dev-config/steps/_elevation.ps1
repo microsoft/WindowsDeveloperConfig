@@ -153,6 +153,7 @@ function Get-DevConfigRelaunchArguments {
         [switch] $AllowUnsigned,
         [switch] $RequestElevation,
         [switch] $ApplyTerminalFont,
+        [switch] $EnableSshServer,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
     )
@@ -168,6 +169,9 @@ function Get-DevConfigRelaunchArguments {
         # The default workload is omitted so these command lines match releases that predate workloads.
         if ($Workload -ne 'devconfig') {
             $arguments += '-Workload', $Workload
+        }
+        if ($EnableSshServer) {
+            $arguments += '-EnableSshServer'
         }
         if (-not $RequestElevation) {
             $arguments += '-NoElevate'
@@ -188,6 +192,7 @@ function Invoke-DevConfigElevate {
         [switch] $NoElevate,
         [switch] $Resumed,
         [switch] $AllowUnsigned,
+        [switch] $EnableSshServer,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
     )
@@ -208,7 +213,7 @@ function Invoke-DevConfigElevate {
         Get-DevConfigShellExe
     }
     # Preserve -Resumed so the elevated process continues after the WSL reboot.
-    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -EnableSshServer:$EnableSshServer -Action $Action -Workload $Workload
     try {
         $proc = Start-Process -FilePath $shell -ArgumentList $relaunchArgs -Verb RunAs -Wait -PassThru
     } catch {

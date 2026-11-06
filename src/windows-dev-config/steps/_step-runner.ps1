@@ -13,6 +13,7 @@ $Script:DevConfigCheckMark = [char]0x2713
 $Script:DevConfigResumed     = $false
 $Script:DevConfigAction      = 'Full'
 $Script:DevConfigWorkload    = 'devconfig'
+$Script:DevConfigEnableSshServer = $false
 $Script:DevConfigTally       = @{ Done = 0; AlreadyOk = 0; Warned = 0 }
 $Script:DevConfigTalliedSteps = @{}
 # Persist flagged names so a blocked step is counted once across the reboot.
