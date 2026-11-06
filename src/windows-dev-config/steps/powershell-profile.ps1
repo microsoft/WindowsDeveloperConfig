@@ -121,7 +121,8 @@ function Remove-DevConfigOhMyPoshProfile {
     if (-not $profilePath) {
         $profilePath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Microsoft.PowerShell_profile.ps1'
     }
-    $original = [string](Read-DevConfigTextFile -Path $profilePath)
+    # The previous release wrote the block with mixed line endings, so compare normalized text, as setup does.
+    $original = [string](Read-DevConfigTextFile -Path $profilePath) -replace "`r`n", "`n"
     $tokens = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($original, [ref]$tokens, [ref]$parseErrors)
@@ -130,7 +131,6 @@ function Remove-DevConfigOhMyPoshProfile {
         Get-DevConfigOhMyPoshProfileBlock
         "$Script:OhMyPoshInitCommand`n | Invoke-Expression`n" -replace "`r`n", "`n"
     )
-    $blocks += @($blocks | ForEach-Object { $_.Replace("`n", "`r`n") })
     if ($ast.EndBlock) {
         # Match only top-level setup blocks, not examples in strings or custom functions.
         foreach ($statement in @($ast.EndBlock.Statements | Sort-Object { $_.Extent.StartOffset } -Descending)) {
@@ -143,8 +143,11 @@ function Remove-DevConfigOhMyPoshProfile {
             }
         }
     }
-    # Validate after removing setup blocks, whose leading-pipe syntax requires PowerShell 7.
-    [void](Get-DevConfigProfileAst -Content $content)
+    # Only PowerShell 7 can validate its own profile: the block's leading pipe, and anything else pwsh accepts,
+    # are parse errors in Windows PowerShell, which runs the cleanup. Removal is an exact match at a statement start.
+    if ($PSVersionTable.PSEdition -ne 'Desktop') {
+        [void](Get-DevConfigProfileAst -Content $content)
+    }
     if ($CheckOnly) {
         return $content -eq $original
     }
