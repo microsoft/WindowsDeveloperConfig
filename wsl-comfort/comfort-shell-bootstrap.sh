@@ -859,10 +859,6 @@ main() {
   parse_args "$@"
   setup_logging
 
-  # Preflight checks
-  if ! is_wsl; then
-    die "This script is intended for WSL. Detected non-WSL environment."
-  fi
   if [ ! -f /etc/os-release ]; then
     die "Cannot detect Linux distribution (missing /etc/os-release)."
   fi
