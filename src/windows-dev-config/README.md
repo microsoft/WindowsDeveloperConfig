@@ -53,7 +53,14 @@ irm https://aka.ms/devconfig/full/setup.ps1 | iex
 - **Everything from standard**
 - **Windows settings:** Developer Mode, Sudo, widgets off, and Edge policies, additional Start/Search/System Tray settings
 - **Remote Desktop:** Enabled and firewall settings set
+- **SSH server (optional, off by default):** add `-EnableSshServer` to install OpenSSH Server, start `sshd` automatically, and allow SSH on Private networks only. See [SSH server](#ssh-server-opt-in).
 </details>
+
+To include the SSH server, pass the switch with a script block instead of `| iex`:
+
+```powershell
+& ([scriptblock]::Create((irm https://aka.ms/devconfig/full/setup.ps1))) -EnableSshServer
+```
 
 ### Uninstall for both full and standard experiences
 ```powershell
@@ -262,6 +269,18 @@ These are **best-effort**: they need the network and a PATH that has just been u
 - The **WinUI templates** for `dotnet new` (`Microsoft.WindowsAppSDK.WinUI.CSharp.Templates`).
 - The **`microsoft/win-dev-skills`** marketplace and its **WinUI plugin**, registered with the GitHub Copilot CLI.
 
+### SSH server (opt-in)
+
+Only with `-EnableSshServer` on the Full setup (`setup-full.ps1`, or `-Action Full` on `bootstrap.ps1` / `dev-config.ps1`). Partial, single workloads, and AI scenarios reject the switch. These steps run in the System settings phase and are **best-effort**:
+
+| Step | What it does |
+| --- | --- |
+| Install OpenSSH Server | Adds the `OpenSSH.Server~~~~0.0.1.0` Windows capability from Windows Update. Setup confirms the capability is `Installed` and retries, because the first attempt on a fresh machine can report success while Windows Update is busy. |
+| Start `sshd` | Sets the service to start automatically and starts it. |
+| Firewall | Ensures the `OpenSSH-Server-In-TCP` rule allows inbound TCP 22 on the **Private** profile only. |
+
+Setup doesn't change your network category. If a connected network is **Public**, SSH stays blocked on it, and the summary tells you which one; mark a trusted network Private in **Settings > Network & internet**. Connect from another PC with `ssh <user>@<computer-name>`.
+
 ### WSL
 
 - The WSL platform components, via `wsl --install --no-distribution`. If that isn't available, the `VirtualMachinePlatform` and `Microsoft-Windows-Subsystem-Linux` Windows features are enabled directly with `dism.exe` instead.
@@ -305,7 +324,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass
 powershell.exe -NoProfile -File .\src\windows-dev-config\dev-config.ps1 -AllowUnsigned
 ```
 
-Add [`-Action Partial`](#setup-actions) for the reduced setup, or [`-Workload winui`](#single-workloads) for a single workload.
+Add [`-Action Partial`](#setup-actions) for the reduced setup, [`-Workload winui`](#single-workloads) for a single workload, or [`-EnableSshServer`](#ssh-server-opt-in) to include the SSH server in Full.
 
 **Pin a tag, or try a branch.** `-Ref` accepts a branch, tag, or full 40-character commit SHA. Bootstrap resolves branches and tags once through Git ref discovery so its downloads use the same commit without consuming the GitHub REST API quota. Abbreviated commit SHAs are not supported. Pass arguments with a script block, not `| iex`:
 
@@ -509,10 +528,11 @@ Use the [uninstall command](#quick-start) from Quick start (from source, add `-A
 <summary><strong>What gets removed</strong></summary>
 
 - **Settings:** disable Sudo, Developer Mode, and Remote Desktop; reset Explorer, Start, search, notification, Bluetooth tray, taskbar End Task, Widgets, Edge policies, long-path, and WSL first-run settings; select the unrestricted QuietHours profile and switch app/system themes to light.
+- **SSH server:** stop `sshd`, remove the OpenSSH Server capability, and delete the `OpenSSH-Server-In-TCP` firewall rule, whether or not setup installed them.
 - **Terminal:** cancel any pending next-sign-in font update; remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries (including dynamically generated PowerShell entries), and the Copilot fragment.
 - **Integrations:** remove the managed Oh My Posh profile block, WinUI template package, and win-dev-skills marketplace. Custom profile code and unrelated plugins are preserved.
 - **Tools:** uv, NVM, the WinUI Copilot plugin, Node.js, Copilot, Python 3.14, Git, GitHub CLI, Oh My Posh, Azure CLI, Coreutils, .NET SDK 10, Intelligent Terminal, PowerToys, Visual Studio Code, Windows App CLI, and PowerShell 7.
-- **Not removed:** fonts, the Visual C++ runtime, WinGet, Windows optional features, and setup files/logs under `%ProgramData%\CalmOS`.
+- **Not removed:** fonts, the Visual C++ runtime, WinGet, Windows optional features, OpenSSH host keys and configuration under `%ProgramData%\ssh`, and setup files/logs under `%ProgramData%\CalmOS`.
 
 </details>
 
@@ -554,6 +574,7 @@ See [Setup actions](#setup-actions) and [What it changes](#what-it-changes) for 
 | Area | Detail |
 | --- | --- |
 | **Remote Desktop is enabled** | `fDenyTSConnections` is set to `0`, allowing incoming RDP. The firewall rule isn't opened, so this alone doesn't expose the machine to your network — but it's a real change to its posture. |
+| **The SSH server is opt-in and Private-only** | `-EnableSshServer` accepts SSH connections on Private networks only. Setup doesn't change the network category, so SSH stays blocked on networks Windows marks Public. Password sign-in stays enabled. |
 | **Two Edge settings become policy** | Written under `HKLM\SOFTWARE\Policies\Microsoft\Edge`; Edge reports "managed by your organization" and greys those two settings out. |
 | **All notifications are turned off** | Do Not Disturb is enabled globally, not just for quiet hours, until you turn it back on. |
 | **Node.js LTS and nvm-windows are both installed** | Two ways to manage Node — uninstall Node.js first if you want nvm to own the PATH entry. |

@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param()
+param(
+    # Off by default: installs OpenSSH Server and allows SSH on Private networks only.
+    [switch] $EnableSshServer
+)
 
 & {
     $ErrorActionPreference = 'Stop'
@@ -15,5 +18,8 @@ param()
         $signature.SignerCertificate.Subject -ne 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US') {
         throw 'The setup bootstrap failed Microsoft signature verification. Setup was not started.'
     }
-    & ([scriptblock]::Create($bootstrap)) -Ref $payloadRef -Action Full
+    # Pass the switch only when set, so the default run works with any pinned bootstrap.
+    $options = @{}
+    if ($EnableSshServer) { $options.EnableSshServer = $true }
+    & ([scriptblock]::Create($bootstrap)) -Ref $payloadRef -Action Full @options
 }

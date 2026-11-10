@@ -66,6 +66,7 @@ function Invoke-DevConfigEnsurePwsh {
         [Parameter(Mandatory)] [string] $ScriptPath,
         [switch] $Resumed,
         [switch] $AllowUnsigned,
+        [switch] $EnableSshServer,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
     )
@@ -89,7 +90,7 @@ function Invoke-DevConfigEnsurePwsh {
     }
 
     Write-Host 'Switching this setup over to PowerShell 7...' -ForegroundColor DarkCyan
-    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -EnableSshServer:$EnableSshServer -Action $Action -Workload $Workload
     $proc = Start-Process -FilePath $pwsh -ArgumentList $relaunchArgs -Wait -NoNewWindow -PassThru
 
     # The relaunch performs the setup work, so this Windows PowerShell process exits with its code.

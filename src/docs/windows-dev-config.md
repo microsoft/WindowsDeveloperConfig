@@ -49,6 +49,8 @@ Windows PowerShell 5.1 and PowerShell 7.
 
 Adding a phase means adding one file and one entry in a workload's phase list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.
 
+`-EnableSshServer` is the only opt-in setting. It adds the OpenSSH Server steps to System settings for `Full` on the default workload; everything else rejects it. Every relaunch (UAC, the PowerShell 7 handoff, and reboot resume) carries it through `Get-DevConfigRelaunchArguments`, and the phase reads `$Script:DevConfigEnableSshServer`. Uninstall always removes the server. `setup-full.ps1` passes the switch only when it's set, so a payload pinned before this switch existed still runs the default setup. Run `src\tests\calm-os\ssh-server-checks.ps1` in both Windows PowerShell 5.1 and PowerShell 7 to check the switch without changing the machine.
+
 Run the isolated WSL probe checks from the repository root in Windows PowerShell 5.1 and PowerShell 7; they do not install WSL:
 
 ```powershell
