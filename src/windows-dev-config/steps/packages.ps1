@@ -83,6 +83,8 @@ function Get-DevConfigPackageCatalog {
             Name           = 'PowerShell'
             Id             = 'Microsoft.PowerShell'
             UninstallOrder = 16
+            # Declining the PowerShell 7 prerequisite also declines this package.
+            SkipIds        = @('prerequisites/PowerShell7')
         }
         @{
             Name           = 'Git'
@@ -129,6 +131,8 @@ function Get-DevConfigPackageCatalog {
             Name            = 'VCRedist'
             Id              = $vcRedistId
             KeepOnUninstall = $true
+            # -Skip accepts either architecture's id, so callers need not know which one this machine uses.
+            SkipIds         = @('Microsoft.VCRedist.2015+.x64', 'Microsoft.VCRedist.2015+.arm64')
         }
         @{
             Name           = 'UV'
@@ -222,38 +226,35 @@ function Get-DevConfigPackage {
     return $selected
 }
 
+# -Skip names a package by its WinGet id; skipping it also leaves its settings and its cleanup alone.
+function Get-DevConfigPackageSkipIds {
+    param(
+        [Parameter(Mandatory)] [hashtable] $Package
+    )
+    return @(@($Package.Id) + @($Package['SkipIds'] | Where-Object { $_ }) | Select-Object -Unique)
+}
+
 function Invoke-PackagesPhase {
     param(
         [Parameter(Mandatory)] [string[]] $Packages
     )
-    if ($Script:DevConfigAction -ne 'Uninstall') {
-        # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
-        if (-not $Script:DevConfigResumed) {
-            Show-DevConfigPhaseHeader
-        }
-        Initialize-DevConfigWinGet
-        try {
-            Confirm-DevConfigWinGetReady
-        } catch {
-            if (-not $Script:DevConfigWingetSourceFailure) { throw }
-            Write-Host "  $Script:DevConfigWingetSourceFailure" -ForegroundColor Yellow
-        }
-    }
-
     $selected = @(Get-DevConfigPackage -Name $Packages)
-    $settings = @(foreach ($package in $selected) { if ($package['Settings']) { $package['Settings'] } })
 
     if ($Script:DevConfigAction -eq 'Uninstall') {
         $cleanupPackages = $selected | Where-Object { -not $_['KeepOnUninstall'] } |
             Sort-Object { [int]$_['UninstallOrder'] }
         $steps = @(
-            foreach ($setting in $settings) {
-                New-DevConfigRegistryStep -Setting $setting -Reset
+            foreach ($package in $selected) {
+                foreach ($setting in @($package['Settings'] | Where-Object { $_ })) {
+                    New-DevConfigRegistryStep -Setting $setting -Reset `
+                        -SkipIds (@(Get-DevConfigSkipId -Name $setting.Name) + (Get-DevConfigPackageSkipIds -Package $package))
+                }
             }
             foreach ($package in $cleanupPackages) {
+                $packageIds = Get-DevConfigPackageSkipIds -Package $package
                 switch ($package.Name) {
                     'UV' {
-                        New-DevConfigStep -Name 'UvCleanup' -Description 'Remove uv executables, caches, and local data' -BestEffort `
+                        New-DevConfigStep -Name 'UvCleanup' -Description 'Remove uv executables, caches, and local data' -BestEffort -SkipIds $packageIds `
                             -Check {
                                 param($Id)
                                 @(Get-DevConfigUvCleanupPath).Count -eq 0 -and
@@ -263,7 +264,7 @@ function Invoke-PackagesPhase {
                             -ArgumentList @($package.Id)
                     }
                     'nvmForNode' {
-                        New-DevConfigStep -Name 'NvmCleanup' -Description 'Uninstall NVM for Windows' -BestEffort `
+                        New-DevConfigStep -Name 'NvmCleanup' -Description 'Uninstall NVM for Windows' -BestEffort -SkipIds $packageIds `
                             -Check { param($Id) Invoke-DevConfigPackageCleanup -Ids @($Id) -CheckOnly } `
                             -Apply { param($Id) Remove-DevConfigNvm } `
                             -ArgumentList @($package.Id)
@@ -273,7 +274,7 @@ function Invoke-PackagesPhase {
                         if ($package['AdditionalUninstallIds']) {
                             $ids += $package.AdditionalUninstallIds
                         }
-                        New-DevConfigStep -Name "$($package.Name)Cleanup" -Description "Uninstall $($package.Name) (user, machine, and MSIX)" -BestEffort `
+                        New-DevConfigStep -Name "$($package.Name)Cleanup" -Description "Uninstall $($package.Name) (user, machine, and MSIX)" -BestEffort -SkipIds $packageIds `
                             -Check { param($Ids, $InnoUninstall) Invoke-DevConfigPackageCleanup -Ids $Ids -InnoUninstall $InnoUninstall -CheckOnly } `
                             -Apply { param($Ids, $InnoUninstall) Invoke-DevConfigPackageCleanup -Ids $Ids -InnoUninstall $InnoUninstall } `
                             -ArgumentList @($ids, $package['InnoUninstall'])
@@ -290,6 +291,7 @@ function Invoke-PackagesPhase {
     $steps = @(
         foreach ($package in $selected) {
             New-DevConfigStep -Name $package.Name -Description "winget install $($package.Id)" -BestEffort `
+                -SkipIds (Get-DevConfigPackageSkipIds -Package $package) `
                 -Check { param($Id, $Large, $AnyVersion) Test-DevConfigWingetPackageInstalled -Id $Id -AnyVersion:$AnyVersion } `
                 -Apply {
                     param($Id, $Large, $AnyVersion)
@@ -300,10 +302,28 @@ function Invoke-PackagesPhase {
                 } `
                 -ArgumentList @($package.Id, $package.ContainsKey('Large'), [bool]$package['AnyVersion'])
         }
-        foreach ($setting in $settings) {
-            New-DevConfigRegistryStep -Setting $setting
+        foreach ($package in $selected) {
+            foreach ($setting in @($package['Settings'] | Where-Object { $_ })) {
+                New-DevConfigRegistryStep -Setting $setting `
+                    -SkipIds (@(Get-DevConfigSkipId -Name $setting.Name) + (Get-DevConfigPackageSkipIds -Package $package))
+            }
         }
     )
+
+    # WinGet setup is slow, so it is skipped when -Skip leaves no package step to check.
+    if (Test-DevConfigStepsToRun -Steps $steps) {
+        # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
+        if (-not $Script:DevConfigResumed) {
+            Show-DevConfigPhaseHeader
+        }
+        Initialize-DevConfigWinGet
+        try {
+            Confirm-DevConfigWinGetReady
+        } catch {
+            if (-not $Script:DevConfigWingetSourceFailure) { throw }
+            Write-Host "  $Script:DevConfigWingetSourceFailure" -ForegroundColor Yellow
+        }
+    }
 
     Invoke-DevConfigSteps -Steps $steps
 }

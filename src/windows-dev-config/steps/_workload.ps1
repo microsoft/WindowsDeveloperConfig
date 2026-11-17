@@ -149,9 +149,72 @@ function Invoke-DevConfigWorkloadPhase {
     $parameters = $resolved.Parameters
 
     $Script:DevConfigPhaseSteps = $Phase['Steps']
+    $Script:DevConfigPhaseName = [IO.Path]::GetFileNameWithoutExtension($Phase['File'])
     try {
         & $resolved.Command @parameters
     } finally {
         $Script:DevConfigPhaseSteps = $null
+        $Script:DevConfigPhaseName = ''
+    }
+}
+
+# Lists every id -Skip accepts for a workload: the steps, settings, and packages any of its actions can run.
+# Phases only build their step lists here; Invoke-DevConfigSteps stops each one before a step is checked or applied.
+function Get-DevConfigWorkloadSkipIds {
+    param(
+        [Parameter(Mandatory)] [string] $Directory,
+        [Parameter(Mandatory)] [string] $Workload,
+        [Parameter(Mandatory)] [string[]] $Actions,
+        [Parameter(Mandatory)] [string] $OrchestratorPath
+    )
+    $scriptPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OrchestratorPath)
+    $stepsDir = Join-Path (Split-Path -Parent $scriptPath) 'steps'
+    $ids = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $savedAction = $Script:DevConfigAction
+    try {
+        foreach ($action in $Actions) {
+            $Script:DevConfigAction = $action
+            $phases = @((Get-DevConfigWorkload -Directory $Directory -Workload $Workload -Action $action)['Phases'])
+            # Load every phase first, as dev-config.ps1 does, because one phase can use another's script variables.
+            foreach ($phase in $phases) {
+                . (Join-Path $stepsDir $phase['File'])
+            }
+            foreach ($phase in $phases) {
+                $resolved = Resolve-DevConfigWorkloadPhase -Phase $phase -OrchestratorPath $OrchestratorPath
+                $parameters = $resolved.Parameters
+                $Script:DevConfigPhaseSteps = $phase['Steps']
+                $Script:DevConfigPhaseName = [IO.Path]::GetFileNameWithoutExtension($phase['File'])
+                $Script:DevConfigSkipCatalog = $ids
+                $Script:DevConfigSkipCatalogDone = $false
+                try {
+                    & $resolved.Command @parameters
+                } catch {
+                    if (-not $Script:DevConfigSkipCatalogDone) { throw }
+                }
+            }
+        }
+    } finally {
+        $Script:DevConfigAction = $savedAction
+        $Script:DevConfigPhaseSteps = $null
+        $Script:DevConfigPhaseName = ''
+        $Script:DevConfigSkipCatalog = $null
+        $Script:DevConfigSkipCatalogDone = $false
+    }
+    return @($ids | Sort-Object)
+}
+
+# Unknown ids stop the run before anything changes, so a typo cannot quietly apply an item the caller left out.
+function Assert-DevConfigWorkloadSkipIds {
+    param(
+        [Parameter(Mandatory)] [string[]] $Skip,
+        [Parameter(Mandatory)] [string] $Directory,
+        [Parameter(Mandatory)] [string] $Workload,
+        [Parameter(Mandatory)] [string[]] $Actions,
+        [Parameter(Mandatory)] [string] $OrchestratorPath
+    )
+    $known = Get-DevConfigWorkloadSkipIds -Directory $Directory -Workload $Workload -Actions $Actions -OrchestratorPath $OrchestratorPath
+    $unknown = @($Skip | Where-Object { $known -notcontains $_ })
+    if ($unknown.Count -gt 0) {
+        throw "The $Workload workload has no item called $($unknown -join ', '), so nothing was changed. -Skip accepts: $($known -join ', ')."
     }
 }
