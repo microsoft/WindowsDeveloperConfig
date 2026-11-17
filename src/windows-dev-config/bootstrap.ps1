@@ -21,6 +21,19 @@
 
       & ([scriptblock]::Create((irm <url>))) -Workload winui
 
+  To leave out settings, steps, or packages, pass their ids (comma-separated or as an array):
+
+      & ([scriptblock]::Create((irm <url>))) -Action Full -Skip registry-system/Sudo,fonts/CascadiaDefaultFont,Microsoft.AzureCLI
+
+  Setup finishes everything that doesn't need a restart first. When something, such as WSL, still
+  needs one, it asks "Restart now? [Y/n]" if someone is at the console; otherwise it reports exit
+  code 3010. Either way, after the restart run the same command again; it picks up where it left off.
+  Callers that handle the restart themselves pass -NoRestart, which never restarts or asks. To let
+  setup restart and resume by itself, as for VMs and labs, pass -RestartWhenNeeded or set
+  $env:DEVCONFIG_RESTART_WHEN_NEEDED = '1' before a short-link one-liner:
+
+      & ([scriptblock]::Create((irm <url>))) -RestartWhenNeeded
+
   To run a standalone AI installer with its verified dependencies:
 
       & ([scriptblock]::Create((irm <url>))) -Scenario cuda
@@ -39,7 +52,10 @@ param(
     [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
     [switch] $RequireTriton,
     [switch] $PlanOnly,
-    [string] $ReportRoot
+    [string] $ReportRoot,
+    [string[]] $Skip,
+    [switch] $RestartWhenNeeded,
+    [switch] $NoRestart
 )
 
 function Invoke-CalmOsBootstrap {
@@ -56,7 +72,10 @@ function Invoke-CalmOsBootstrap {
         [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
         [switch] $RequireTriton,
         [switch] $PlanOnly,
-        [string] $ReportRoot
+        [string] $ReportRoot,
+        [string[]] $Skip,
+        [switch] $RestartWhenNeeded,
+        [switch] $NoRestart
     )
 
     $ErrorActionPreference = 'Stop'
@@ -194,6 +213,35 @@ function Invoke-CalmOsBootstrap {
         throw '-AiBackend and -RequireTriton require -Scenario local-ai or pytorch.'
     }
 
+    # -Skip arrives as an array from scripts and as one comma-separated string through -File.
+    # dev-config.ps1 checks each id exists before setup changes anything; this only rejects malformed ids before UAC.
+    $Skip = @($Skip | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    if ($Scenario -and $Skip.Count -gt 0) {
+        throw '-Skip leaves out workstation setup items and cannot be combined with -Scenario.'
+    }
+    # Keep identical to $Script:DevConfigSkipIdPattern in steps/_step-runner.ps1.
+    foreach ($id in $Skip) {
+        if ($id -notmatch '^(?:[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+|[a-z0-9][a-z0-9._+-]*)$') {
+            throw "'$id' is not a -Skip id. Use ids such as registry-system/Sudo, fonts/CascadiaFonts, or a WinGet id such as Git.Git."
+        }
+    }
+    $skipSuffix = if ($Skip.Count -gt 0) { " -Skip $($Skip -join ',')" } else { '' }
+
+    if ($Scenario -and $RestartWhenNeeded) {
+        throw '-RestartWhenNeeded applies to workstation setup and cannot be combined with -Scenario.'
+    }
+    if ($Scenario -and $NoRestart) {
+        throw '-NoRestart applies to workstation setup and cannot be combined with -Scenario.'
+    }
+    if ($NoRestart -and $RestartWhenNeeded) {
+        throw '-NoRestart and -RestartWhenNeeded contradict each other; pass one or neither.'
+    }
+    # Short links can't take parameters, so this variable opts them in the same way. An explicit -NoRestart wins.
+    if (-not $Scenario -and -not $RestartWhenNeeded -and -not $NoRestart -and $env:DEVCONFIG_RESTART_WHEN_NEEDED -in @('1', 'true')) {
+        $RestartWhenNeeded = [switch]$true
+    }
+    $restartSuffix = if ($RestartWhenNeeded) { ' -RestartWhenNeeded' } elseif ($NoRestart) { ' -NoRestart' } else { '' }
+
     # Reject refs that could escape the repository path.
     if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
         throw "'$Ref' is not a valid branch, tag or commit name. Use letters, digits, and . _ - / only."
@@ -248,7 +296,10 @@ function Invoke-CalmOsBootstrap {
             [switch] $RequireTriton,
             [switch] $PlanOnly,
             [string] $ReportRoot,
-            [string] $ElevationErrorPath
+            [string] $ElevationErrorPath,
+            [string[]] $Skip,
+            [switch] $RestartWhenNeeded,
+            [switch] $NoRestart
         )
 
         $launcher = {
@@ -265,7 +316,10 @@ function Invoke-CalmOsBootstrap {
                 [switch] $RequireTriton,
                 [switch] $PlanOnly,
                 [string] $ReportRoot,
-                [string] $ElevationErrorPath
+                [string] $ElevationErrorPath,
+                [string[]] $Skip,
+                [switch] $RestartWhenNeeded,
+                [switch] $NoRestart
             )
 
             $ErrorActionPreference = 'Stop'
@@ -335,10 +389,17 @@ function Invoke-CalmOsBootstrap {
             } else {
                 $arguments += '-Action', $Action
                 if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+                if ($Skip) { $arguments += '-Skip', ($Skip -join ',') }
+                if ($RestartWhenNeeded) { $arguments += '-RestartWhenNeeded' }
+                if ($NoRestart) { $arguments += '-NoRestart' }
             }
             if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
             if ($NoLaunch) { $arguments += '-NoLaunch' }
             & (Join-Path $PSHOME $shellName) @arguments
+            # 3010 means setup worked but Windows needs a restart; pass it on instead of reporting a failure.
+            if ($LASTEXITCODE -eq 3010 -and -not $Scenario) {
+                exit 3010
+            }
             if ($LASTEXITCODE -ne 0) {
                 throw "Bootstrap finished with exit code $LASTEXITCODE."
             }
@@ -362,6 +423,12 @@ function Invoke-CalmOsBootstrap {
         } else {
             $command += " -Action '$Action'"
             if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
+            if ($Skip) {
+                $escapedSkip = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Skip -join ',')
+                $command += " -Skip '$escapedSkip'"
+            }
+            if ($RestartWhenNeeded) { $command += ' -RestartWhenNeeded' }
+            if ($NoRestart) { $command += ' -NoRestart' }
         }
         if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
         if ($NoLaunch) { $command += ' -NoLaunch' }
@@ -449,11 +516,22 @@ function Invoke-CalmOsBootstrap {
         $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch `
             -Action $Action -Workload $Workload -Scenario $Scenario -AiBackend $AiBackend -AiRuntime $AiRuntime `
             -RequireTriton:$RequireTriton -PlanOnly:$PlanOnly -ReportRoot $ReportRoot `
-            -ElevationErrorPath $elevationErrorPath
+            -ElevationErrorPath $elevationErrorPath -Skip $Skip -RestartWhenNeeded:$RestartWhenNeeded -NoRestart:$NoRestart
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
         # AI runtimes can outlive setup; workstation actions still wait for the process tree.
         $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait:(-not $Scenario) -PassThru
         if ($Scenario) { $proc.WaitForExit() }
+        # 3010 is "succeeded, restart required": report it through $LASTEXITCODE instead of throwing.
+        if ($proc.ExitCode -eq 3010 -and -not $Scenario) {
+            Write-Host ''
+            if ($RestartWhenNeeded) {
+                Write-Host 'Setup continues after Windows restarts and you sign back in.' -ForegroundColor Yellow
+            } else {
+                Write-Host 'Setup needs a restart to finish. Restart Windows, then run the same command again; it picks up where it left off.' -ForegroundColor Yellow
+            }
+            $global:LASTEXITCODE = 3010
+            return
+        }
         if ($proc.ExitCode -ne 0) {
             if (-not $Scenario) {
                 throw "Elevated setup exited with code $($proc.ExitCode). No further setup was started."
@@ -475,7 +553,7 @@ function Invoke-CalmOsBootstrap {
                 Write-Host "Scenario files are ready at $scenarioTarget." -ForegroundColor Cyan
             } else {
                 $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
-                Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+                Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$skipSuffix$restartSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
             }
         }
         return
@@ -631,14 +709,14 @@ function Invoke-CalmOsBootstrap {
         }
         Get-ChildItem -LiteralPath $InstallRoot -Recurse -Filter '*.ps1' -File | Unblock-File
 
-        # Clean up before setup can reboot.
+        # Clean up before setup asks for a restart.
         Remove-Item -LiteralPath $work -Recurse -Force
         $target = Join-Path $InstallRoot 'dev-config.ps1'
         Write-Host "  Ready in $InstallRoot" -ForegroundColor DarkGray
 
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($target)
-            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix"
+            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$skipSuffix$restartSuffix"
             if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
             Write-Host "Run when ready: $command" -ForegroundColor Cyan
             return
@@ -646,11 +724,20 @@ function Invoke-CalmOsBootstrap {
 
         $arguments += '-File', "`"$target`"", '-Action', $Action
         if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+        # -File passes this as one string; dev-config.ps1 splits it at the commas.
+        if ($Skip.Count -gt 0) { $arguments += '-Skip', ($Skip -join ',') }
+        if ($RestartWhenNeeded) { $arguments += '-RestartWhenNeeded' }
+        if ($NoRestart) { $arguments += '-NoRestart' }
         if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
         $start = @{ FilePath = $shell; ArgumentList = $arguments; Wait = $true; PassThru = $true }
         if ($Action -ne 'Uninstall') { $start.NoNewWindow = $true }
         $proc = Start-Process @start
 
+        # 3010 is "succeeded, restart required"; dev-config.ps1 has already said what to do next.
+        if ($proc.ExitCode -eq 3010) {
+            $global:LASTEXITCODE = 3010
+            return
+        }
         # Throw to avoid closing the caller's console.
         if ($proc.ExitCode -ne 0) {
             throw "Setup finished with exit code $($proc.ExitCode). The log is in $InstallRoot."
@@ -662,4 +749,10 @@ function Invoke-CalmOsBootstrap {
     }
 }
 
+$global:LASTEXITCODE = 0
 Invoke-CalmOsBootstrap @PSBoundParameters
+# Run from a .ps1 file, report a needed restart as the exit code. Pasted or downloaded copies (irm | iex)
+# leave it in $LASTEXITCODE, because exiting would close the caller's console.
+if (${function:Invoke-CalmOsBootstrap}.File -and $global:LASTEXITCODE -eq 3010) {
+    exit 3010
+}
