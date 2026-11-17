@@ -99,6 +99,26 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 Replace `setup-full.ps1` with the chosen wrapper — short URLs point at these repository-root release files, not `src/`, and all three require `| iex`.
 
+### Leave items out
+
+Both `bootstrap.ps1` and `dev-config.ps1` also accept `-Skip` with the ids of settings, steps, and packages to leave out. A skipped item is never checked or changed, not even briefly, and this works with every `-Action` and `-Workload`:
+
+```powershell
+& ([scriptblock]::Create((irm $url))) -Action Full -Skip registry-system/Sudo,fonts/CascadiaDefaultFont,Microsoft.AzureCLI
+```
+
+| Item | Id | Example |
+| --- | --- | --- |
+| Setting or step | Phase file name, a slash, and the setting or step `Name` from that file | `registry-system/Sudo`, `terminal/DarkTheme`, `wsl/WslUbuntu` |
+| Package | Its WinGet id | `Microsoft.AzureCLI`, `Git.Git` |
+
+- Pass the ids as an array or as one comma-separated string, for example from `powershell.exe -File`. Ids are not case-sensitive.
+- An id the workload doesn't have stops the run before anything changes, and the message lists every id it accepts.
+- Skipping a package also leaves its settings (`packages/PowerToysAOT` for PowerToys) and its removal during `Uninstall` alone.
+- `prerequisites/PowerShell7` and `Microsoft.PowerShell` both decline PowerShell 7: setup never installs it, but still uses a copy that's already there.
+- Skipping one of `terminal/AppsTheme` and `terminal/SystemTheme` leaves that value alone while `terminal/DarkTheme` sets the other. `wsl/WslFirstRun` leaves the WSL first-run setting alone while Ubuntu still installs.
+- `-Skip` can't be combined with `-Scenario`.
+
 ## Single workloads
 
 The same engine can set up one toolchain instead of the whole workstation — same elevation, signature checks, logging, and summary. For example:
@@ -563,7 +583,7 @@ See [Setup actions](#setup-actions) and [What it changes](#what-it-changes) for 
 | **Package versions move** | Packages are installed at whatever winget currently publishes, so two machines set up on different days can differ. `Microsoft.DotNet.SDK.10` and `Python.Python.3.14` pin a major version and will need bumping as those age. |
 | **The font release is pinned** | Cascadia Code `2407.24`, verified by hash. Newer releases need both the version and the hash updated in `steps/fonts.ps1`. |
 | **Terminal settings lose their comments** | `settings.json` is round-tripped through JSON, so comments don't survive. A `.bak` is written first. |
-| **No package selection at run time** | `Full` and `Partial` install all packages. There's no `-Skip` switch or selection prompt. |
+| **No package selection prompt** | `Full` and `Partial` install every package unless you leave some out with [`-Skip`](#leave-items-out). There's no interactive selection prompt. |
 | **No dry run** | There's no `-WhatIf`. The `already OK` output tells you what a re-run *would* skip, but only after the fact. |
 | **Git and GitHub CLI are installed, not configured** | No `git config user.name`, no `gh auth login`. |
 | **`%ProgramData%\CalmOS` stays behind** | Setup and its log remain for resume and reruns. Deleting them requires Administrator rights. |

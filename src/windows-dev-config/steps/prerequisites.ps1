@@ -21,21 +21,25 @@ function Confirm-DevConfigPwshInUse {
 }
 
 function Invoke-PrerequisitesPhase {
-    # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
-    if (-not $Script:DevConfigResumed) {
-        Show-DevConfigPhaseHeader
-    }
-    Initialize-DevConfigWinGet
-
     # BestEffort allows later package checks to run even if one prerequisite remains unverified.
     $steps = @(
         New-DevConfigStep -Name 'PowerShell7' -Description 'Install PowerShell 7' -BestEffort `
+            -SkipIds $Script:DevConfigPwshSkipIds `
             -Check { $PSVersionTable.PSEdition -eq 'Core' } `
             -Apply { Confirm-DevConfigPwshInUse }
         New-DevConfigStep -Name 'WinGet' -Description 'Update WinGet to the pinned release' -BestEffort `
             -Check { Test-DevConfigWinGetTargetVersion } `
             -Apply { Update-DevConfigWinget }
     )
+
+    # WinGet setup is slow, so it is skipped when -Skip leaves no step here to check.
+    if (Test-DevConfigStepsToRun -Steps $steps) {
+        # Show the header before WinGet setup; skip it when a resumed run summarizes this phase.
+        if (-not $Script:DevConfigResumed) {
+            Show-DevConfigPhaseHeader
+        }
+        Initialize-DevConfigWinGet
+    }
 
     Invoke-DevConfigSteps -Steps $steps
 }

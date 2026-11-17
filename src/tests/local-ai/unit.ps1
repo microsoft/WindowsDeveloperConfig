@@ -320,6 +320,7 @@ $invokeElevation = [scriptblock]::Create($elevationBody.Substring(1, $elevationB
     $ReportRoot = "C:\AI reports\O'Brien"
     foreach ($case in @(
         @{ Action = 'Full'; Workload = 'devconfig'; Scenario = '' }
+        @{ Action = 'Full'; Workload = 'devconfig'; Scenario = ''; Skip = @('registry-system/Sudo', 'Microsoft.AzureCLI') }
         @{ Action = 'Partial'; Workload = 'devconfig'; Scenario = '' }
         @{ Action = 'Uninstall'; Workload = 'devconfig'; Scenario = '' }
         @{ Action = 'Full'; Workload = 'winui'; Scenario = '' }
@@ -339,6 +340,8 @@ $invokeElevation = [scriptblock]::Create($elevationBody.Substring(1, $elevationB
         $AiRuntime = if ($Scenario -eq 'local-ai') { 'Ollama' } else { 'None' }
         $RequireTriton = $Scenario -in @('local-ai', 'pytorch')
         $workloadSuffix = if ($Workload -ne 'devconfig') { " -Workload $Workload" } else { '' }
+        $Skip = @($case['Skip'] | Where-Object { $_ })
+        $skipSuffix = if ($Skip.Count -gt 0) { " -Skip $($Skip -join ',')" } else { '' }
         foreach ($AllowUnsigned in @($false, $true)) {
             $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
             $arguments = @('-NoProfile')
@@ -365,6 +368,7 @@ $invokeElevation = [scriptblock]::Create($elevationBody.Substring(1, $elevationB
                 Assert-True ($invocation.Contains(" -InstallRoot 'C:\Bootstrap tests\O''Brien'")) 'Elevation should escape quoted paths'
                 Assert-Equal ($invocation.Contains(" -Action '$Action'")) (-not $Scenario) 'Only workstation launches should forward Action'
                 Assert-Equal ($invocation.Contains(" -Workload 'winui'")) ($Workload -eq 'winui') 'Default workloads should remain omitted'
+                Assert-Equal ($invocation.Contains(" -Skip 'registry-system/Sudo,Microsoft.AzureCLI'")) ($Skip.Count -gt 0) 'Skipped items should survive elevation, and no -Skip should add nothing'
                 Assert-Equal ($invocation.Contains(' -Scenario ')) ([bool]$Scenario) 'AI dispatch should be opt-in'
                 Assert-Equal ($invocation.Contains(' -ElevationErrorPath ')) ([bool]$Scenario) 'Legacy elevated commands should not require diagnostic paths'
                 Assert-Equal ($invocation.Contains(' -AllowUnsigned')) $AllowUnsigned 'Elevation should preserve source/release selection'
