@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Installs WSL and Ubuntu with reboot support, or removes them during cleanup.
+  Installs WSL and Ubuntu, or removes them during cleanup. When WSL needs a restart, Ubuntu waits for it.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -188,8 +188,14 @@ function Install-DevConfigUbuntu {
         # -Skip left out WslFirstRun, so the first-run setting is not written.
         [switch] $SkipFirstRunSetting
     )
-    # A distro install requires active platform components, so fail early when they are not active.
-    if (-not (Test-DevConfigWslComponentsReady)) {
+    # A distro install requires active platform components, so it waits for a pending restart and fails otherwise.
+    # Once Windows has restarted for WSL, a pending servicing restart no longer counts, so this can't ask for another one.
+    if ($Script:DevConfigRestartRequired -or -not (Test-DevConfigWslComponentsReady)) {
+        if ($Script:DevConfigRestartRequired -or
+            (-not $Script:DevConfigAfterRestart -and (Test-DevConfigServicingRebootPending))) {
+            Set-DevConfigStepRestartPending -Reason 'Ubuntu installs once WSL is active after the restart.'
+            return
+        }
         throw "WSL isn't active on this machine, so Ubuntu can't be installed yet (see the note above)."
     }
 
@@ -236,26 +242,29 @@ once that is sorted.
 '@
 
 function Install-DevConfigWslPlatform {
-    param(
-        [Parameter(Mandatory)] [string] $OrchestratorPath
-    )
+    # An earlier run already installed the components and asked for a restart that hasn't happened yet.
+    if ($Script:DevConfigRestartRequestPending -and (Test-DevConfigServicingRebootPending)) {
+        Set-DevConfigStepRestartPending -Reason 'WSL finishes installing after Windows restarts.'
+        return
+    }
 
     $Script:DevConfigWslRestartSignalled = $false
     Install-DevConfigWslComponents
 
-    # Skip restart only when no servicing restart is pending and the WSL platform is active.
+    # No restart is needed when no servicing restart is pending and the WSL platform is active.
     if (-not $Script:DevConfigWslRestartSignalled -and
         -not (Test-DevConfigServicingRebootPending) -and
         (Test-DevConfigWslComponentsReady)) {
         return
     }
 
-    # After one resume, stop instead of repeating restarts if the platform is still inactive.
-    if ($Script:DevConfigResumed) {
+    # Once Windows has restarted for WSL, stop instead of asking for another restart that would not help.
+    if ($Script:DevConfigAfterRestart) {
         throw $Script:DevConfigWslInactiveMessage
     }
 
-    Suspend-DevConfigForReboot -ScriptPath $OrchestratorPath
+    # The step never restarts Windows itself: it waits, the run finishes, and dev-config.ps1 decides about the restart.
+    Set-DevConfigStepRestartPending -Reason 'WSL finishes installing after Windows restarts.'
 }
 
 function Test-DevConfigWslDistributionRegistered {
@@ -296,10 +305,6 @@ function Remove-DevConfigWsl {
 }
 
 function Invoke-WslPhase {
-    param(
-        [Parameter(Mandatory)] [string] $OrchestratorPath
-    )
-
     if ($Script:DevConfigAction -eq 'Uninstall') {
         $steps = @(
             New-DevConfigRegistryStep -Setting $Script:DevConfigWslFirstRunSetting -Reset
@@ -311,13 +316,12 @@ function Invoke-WslPhase {
         return
     }
 
-    # ArgumentList binds the path at call time; BestEffort preserves prior phases if WSL cannot start.
+    # BestEffort preserves prior phases if WSL cannot start. Only WslUbuntu depends on the restart WslComponents may need.
     $firstRunId = Get-DevConfigSkipId -Name $Script:DevConfigWslFirstRunSetting.Name
     $steps = @(
         New-DevConfigStep -Name 'WslComponents' -Description 'Install WSL platform components' -BestEffort `
             -Check { Test-DevConfigWslComponentsReady } `
-            -Apply { param($OrchestratorPath) Install-DevConfigWslPlatform -OrchestratorPath $OrchestratorPath } `
-            -ArgumentList @($OrchestratorPath)
+            -Apply { Install-DevConfigWslPlatform }
         New-DevConfigStep -Name 'WslUbuntu' -Description 'Install the default Ubuntu distro' -BestEffort `
             -SettingIds @($firstRunId) `
             -Check { Test-DevConfigUbuntuInstalled } `

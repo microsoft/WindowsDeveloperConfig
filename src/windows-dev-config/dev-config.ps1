@@ -11,6 +11,12 @@
   fonts/CascadiaDefaultFont, or Microsoft.AzureCLI. Skipped items are never checked or changed.
   Ids can be passed as an array or as one comma-separated string. An unknown id stops the run
   before anything changes.
+
+  Setup finishes everything that doesn't need a restart first. When something, such as WSL, still
+  needs one, it asks "Restart now? [Y/n]" if someone is at the console; otherwise it exits with 3010.
+  Either way, after the restart run the same command again; it picks up where it left off.
+  -NoRestart never restarts or asks, for callers that handle the restart themselves.
+  -RestartWhenNeeded restarts by itself and registers a task that resumes setup after the restart.
 #>
 
 [CmdletBinding()]
@@ -21,7 +27,9 @@ param(
     [switch] $ApplyTerminalFont,
     [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
     [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
-    [string[]] $Skip
+    [string[]] $Skip,
+    [switch] $RestartWhenNeeded,
+    [switch] $NoRestart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,6 +76,12 @@ try {
 . (Join-Path $stepsDir '_workload.ps1')
 
 $Script:DevConfigAllowUnsigned = [bool]$AllowUnsigned
+# Checked before anything else runs, -ApplyTerminalFont included.
+if ($NoRestart -and $RestartWhenNeeded) {
+    Write-Host '-NoRestart and -RestartWhenNeeded contradict each other; pass one or neither.' -ForegroundColor Red
+    Wait-DevConfigKeyPress
+    exit 1
+}
 if ($ApplyTerminalFont) {
     . (Join-Path $stepsDir 'fonts.ps1')
     $pendingPath = Get-DevConfigPendingTerminalFontPath
@@ -113,16 +127,32 @@ try {
 $Script:DevConfigSkip = $Skip
 $workloadName = $definition['Name']
 
+# A resume task runs at every sign-in, unattended. It continues only when the saved request shows Windows restarted
+# since; otherwise it exits at once, without UAC or a pause, and a manual run picks up instead.
+if ($Resumed -and $Action -ne 'Uninstall') {
+    $resumeRequest = Get-DevConfigRestartRequest -Directory $PSScriptRoot
+    if ($resumeRequest.State -eq 'Pending') {
+        Write-Host "Windows hasn't restarted yet, so $workloadName setup continues after the restart." -ForegroundColor Yellow
+        exit $Script:DevConfigRestartExitCode
+    }
+    if ($resumeRequest.State -ne 'Restarted') {
+        $why = if ($resumeRequest.Reason) { $resumeRequest.Reason } else { 'no restart request was saved' }
+        Write-Host "Setup could not confirm that Windows restarted, so it didn't continue on its own: $why." -ForegroundColor Yellow
+        Write-Host 'Run the same command again to finish; it picks up where it left off.' -ForegroundColor Yellow
+        exit 1
+    }
+}
+
 # TLS is configured before any download step runs.
 Enable-DevConfigModernTls
 
-Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip
+Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip -RestartWhenNeeded:$RestartWhenNeeded -NoRestart:$NoRestart
 
 if ($Action -eq 'Uninstall') {
-    Invoke-DevConfigEnsureCleanupShell -ScriptPath $PSCommandPath -AllowUnsigned:$AllowUnsigned -Workload $Workload -Skip $Skip
+    Invoke-DevConfigEnsureCleanupShell -ScriptPath $PSCommandPath -AllowUnsigned:$AllowUnsigned -Workload $Workload -Skip $Skip -RestartWhenNeeded:$RestartWhenNeeded -NoRestart:$NoRestart
 } else {
     # WinGet module behavior is more consistent in PowerShell 7 than in Windows PowerShell 5.1.
-    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip
+    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip -RestartWhenNeeded:$RestartWhenNeeded -NoRestart:$NoRestart
 }
 
 # The lock starts after relaunches so the worker process owns the log file.
@@ -146,6 +176,14 @@ if ($Script:DevConfigResumed) {
     # Restore the pre-reboot tally so the final summary covers the whole run.
     Restore-DevConfigTally -Path (Get-DevConfigTallyPath -Directory $PSScriptRoot)
 }
+# Running the same command again is the resume; the saved request tells it whether Windows restarted in between.
+# Only that saved evidence counts: -Resumed alone doesn't prove a restart happened.
+$restartRequest = [pscustomobject]@{ State = 'None'; Waiting = @(); Reason = $null; Path = $null }
+if ($Action -ne 'Uninstall') {
+    $restartRequest = Get-DevConfigRestartRequest -Directory $PSScriptRoot
+}
+$Script:DevConfigAfterRestart = $restartRequest.State -eq 'Restarted'
+$Script:DevConfigRestartRequestPending = $restartRequest.State -eq 'Pending'
 $phases = @($definition['Phases'])
 
 $operation = if ($Action -eq 'Uninstall') { 'cleanup' } else { 'setup' }
@@ -158,12 +196,18 @@ if ($Action -eq 'Uninstall') {
     Write-Host 'Some uninstallers may request Administrator approval.' -ForegroundColor DarkGray
 } elseif ($Script:DevConfigResumed) {
     Write-Host "Welcome back. Resuming $workloadName setup ($Action) after the reboot..." -ForegroundColor Cyan
+} elseif ($restartRequest.State -eq 'Restarted') {
+    Write-Host "Welcome back. $workloadName setup ($Action) picks up where it left off before the restart." -ForegroundColor Cyan
 } else {
     $setupNote = if ($definition['SetupNote']) { ", $($definition['SetupNote'])" } else { '' }
     Write-Host "$workloadName setup ($Action) -- $($phases.Count) phases$setupNote" -ForegroundColor Cyan
 }
 if ($Skip.Count -gt 0) {
     Write-Host "Leaving out (-Skip): $($Skip -join ', ')" -ForegroundColor DarkGray
+}
+if ($restartRequest.State -eq 'Unknown') {
+    Write-Host "Setup can't tell whether Windows restarted since an earlier run asked for it: $($restartRequest.Reason)." -ForegroundColor Yellow
+    Write-Host "  $($restartRequest.Path) is left as it is, and setup won't restart Windows by itself this run. Delete it after restarting if this keeps appearing." -ForegroundColor DarkGray
 }
 
 $failure = $null
@@ -175,6 +219,8 @@ try {
             $rerun = "bootstrap.ps1 -Action $Action"
             if ($Workload -ne 'devconfig') { $rerun += " -Workload $Workload" }
             if ($Skip.Count -gt 0) { $rerun += " -Skip $($Skip -join ',')" }
+            if ($RestartWhenNeeded) { $rerun += ' -RestartWhenNeeded' }
+            if ($NoRestart) { $rerun += ' -NoRestart' }
             throw "The $operation script is missing: $path. Run $rerun to reinstall it."
         }
         . $path
@@ -199,17 +245,30 @@ try {
 
     Show-DevConfigSilentSkipSummary
     Write-Host ''
-    Write-Host "$workloadName $operation complete." -ForegroundColor Green
+    if ($Script:DevConfigRestartRequired) {
+        Write-Host "$workloadName $operation needs a restart to finish." -ForegroundColor Yellow
+    } else {
+        Write-Host "$workloadName $operation complete." -ForegroundColor Green
+    }
     $tally = $Script:DevConfigTally
     $summaryParts = @("$($tally.Done) changed", "$($tally.AlreadyOk) already up to date")
     if ($tally.Warned -gt 0) {
         $summaryParts += "$($tally.Warned) flagged"
+    }
+    if ($Script:DevConfigRestartPendingSteps.Count -gt 0) {
+        $summaryParts += "$($Script:DevConfigRestartPendingSteps.Count) waiting for a restart"
     }
     Write-Host "  $($summaryParts -join ', ')" -ForegroundColor DarkGray
     # Names are shown because the detailed flags may have scrolled off screen.
     if ($tally.Warned -gt 0) {
         Write-Host "  Flagged: $($Script:DevConfigWarnedSteps -join ', ')" -ForegroundColor Yellow
         Write-Host '  These were skipped or could not be confirmed. Running this again retries just those.' -ForegroundColor DarkGray
+    }
+    if ($Script:DevConfigRestartRequired) {
+        Write-Host "  Waiting for a restart: $($Script:DevConfigRestartPendingSteps -join ', ')" -ForegroundColor Yellow
+        if (-not $RestartWhenNeeded) {
+            Write-Host '  Restart Windows, then run the same command again; it picks up where it left off.' -ForegroundColor Yellow
+        }
     }
     # Notes raised by steps come before the workload's standing notes.
     foreach ($note in $Script:DevConfigNotes) {
@@ -239,13 +298,59 @@ if ($logPath) {
     Write-Host "  Full log: $logPath" -ForegroundColor DarkGray
 }
 
-# Close the log before releasing the lock so another run can start while this window waits.
-Stop-DevConfigLog
-Exit-DevConfigSingleInstance
+# A failed run keeps any earlier request. So does a run that didn't verify every step that waited for the restart,
+# whether it was flagged, skipped, or not part of this action, so a later run can't forget that Windows already
+# restarted for it and ask for another restart.
+$restartRequired = -not $failure -and $Script:DevConfigRestartRequired
+# Only a request that saved and read back is evidence a resumed run can trust, so it gates the automatic restart.
+$restartRecorded = $false
+# An unreadable request is left in place for diagnosis; this run neither overwrites nor deletes it.
+if (-not $failure -and $Action -ne 'Uninstall' -and $restartRequest.State -ne 'Unknown') {
+    if ($restartRequired) {
+        $restartRecorded = Save-DevConfigRestartRequest -Directory $PSScriptRoot
+    } elseif (@($restartRequest.Waiting | Where-Object { -not $Script:DevConfigTalliedSteps.ContainsKey($_) }).Count -eq 0) {
+        Clear-DevConfigRestartRequest -Directory $PSScriptRoot
+    }
+}
+if ($restartRequired -and -not $NoRestart -and -not $restartRecorded) {
+    Write-Host "  Setup won't restart Windows by itself without a saved restart request." -ForegroundColor Yellow
+    Write-Host '  Restart Windows, then run the same command again; it picks up where it left off.' -ForegroundColor Yellow
+}
 
-# The elevated window owns the final pause on both the initial and resumed runs.
-Wait-DevConfigKeyPress
+Stop-DevConfigLog
+
+# -NoRestart never restarts. -RestartWhenNeeded restarts by itself, after a countdown when there's a console;
+# otherwise setup asks first, and only when someone is at the console to answer.
+$restarting = $false
+if ($restartRequired -and $restartRecorded -and -not $NoRestart) {
+    try {
+        if ($RestartWhenNeeded) {
+            $restarting = Suspend-DevConfigForReboot -ScriptPath $PSCommandPath
+        } else {
+            $restarting = Request-DevConfigRestart
+        }
+    } catch {
+        Write-Host "Setup could not arrange the restart: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host 'Restart Windows, then run the same command again; it picks up where it left off.' -ForegroundColor Yellow
+    }
+}
+# The lock is held through the question or countdown so a second run can't remove the resume task or start
+# installing while Windows restarts. It is released before the final pause so another run can start while this window waits.
+Exit-DevConfigSingleInstance
+if ($restarting) {
+    exit $Script:DevConfigRestartExitCode
+}
+
+# The elevated window owns the final pause on both the initial and resumed runs. A restart question already
+# waited for an answer, so the window doesn't wait again.
+if (-not $Script:DevConfigRestartQuestionAsked) {
+    Wait-DevConfigKeyPress
+}
 
 if ($failure) {
     exit 1
+}
+# 3010 is "succeeded, restart required", so callers can tell a needed restart from a failure.
+if ($restartRequired) {
+    exit $Script:DevConfigRestartExitCode
 }

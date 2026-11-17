@@ -104,7 +104,7 @@ function Get-DevConfigWorkload {
     return $definition
 }
 
-# Parameters come from the workload; phases that can reboot also receive the orchestrator path so resume can relaunch it.
+# Parameters come from the workload; a phase that declares -OrchestratorPath also receives the orchestrator's path.
 function Resolve-DevConfigWorkloadPhase {
     param(
         [Parameter(Mandatory)] [hashtable] $Phase,

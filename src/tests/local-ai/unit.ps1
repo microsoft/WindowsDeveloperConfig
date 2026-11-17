@@ -321,6 +321,8 @@ $invokeElevation = [scriptblock]::Create($elevationBody.Substring(1, $elevationB
     foreach ($case in @(
         @{ Action = 'Full'; Workload = 'devconfig'; Scenario = '' }
         @{ Action = 'Full'; Workload = 'devconfig'; Scenario = ''; Skip = @('registry-system/Sudo', 'Microsoft.AzureCLI') }
+        @{ Action = 'Full'; Workload = 'devconfig'; Scenario = ''; RestartWhenNeeded = $true }
+        @{ Action = 'Full'; Workload = 'devconfig'; Scenario = ''; NoRestart = $true }
         @{ Action = 'Partial'; Workload = 'devconfig'; Scenario = '' }
         @{ Action = 'Uninstall'; Workload = 'devconfig'; Scenario = '' }
         @{ Action = 'Full'; Workload = 'winui'; Scenario = '' }
@@ -342,17 +344,24 @@ $invokeElevation = [scriptblock]::Create($elevationBody.Substring(1, $elevationB
         $workloadSuffix = if ($Workload -ne 'devconfig') { " -Workload $Workload" } else { '' }
         $Skip = @($case['Skip'] | Where-Object { $_ })
         $skipSuffix = if ($Skip.Count -gt 0) { " -Skip $($Skip -join ',')" } else { '' }
+        $RestartWhenNeeded = [bool]$case['RestartWhenNeeded']
+        $NoRestart = [bool]$case['NoRestart']
+        $restartSuffix = if ($RestartWhenNeeded) { ' -RestartWhenNeeded' } elseif ($NoRestart) { ' -NoRestart' } else { '' }
         foreach ($AllowUnsigned in @($false, $true)) {
             $flow = if ($AllowUnsigned) { 'src/windows-dev-config' } else { 'windows-dev-config' }
             $arguments = @('-NoProfile')
             if (-not $AllowUnsigned) { $arguments += '-ExecutionPolicy', 'RemoteSigned' }
-            foreach ($exitCode in @(0, 7)) {
+            foreach ($exitCode in @(0, 7, 3010)) {
                 $script:preflightRequests = @()
                 $script:diagnosticRemovals = @()
+                $global:LASTEXITCODE = 0
                 if ($exitCode -eq 0) {
                     & $invokeElevation 6>$null
+                } elseif ($exitCode -eq 3010 -and -not $Scenario) {
+                    & $invokeElevation 6>$null
+                    Assert-Equal $global:LASTEXITCODE 3010 'A needed restart should be reported through LASTEXITCODE, not thrown'
                 } else {
-                    $expectedError = "Elevated setup exited with code 7. No further setup was started."
+                    $expectedError = "Elevated setup exited with code $exitCode. No further setup was started."
                     if ($Scenario) { $expectedError += "`nThe elevated process did not return diagnostic output." }
                     Assert-ThrowsLike { & $invokeElevation 6>$null } $expectedError 'Elevation failures should retain mode-specific diagnostics'
                 }
@@ -369,6 +378,8 @@ $invokeElevation = [scriptblock]::Create($elevationBody.Substring(1, $elevationB
                 Assert-Equal ($invocation.Contains(" -Action '$Action'")) (-not $Scenario) 'Only workstation launches should forward Action'
                 Assert-Equal ($invocation.Contains(" -Workload 'winui'")) ($Workload -eq 'winui') 'Default workloads should remain omitted'
                 Assert-Equal ($invocation.Contains(" -Skip 'registry-system/Sudo,Microsoft.AzureCLI'")) ($Skip.Count -gt 0) 'Skipped items should survive elevation, and no -Skip should add nothing'
+                Assert-Equal ($invocation.Contains(' -RestartWhenNeeded')) $RestartWhenNeeded 'Only an opted-in run should carry -RestartWhenNeeded through elevation'
+                Assert-Equal ($invocation.Contains(' -NoRestart')) $NoRestart 'Only a run that passed -NoRestart should carry it through elevation'
                 Assert-Equal ($invocation.Contains(' -Scenario ')) ([bool]$Scenario) 'AI dispatch should be opt-in'
                 Assert-Equal ($invocation.Contains(' -ElevationErrorPath ')) ([bool]$Scenario) 'Legacy elevated commands should not require diagnostic paths'
                 Assert-Equal ($invocation.Contains(' -AllowUnsigned')) $AllowUnsigned 'Elevation should preserve source/release selection'

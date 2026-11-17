@@ -36,6 +36,14 @@ $Script:DevConfigSkipCatalog      = $null
 $Script:DevConfigSkipCatalogDone  = $false
 # Keep identical to bootstrap.ps1: a phase/step id such as registry-system/Sudo, or a WinGet id such as Git.Git.
 $Script:DevConfigSkipIdPattern    = '^(?:[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+|[a-z0-9][a-z0-9._+-]*)$'
+# A step that can only finish after Windows restarts sets this instead of failing; the run finishes the rest.
+$Script:DevConfigStepRestartPending = $null
+$Script:DevConfigRestartRequired    = $false
+$Script:DevConfigRestartPendingSteps = @()
+# True when Windows has restarted since a run asked for it, so another restart would not help.
+$Script:DevConfigAfterRestart       = $false
+# True when an earlier run asked for a restart that has not happened yet.
+$Script:DevConfigRestartRequestPending = $false
 
 function Write-DevConfigPhaseHeader {
     param(
@@ -265,6 +273,15 @@ function Add-DevConfigNote {
     $Script:DevConfigNotes += [pscustomobject]@{ Message = $Message; Warning = [bool]$Warning }
 }
 
+# Marks the current step as waiting for a restart: it is neither done nor flagged, and the run ends with "restart required".
+function Set-DevConfigStepRestartPending {
+    param(
+        [Parameter(Mandatory)] [string] $Reason
+    )
+    $Script:DevConfigStepRestartPending = $Reason
+    $Script:DevConfigRestartRequired = $true
+}
+
 # Allows unverified work to be flagged without failing the run when confirmation lags the apply action.
 function Set-DevConfigStepUnverified {
     param(
@@ -384,9 +401,17 @@ function Invoke-DevConfigSteps {
 
         # BestEffort steps flag and continue instead of blocking the whole run.
         $Script:DevConfigStepUnverified = $null
+        $Script:DevConfigStepRestartPending = $null
         try {
             & $step.Apply @stepArgs
-            if ($Script:DevConfigStepUnverified) {
+            if ($Script:DevConfigStepRestartPending) {
+                if ($Script:DevConfigRestartPendingSteps -notcontains $step.Name) {
+                    $Script:DevConfigRestartPendingSteps += $step.Name
+                }
+                Clear-DevConfigStepFlag -Name $step.Name
+                Write-Host "  ~ $label waiting for a restart" -ForegroundColor Yellow
+                Write-Host "    $Script:DevConfigStepRestartPending" -ForegroundColor DarkGray
+            } elseif ($Script:DevConfigStepUnverified) {
                 Write-DevConfigStepFlag -Name $step.Name -Label $label -Message $Script:DevConfigStepUnverified
             } elseif (-not [bool](& $step.Check @stepArgs)) {
                 throw "ran, but the follow-up check still says it isn't done."

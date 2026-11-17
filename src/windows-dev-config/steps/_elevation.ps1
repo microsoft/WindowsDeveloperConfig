@@ -155,7 +155,9 @@ function Get-DevConfigRelaunchArguments {
         [switch] $ApplyTerminalFont,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
-        [string[]] $Skip = @()
+        [string[]] $Skip = @(),
+        [switch] $RestartWhenNeeded,
+        [switch] $NoRestart
     )
     $arguments = @('-NoProfile')
     if (-not $AllowUnsigned) {
@@ -181,6 +183,12 @@ function Get-DevConfigRelaunchArguments {
         if ($Resumed) {
             $arguments += '-Resumed'
         }
+        if ($RestartWhenNeeded) {
+            $arguments += '-RestartWhenNeeded'
+        }
+        if ($NoRestart) {
+            $arguments += '-NoRestart'
+        }
     }
     if ($AllowUnsigned) {
         $arguments += '-AllowUnsigned'
@@ -196,7 +204,9 @@ function Invoke-DevConfigElevate {
         [switch] $AllowUnsigned,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
-        [string[]] $Skip = @()
+        [string[]] $Skip = @(),
+        [switch] $RestartWhenNeeded,
+        [switch] $NoRestart
     )
 
     if (Test-DevConfigIsAdmin) {
@@ -215,7 +225,7 @@ function Invoke-DevConfigElevate {
         Get-DevConfigShellExe
     }
     # Preserve -Resumed so the elevated process continues after the WSL reboot.
-    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip -RestartWhenNeeded:$RestartWhenNeeded -NoRestart:$NoRestart
     try {
         $proc = Start-Process -FilePath $shell -ArgumentList $relaunchArgs -Verb RunAs -Wait -PassThru
     } catch {

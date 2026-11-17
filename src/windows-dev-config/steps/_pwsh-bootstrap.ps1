@@ -71,7 +71,9 @@ function Invoke-DevConfigEnsurePwsh {
         [switch] $AllowUnsigned,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
-        [string[]] $Skip = @()
+        [string[]] $Skip = @(),
+        [switch] $RestartWhenNeeded,
+        [switch] $NoRestart
     )
 
     if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7) {
@@ -97,7 +99,7 @@ function Invoke-DevConfigEnsurePwsh {
     }
 
     Write-Host 'Switching this setup over to PowerShell 7...' -ForegroundColor DarkCyan
-    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip -RestartWhenNeeded:$RestartWhenNeeded -NoRestart:$NoRestart
     $proc = Start-Process -FilePath $pwsh -ArgumentList $relaunchArgs -Wait -NoNewWindow -PassThru
 
     # The relaunch performs the setup work, so this Windows PowerShell process exits with its code.
@@ -109,7 +111,9 @@ function Invoke-DevConfigEnsureCleanupShell {
         [Parameter(Mandatory)] [string] $ScriptPath,
         [switch] $AllowUnsigned,
         [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
-        [string[]] $Skip = @()
+        [string[]] $Skip = @(),
+        [switch] $RestartWhenNeeded,
+        [switch] $NoRestart
     )
     if ($PSVersionTable.PSEdition -eq 'Desktop') {
         return
@@ -118,7 +122,7 @@ function Invoke-DevConfigEnsureCleanupShell {
     # Cleanup needs the Appx cmdlets and removes PowerShell 7 itself.
     Write-Host 'Switching cleanup to Windows PowerShell...' -ForegroundColor DarkCyan
     $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $arguments = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -AllowUnsigned:$AllowUnsigned -Action Uninstall -Workload $Workload -Skip $Skip
+    $arguments = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -AllowUnsigned:$AllowUnsigned -Action Uninstall -Workload $Workload -Skip $Skip -RestartWhenNeeded:$RestartWhenNeeded -NoRestart:$NoRestart
     $proc = Start-Process -FilePath $shell -ArgumentList $arguments -Wait -PassThru
     exit $proc.ExitCode
 }
