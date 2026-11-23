@@ -175,7 +175,7 @@ Setup checks the WinGet module's connection first — a failure triggers a repai
 | GitHub Copilot CLI | `GitHub.Copilot` |
 | Visual Studio Code | `Microsoft.VisualStudioCode` |
 | .NET SDK 10 | `Microsoft.DotNet.SDK.10` |
-| Python 3.14 | `Python.Python.3.14` |
+| Python install manager | `Python.PythonInstallManager` |
 | Visual C++ Redistributable | `Microsoft.VCRedist.2015+.x64` or `Microsoft.VCRedist.2015+.arm64` |
 | uv | `astral-sh.uv` |
 | Node.js LTS | `OpenJS.NodeJS.LTS` |
@@ -186,6 +186,8 @@ Setup checks the WinGet module's connection first — a failure triggers a repai
 | PowerToys | `Microsoft.PowerToys` |
 
 A package counts as done only when winget reports it installed **and** current, so a re-run also picks up available updates.
+
+Python 3.14 itself comes from the Python install manager: setup runs `pymanager install --update 3.14` as your user and adds the manager's commands folder (`%LOCALAPPDATA%\Python\bin`, home of `pip` and `python3.14`) to your user `PATH`. Like the packages, the runtime counts as done only when it's the newest 3.14 release. Python installed earlier by other installers, such as `Python.Python.3.14` from previous versions of setup, is left in place.
 
 The Visual C++ runtime is installed before uv, matching Windows' native architecture.
 
@@ -511,7 +513,7 @@ Use the [uninstall command](#quick-start) from Quick start (from source, add `-A
 - **Settings:** disable Sudo, Developer Mode, and Remote Desktop; reset Explorer, Start, search, notification, Bluetooth tray, taskbar End Task, Widgets, Edge policies, long-path, and WSL first-run settings; select the unrestricted QuietHours profile and switch app/system themes to light.
 - **Terminal:** cancel any pending next-sign-in font update; remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries (including dynamically generated PowerShell entries), and the Copilot fragment.
 - **Integrations:** remove the managed Oh My Posh profile block, WinUI template package, and win-dev-skills marketplace. Custom profile code and unrelated plugins are preserved.
-- **Tools:** uv, NVM, the WinUI Copilot plugin, Node.js, Copilot, Python 3.14, Git, GitHub CLI, Oh My Posh, Azure CLI, Coreutils, .NET SDK 10, Intelligent Terminal, PowerToys, Visual Studio Code, Windows App CLI, and PowerShell 7.
+- **Tools:** uv, NVM, the WinUI Copilot plugin, Node.js, Copilot, Python (runtimes installed by the Python install manager via `pymanager uninstall --purge`, then the manager, `Python.Python.3.14`, and the legacy `py` launcher), Git, GitHub CLI, Oh My Posh, Azure CLI, Coreutils, .NET SDK 10, Intelligent Terminal, PowerToys, Visual Studio Code, Windows App CLI, and PowerShell 7.
 - **Not removed:** fonts, the Visual C++ runtime, WinGet, Windows optional features, and setup files/logs under `%ProgramData%\CalmOS`.
 
 </details>
@@ -545,7 +547,7 @@ A phase is just a file plus an entry in a workload's phase list. Files prefixed 
 Setup and cleanup use the same phase files and definitions. Phases marked `Uninstall = $true` provide cleanup steps.
 Package entries use `KeepOnUninstall`, `AdditionalUninstallIds`, `UninstallOrder`, and `InnoUninstall` for cleanup differences;
 registry entries are reset by default. `New-DevConfigRegistryStep -Reset` applies `ResetValue` when specified;
-otherwise it deletes only the named value.
+otherwise it deletes only the named value. `PythonVersion` on the Python entry adds the `PythonRuntime` step, which installs that runtime with `pymanager`.
 
 ## Known limitations
 
@@ -560,7 +562,7 @@ See [Setup actions](#setup-actions) and [What it changes](#what-it-changes) for 
 | **Uninstall is destructive** | Deletes `Ubuntu` and its files and removes targeted tools, including pre-existing installs. Previous settings aren't restored. |
 | **One restart, always visible** | The WSL platform genuinely requires it. The setup warns you for 10 seconds and then restarts with `shutdown /r`. Save your work before you begin. |
 | **Ubuntu's first launch is still manual** | You have to open Ubuntu once to create a Linux username and password. |
-| **Package versions move** | Packages are installed at whatever winget currently publishes, so two machines set up on different days can differ. `Microsoft.DotNet.SDK.10` and `Python.Python.3.14` pin a major version and will need bumping as those age. |
+| **Package versions move** | Packages are installed at whatever winget currently publishes, so two machines set up on different days can differ. `Microsoft.DotNet.SDK.10` and the Python `3.14` runtime (`PythonVersion` in `steps/packages.ps1`) pin a major version and will need bumping as those age. |
 | **The font release is pinned** | Cascadia Code `2407.24`, verified by hash. Newer releases need both the version and the hash updated in `steps/fonts.ps1`. |
 | **Terminal settings lose their comments** | `settings.json` is round-tripped through JSON, so comments don't survive. A `.bak` is written first. |
 | **No package selection at run time** | `Full` and `Partial` install all packages. There's no `-Skip` switch or selection prompt. |
