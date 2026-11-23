@@ -4,20 +4,76 @@
 #         --accept-configuration-agreements `
 #         --disable-interactivity
 #
+# Installs the Python install manager (python, py, and pymanager commands), then
+# CPython 3.14 through it. Runtimes are per user, so the manager and runtime run in
+# the current user's context. pymanager does not put its commands directory (pip,
+# python3.14) on PATH, so the runtime step adds it.
+#
 $schema: https://raw.githubusercontent.com/PowerShell/DSC/main/schemas/2023/08/config/document.json
 metadata:
   winget:
     processor: dscv3
 resources:
-  - name: Python
+  - name: PythonInstallManager
     type: Microsoft.WinGet/Package
     properties:
-      id: Python.Python.3.14
+      id: Python.PythonInstallManager
       source: winget
       acceptAgreements: true
     metadata:
-      winget:
-        securityContext: elevated
+      description: Install the Python install manager
+
+  # Windows PowerShell 5.1 avoids depending on PowerShell 7, which this flow does not install.
+  - name: Python314
+    type: Microsoft.DSC.Transitional/WindowsPowerShellScript
+    dependsOn:
+      - PythonInstallManager
+    metadata:
+      description: Install CPython 3.14 with pymanager and add its commands directory to PATH
+    properties:
+      getScript: |
+        $ErrorActionPreference = 'Continue'
+        $pymanager = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pymanager.exe'
+        if (-not (Test-Path -LiteralPath $pymanager)) { return @{ versions = @() } }
+        $lines = & $pymanager list --format=json --only-managed 3.14 2>$null
+        $json = @($lines | Where-Object { "$_".StartsWith('{"versions"') }) | Select-Object -Last 1
+        if (-not $json) { return @{ versions = @() } }
+        return @{ versions = @(($json | ConvertFrom-Json).versions | ForEach-Object { $_.'sort-version' }) }
+      testScript: |
+        $ErrorActionPreference = 'Continue'
+        $pymanager = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pymanager.exe'
+        if (-not (Test-Path -LiteralPath $pymanager)) { return $false }
+        $lines = & $pymanager list --format=json --only-managed 3.14 2>$null
+        $json = @($lines | Where-Object { "$_".StartsWith('{"versions"') }) | Select-Object -Last 1
+        if (-not $json -or @(($json | ConvertFrom-Json).versions).Count -eq 0) { return $false }
+        $commands = Join-Path $env:LOCALAPPDATA 'Python\bin'
+        $userPath = [string](Get-Item -LiteralPath 'HKCU:\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+        $onPath = @($userPath -split ';' | Where-Object { $_ -and [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -eq $commands })
+        return $onPath.Count -gt 0
+      setScript: |
+        $ErrorActionPreference = 'Continue'
+        $pymanager = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pymanager.exe'
+        $output = & $pymanager install --yes 3.14 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "pymanager install 3.14 failed with exit code ${LASTEXITCODE}: $output" }
+        $commands = Join-Path $env:LOCALAPPDATA 'Python\bin'
+        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+        try {
+          $kind = if ($null -eq $key.GetValue('Path')) { 'ExpandString' } else { $key.GetValueKind('Path') }
+          $entries = @(([string]$key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';' | Where-Object { $_ })
+          if (-not @($entries | Where-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -eq $commands }).Count) {
+            # Keep the value kind so %VAR% entries in the user PATH still expand.
+            $key.SetValue('Path', ((@($entries) + $commands) -join ';'), $kind)
+          }
+        } finally {
+          $key.Dispose()
+        }
+        Add-Type -Namespace DevConfig -Name EnvironmentBroadcast -MemberDefinition @'
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);
+        '@
+        $result = [UIntPtr]::Zero
+        # Explorer rereads the environment for new processes only after WM_SETTINGCHANGE.
+        [void][DevConfig.EnvironmentBroadcast]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result)
 
   - name: Uv
     type: Microsoft.WinGet/Package

@@ -5,7 +5,8 @@
 .DESCRIPTION
   This script is a thin CI/dev shim. The core artifact for the Python flow is
   `configuration.winget` in this directory - a winget DSC configuration that
-  declaratively installs CPython 3.14 and uv via winget.
+  installs the Python install manager and uv via winget, then CPython 3.14
+  through the install manager.
 
   The shim exists only to:
     * apply the DSC config with retry (hosted-runner networks are flaky),
