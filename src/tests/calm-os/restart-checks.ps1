@@ -155,6 +155,17 @@ Check 'Running again before the restart does not reinstall WSL' {
     Assert $Script:DevConfigRestartRequired 'The run must still report that a restart is required.'
 }
 
+Check 'Running again before the restart keeps Ubuntu waiting even when WSL looks ready' {
+    Reset-Fakes
+    $Script:DevConfigRestartRequestPending = $true
+    $script:CbsPending = $true
+    $script:Ready = $true
+    $null = Invoke-Wsl
+    Assert (@($script:Calls | Where-Object { $_ -like 'wsl --install -d*' -or $_ -like 'set *Lxss*' }).Count -eq 0) 'Ubuntu installed before the saved restart.'
+    Assert ($Script:DevConfigRestartPendingSteps -contains 'WslUbuntu') 'Ubuntu must keep waiting for the restart.'
+    Assert $Script:DevConfigRestartRequired 'The run must still report that a restart is required.'
+}
+
 Check 'After a restart, a WSL that still is not active stops instead of asking for another restart' {
     Reset-Fakes
     $Script:DevConfigAfterRestart = $true
@@ -206,6 +217,21 @@ Check 'A restart request reads as pending until Windows restarts' {
         Assert ((Get-DevConfigRestartRequest -Directory $directory).State -eq 'Restarted') 'Windows restarted after the request.'
         Clear-DevConfigRestartRequest -Directory $directory
         Assert ((Get-DevConfigRestartRequest -Directory $directory).State -eq 'None') 'A finished run clears the request.'
+    } finally {
+        Remove-Item -LiteralPath $directory -Recurse -Force
+    }
+}
+
+Check 'Saving again keeps earlier waiting steps that this run did not verify' {
+    Reset-Fakes
+    $directory = New-TestDirectory
+    try {
+        $script:BootTime = [DateTime]::UtcNow.AddHours(-1)
+        $Script:DevConfigRestartPendingSteps = @('WslComponents')
+        $Script:DevConfigTalliedSteps['Other'] = 'Done'
+        Assert (Save-DevConfigRestartRequest -Directory $directory -PreviousWaiting @('WslComponents', 'WslUbuntu', 'Other')) 'Saving must report success.'
+        $waiting = (Get-DevConfigRestartRequest -Directory $directory).Waiting -join ','
+        Assert ($waiting -eq 'WslComponents,WslUbuntu') "Unexpected waiting steps: $waiting"
     } finally {
         Remove-Item -LiteralPath $directory -Recurse -Force
     }

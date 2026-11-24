@@ -190,8 +190,10 @@ function Install-DevConfigUbuntu {
     )
     # A distro install requires active platform components, so it waits for a pending restart and fails otherwise.
     # Once Windows has restarted for WSL, a pending servicing restart no longer counts, so this can't ask for another one.
-    if ($Script:DevConfigRestartRequired -or -not (Test-DevConfigWslComponentsReady)) {
-        if ($Script:DevConfigRestartRequired -or
+    # A rerun before the saved restart keeps waiting even if WSL looks ready, matching Install-DevConfigWslPlatform.
+    $restartStillPending = $Script:DevConfigRestartRequestPending -and (Test-DevConfigServicingRebootPending)
+    if ($Script:DevConfigRestartRequired -or $restartStillPending -or -not (Test-DevConfigWslComponentsReady)) {
+        if ($Script:DevConfigRestartRequired -or $restartStillPending -or
             (-not $Script:DevConfigAfterRestart -and (Test-DevConfigServicingRebootPending))) {
             Set-DevConfigStepRestartPending -Reason 'Ubuntu installs once WSL is active after the restart.'
             return

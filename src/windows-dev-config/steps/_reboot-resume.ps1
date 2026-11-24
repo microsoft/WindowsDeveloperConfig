@@ -97,13 +97,21 @@ function Get-DevConfigRestartRequest {
 # which is the evidence a resumed run needs, so callers must not restart Windows on $false.
 function Save-DevConfigRestartRequest {
     param(
-        [Parameter(Mandatory)] [string] $Directory
+        [Parameter(Mandatory)] [string] $Directory,
+        # Steps an earlier request waited on. Any this run didn't verify stay listed, so a later run can't lose them.
+        [string[]] $PreviousWaiting = @()
     )
     $path = Get-DevConfigRestartRequestPath -Directory $Directory
     $temp = "$path.new"
+    $waiting = @($Script:DevConfigRestartPendingSteps)
+    foreach ($name in $PreviousWaiting) {
+        if ($waiting -notcontains $name -and -not $Script:DevConfigTalliedSteps.ContainsKey($name)) {
+            $waiting += $name
+        }
+    }
     $state = [pscustomobject]@{
         RequestedAtUtcTicks = [DateTime]::UtcNow.Ticks
-        Waiting             = @($Script:DevConfigRestartPendingSteps)
+        Waiting             = @($waiting)
     }
     try {
         [IO.File]::WriteAllText($temp, ($state | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))

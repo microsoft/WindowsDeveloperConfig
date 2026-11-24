@@ -307,7 +307,7 @@ $restartRecorded = $false
 # An unreadable request is left in place for diagnosis; this run neither overwrites nor deletes it.
 if (-not $failure -and $Action -ne 'Uninstall' -and $restartRequest.State -ne 'Unknown') {
     if ($restartRequired) {
-        $restartRecorded = Save-DevConfigRestartRequest -Directory $PSScriptRoot
+        $restartRecorded = Save-DevConfigRestartRequest -Directory $PSScriptRoot -PreviousWaiting $restartRequest.Waiting
     } elseif (@($restartRequest.Waiting | Where-Object { -not $Script:DevConfigTalliedSteps.ContainsKey($_) }).Count -eq 0) {
         Clear-DevConfigRestartRequest -Directory $PSScriptRoot
     }
