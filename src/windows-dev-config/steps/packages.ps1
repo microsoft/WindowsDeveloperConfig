@@ -37,6 +37,116 @@ function Remove-DevConfigUv {
     }
 }
 
+# The Python install manager's execution alias exists before a refreshed PATH reaches this session.
+function Get-DevConfigPyManagerPath {
+    $path = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pymanager.exe'
+    if (Test-Path -LiteralPath $path) {
+        return $path
+    }
+    return $null
+}
+
+# Holds pip.exe and versioned commands such as python3.14.exe; pymanager install leaves it off PATH.
+function Get-DevConfigPythonCommandsPath {
+    return (Join-Path $env:LOCALAPPDATA 'Python\bin')
+}
+
+# pymanager can print notices around its JSON, so only the JSON line is parsed.
+function Get-DevConfigPyManagerList {
+    param(
+        [Parameter(Mandatory)] [string] $PyManager,
+        [Parameter(Mandatory)] [string[]] $Arguments
+    )
+    $result = Invoke-DevConfigNativeCommand -FilePath $PyManager -Arguments (@('list', '--format=json') + $Arguments) -TimeoutSeconds 300
+    $json = @(([string]$result.Output -split '\r?\n') | Where-Object { $_.StartsWith('{"versions"') }) | Select-Object -Last 1
+    if ($result.ExitCode -ne 0 -or -not $json) {
+        throw "pymanager list $($Arguments -join ' ') failed ($($result.ExitCode)): $(([string]$result.Output).Trim())"
+    }
+    return @(($json | ConvertFrom-Json).versions)
+}
+
+# Like a winget package, the runtime counts as done only when it is the newest release in its line.
+function Test-DevConfigPythonRuntime {
+    param(
+        [Parameter(Mandatory)] [string] $Version
+    )
+    $pymanager = Get-DevConfigPyManagerPath
+    if (-not $pymanager) {
+        return $false
+    }
+    $installed = @(Get-DevConfigPyManagerList -PyManager $pymanager -Arguments @('--only-managed', $Version))
+    if ($installed.Count -eq 0) {
+        return $false
+    }
+    $latest = @(Get-DevConfigPyManagerList -PyManager $pymanager -Arguments @('--online', '--one', $Version))
+    if ($latest.Count -eq 0) {
+        throw "The Python install manager found no Python $Version release online."
+    }
+    $current = @($installed | Where-Object { $_.id -eq $latest[0].id -and $_.'sort-version' -eq $latest[0].'sort-version' })
+    return $current.Count -gt 0 -and (Test-DevConfigUserPathEntry -Directory (Get-DevConfigPythonCommandsPath))
+}
+
+function Install-DevConfigPythonRuntime {
+    param(
+        [Parameter(Mandatory)] [string] $Version
+    )
+    $pymanager = Get-DevConfigPyManagerPath
+    if (-not $pymanager) {
+        throw 'The pymanager command is missing because the Python install manager did not install. Re-run setup to retry.'
+    }
+    # --update installs the release when it is missing and replaces an older patch release.
+    $result = Invoke-DevConfigNativeCommand -FilePath $pymanager -Arguments @('install', '--update', '--yes', $Version) -TimeoutSeconds 1800
+    if ($result.ExitCode -ne 0) {
+        throw "pymanager install $Version failed ($($result.ExitCode)): $(([string]$result.Output).Trim())"
+    }
+    Add-DevConfigUserPathEntry -Directory (Get-DevConfigPythonCommandsPath)
+}
+
+function Get-DevConfigPythonInstallPath {
+    return (Join-Path $env:LOCALAPPDATA 'Python')
+}
+
+# The manager's install folder holds its runtimes and commands; purge leaves it empty.
+function Test-DevConfigPythonLeftover {
+    $installPath = Get-DevConfigPythonInstallPath
+    if ((Test-Path -LiteralPath $installPath) -and @(Get-ChildItem -LiteralPath $installPath -Force).Count -gt 0) {
+        return $true
+    }
+    return (Test-DevConfigUserPathEntry -Directory (Get-DevConfigPythonCommandsPath))
+}
+
+function Test-DevConfigPythonRemoved {
+    param(
+        [Parameter(Mandatory)] [string[]] $Ids
+    )
+    # Removing the manager on its own leaves runtimes behind, so packages alone don't prove cleanup.
+    return (-not (Test-DevConfigPythonLeftover)) -and (Invoke-DevConfigPackageCleanup -Ids $Ids -CheckOnly)
+}
+
+function Remove-DevConfigPython {
+    param(
+        [Parameter(Mandatory)] [string] $ManagerId,
+        [Parameter(Mandatory)] [string[]] $Ids
+    )
+    # Uninstalling the manager leaves its runtimes, so purge them while pymanager still exists.
+    # Purge also removes the commands directory from the user PATH.
+    $pymanager = Get-DevConfigPyManagerPath
+    if (-not $pymanager -and (Test-DevConfigPythonLeftover)) {
+        # Only pymanager can purge its runtimes, so restore a manager that was removed on its own.
+        Invoke-DevConfigCleanupCommand -FilePath 'winget.exe' `
+            -Arguments (Get-DevConfigWingetInstallArguments -Id $ManagerId -DisableInteractivity) `
+            -SuccessCodes @(0, $Script:DevConfigWingetNoUpgrade) | Out-Null
+        $pymanager = Get-DevConfigPyManagerPath
+        if (-not $pymanager) {
+            throw "Python runtimes remain in $(Get-DevConfigPythonInstallPath), and the Python install manager could not be restored to remove them. Run 'winget install -e --id $ManagerId', then run uninstall again."
+        }
+    }
+    if ($pymanager) {
+        Invoke-DevConfigCleanupCommand -FilePath $pymanager -Arguments @('uninstall', '--purge', '--yes') | Out-Null
+    }
+    Invoke-DevConfigPackageCleanup -Ids $Ids
+}
+
 function Remove-DevConfigNvm {
     $uninstallers = @(
         foreach ($scope in @('User', 'Machine')) {
@@ -121,9 +231,12 @@ function Get-DevConfigPackageCatalog {
         }
         @{
             Name                   = 'Python'
-            Id                     = 'Python.Python.3.14'
+            Id                     = 'Python.PythonInstallManager'
+            # Installed with pymanager after the manager itself; see Install-DevConfigPythonRuntime.
+            PythonVersion          = '3.14'
             UninstallOrder         = 5
-            AdditionalUninstallIds = @('Python.Launcher', 'Python.PythonInstallManager')
+            # Cleanup also removes the per-version installer and legacy py launcher that earlier setup versions used.
+            AdditionalUninstallIds = @('Python.Python.3.14', 'Python.Launcher')
         }
         @{
             Name            = 'VCRedist'
@@ -289,6 +402,12 @@ function Invoke-PackagesPhase {
                             -Apply { param($Id) Remove-DevConfigNvm } `
                             -ArgumentList @($package.Id)
                     }
+                    'Python' {
+                        New-DevConfigStep -Name 'PythonCleanup' -Description 'Remove Python runtimes and uninstall Python (user, machine, and MSIX)' -BestEffort `
+                            -Check { param($Id, $Ids) Test-DevConfigPythonRemoved -Ids $Ids } `
+                            -Apply { param($Id, $Ids) Remove-DevConfigPython -ManagerId $Id -Ids $Ids } `
+                            -ArgumentList @($package.Id, @(@($package.Id) + $package.AdditionalUninstallIds))
+                    }
                     default {
                         $ids = @($package.Id)
                         if ($package['AdditionalUninstallIds']) {
@@ -320,6 +439,12 @@ function Invoke-PackagesPhase {
                     Wait-DevConfigWingetPackageSettled -Id $Id -AnyVersion:$AnyVersion
                 } `
                 -ArgumentList @($package.Id, $package.ContainsKey('Large'), [bool]$package['AnyVersion'])
+            if ($package['PythonVersion']) {
+                New-DevConfigStep -Name 'PythonRuntime' -Description "pymanager install $($package.PythonVersion)" -BestEffort `
+                    -Check { param($Version) Test-DevConfigPythonRuntime -Version $Version } `
+                    -Apply { param($Version) Install-DevConfigPythonRuntime -Version $Version } `
+                    -ArgumentList @($package.PythonVersion)
+            }
         }
         foreach ($setting in $settings) {
             New-DevConfigRegistryStep -Setting $setting

@@ -13,6 +13,81 @@ function Update-DevConfigSessionPath {
     $env:Path    = (@($machinePath, $userPath) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join ';'
 }
 
+# Reads the raw user PATH so %VAR% entries and the value kind survive a rewrite.
+function Get-DevConfigUserPathValue {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+    if (-not $key) {
+        return [pscustomobject]@{ Value = ''; Kind = [Microsoft.Win32.RegistryValueKind]::ExpandString }
+    }
+    try {
+        if ($null -eq $key.GetValue('Path')) {
+            return [pscustomobject]@{ Value = ''; Kind = [Microsoft.Win32.RegistryValueKind]::ExpandString }
+        }
+        return [pscustomobject]@{
+            Value = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            Kind  = $key.GetValueKind('Path')
+        }
+    } finally {
+        $key.Dispose()
+    }
+}
+
+function Test-DevConfigUserPathEntry {
+    param(
+        [Parameter(Mandatory)] [string] $Directory
+    )
+    $target = $Directory.TrimEnd('\')
+    $current = Get-DevConfigUserPathValue
+    # Windows expands %VAR% entries only in a REG_EXPAND_SZ PATH; a REG_SZ PATH keeps them literal.
+    $expand = $current.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString
+    foreach ($entry in ($current.Value -split ';')) {
+        if (-not $entry) { continue }
+        $resolved = if ($expand) { [Environment]::ExpandEnvironmentVariables($entry) } else { $entry }
+        if ($resolved.TrimEnd('\') -eq $target) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Add-DevConfigUserPathEntry {
+    param(
+        [Parameter(Mandatory)] [string] $Directory
+    )
+    if (Test-DevConfigUserPathEntry -Directory $Directory) {
+        return
+    }
+    $current = Get-DevConfigUserPathValue
+    if ($current.Kind -notin @([Microsoft.Win32.RegistryValueKind]::String, [Microsoft.Win32.RegistryValueKind]::ExpandString)) {
+        throw "The user PATH is stored as $($current.Kind), not a string, so $Directory was not added. Add it to PATH manually."
+    }
+    $entries = @($current.Value -split ';' | Where-Object { $_ }) + $Directory
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+    try {
+        $key.SetValue('Path', ($entries -join ';'), $current.Kind)
+    } finally {
+        $key.Dispose()
+    }
+
+    # Explorer only rereads the environment for new processes after this broadcast.
+    if (-not ('DevConfigEnvironmentBroadcast' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class DevConfigEnvironmentBroadcast
+{
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd, uint msg, UIntPtr wParam, string lParam, uint flags, uint timeout, out UIntPtr result);
+}
+'@
+    }
+    $result = [UIntPtr]::Zero
+    # HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG
+    [void][DevConfigEnvironmentBroadcast]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result)
+}
+
 # Normalize native failures to exit codes so callers are not tied to shell-specific error behavior.
 function Invoke-DevConfigNativeCommand {
     param(
