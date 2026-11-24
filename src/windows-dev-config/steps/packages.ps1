@@ -102,13 +102,45 @@ function Install-DevConfigPythonRuntime {
     Add-DevConfigUserPathEntry -Directory (Get-DevConfigPythonCommandsPath)
 }
 
+function Get-DevConfigPythonInstallPath {
+    return (Join-Path $env:LOCALAPPDATA 'Python')
+}
+
+# The manager's install folder holds its runtimes and commands; purge leaves it empty.
+function Test-DevConfigPythonLeftover {
+    $installPath = Get-DevConfigPythonInstallPath
+    if ((Test-Path -LiteralPath $installPath) -and @(Get-ChildItem -LiteralPath $installPath -Force).Count -gt 0) {
+        return $true
+    }
+    return (Test-DevConfigUserPathEntry -Directory (Get-DevConfigPythonCommandsPath))
+}
+
+function Test-DevConfigPythonRemoved {
+    param(
+        [Parameter(Mandatory)] [string[]] $Ids
+    )
+    # Removing the manager on its own leaves runtimes behind, so packages alone don't prove cleanup.
+    return (-not (Test-DevConfigPythonLeftover)) -and (Invoke-DevConfigPackageCleanup -Ids $Ids -CheckOnly)
+}
+
 function Remove-DevConfigPython {
     param(
+        [Parameter(Mandatory)] [string] $ManagerId,
         [Parameter(Mandatory)] [string[]] $Ids
     )
     # Uninstalling the manager leaves its runtimes, so purge them while pymanager still exists.
     # Purge also removes the commands directory from the user PATH.
     $pymanager = Get-DevConfigPyManagerPath
+    if (-not $pymanager -and (Test-DevConfigPythonLeftover)) {
+        # Only pymanager can purge its runtimes, so restore a manager that was removed on its own.
+        Invoke-DevConfigCleanupCommand -FilePath 'winget.exe' `
+            -Arguments (Get-DevConfigWingetInstallArguments -Id $ManagerId -DisableInteractivity) `
+            -SuccessCodes @(0, $Script:DevConfigWingetNoUpgrade) | Out-Null
+        $pymanager = Get-DevConfigPyManagerPath
+        if (-not $pymanager) {
+            throw "Python runtimes remain in $(Get-DevConfigPythonInstallPath), and the Python install manager could not be restored to remove them. Run 'winget install -e --id $ManagerId', then run uninstall again."
+        }
+    }
     if ($pymanager) {
         Invoke-DevConfigCleanupCommand -FilePath $pymanager -Arguments @('uninstall', '--purge', '--yes') | Out-Null
     }
@@ -372,9 +404,9 @@ function Invoke-PackagesPhase {
                     }
                     'Python' {
                         New-DevConfigStep -Name 'PythonCleanup' -Description 'Remove Python runtimes and uninstall Python (user, machine, and MSIX)' -BestEffort `
-                            -Check { param($Ids) Invoke-DevConfigPackageCleanup -Ids $Ids -CheckOnly } `
-                            -Apply { param($Ids) Remove-DevConfigPython -Ids $Ids } `
-                            -ArgumentList @(, @(@($package.Id) + $package.AdditionalUninstallIds))
+                            -Check { param($Id, $Ids) Test-DevConfigPythonRemoved -Ids $Ids } `
+                            -Apply { param($Id, $Ids) Remove-DevConfigPython -ManagerId $Id -Ids $Ids } `
+                            -ArgumentList @($package.Id, @(@($package.Id) + $package.AdditionalUninstallIds))
                     }
                     default {
                         $ids = @($package.Id)

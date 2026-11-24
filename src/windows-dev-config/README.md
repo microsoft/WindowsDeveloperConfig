@@ -513,7 +513,7 @@ Use the [uninstall command](#quick-start) from Quick start (from source, add `-A
 - **Settings:** disable Sudo, Developer Mode, and Remote Desktop; reset Explorer, Start, search, notification, Bluetooth tray, taskbar End Task, Widgets, Edge policies, long-path, and WSL first-run settings; select the unrestricted QuietHours profile and switch app/system themes to light.
 - **Terminal:** cancel any pending next-sign-in font update; remove `defaultProfile`, `profiles.defaults`, PowerShell/Copilot/Ubuntu profile entries (including dynamically generated PowerShell entries), and the Copilot fragment.
 - **Integrations:** remove the managed Oh My Posh profile block, WinUI template package, and win-dev-skills marketplace. Custom profile code and unrelated plugins are preserved.
-- **Tools:** uv, NVM, the WinUI Copilot plugin, Node.js, Copilot, Python (runtimes installed by the Python install manager via `pymanager uninstall --purge`, then the manager, `Python.Python.3.14`, and the legacy `py` launcher), Git, GitHub CLI, Oh My Posh, Azure CLI, Coreutils, .NET SDK 10, Intelligent Terminal, PowerToys, Visual Studio Code, Windows App CLI, and PowerShell 7.
+- **Tools:** uv, NVM, the WinUI Copilot plugin, Node.js, Copilot, Python (runtimes installed by the Python install manager via `pymanager uninstall --purge`, reinstalling the manager first if it was removed on its own, then the manager, `Python.Python.3.14`, and the legacy `py` launcher), Git, GitHub CLI, Oh My Posh, Azure CLI, Coreutils, .NET SDK 10, Intelligent Terminal, PowerToys, Visual Studio Code, Windows App CLI, and PowerShell 7.
 - **Not removed:** fonts, the Visual C++ runtime, WinGet, Windows optional features, and setup files/logs under `%ProgramData%\CalmOS`.
 
 </details>

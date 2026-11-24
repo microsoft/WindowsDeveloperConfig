@@ -22,7 +22,8 @@ Windows PowerShell 5.1 and PowerShell 7.
 
 `src\tests\calm-os\python-checks.ps1` checks the Python install manager steps
 (runtime check, `pymanager install`, PATH matching, and purge before
-uninstall) with simulated `pymanager` output, without installing Python.
+uninstall, including restoring a manager that was removed on its own) with
+simulated `pymanager` output, without installing Python.
 
 ## File layout
 

@@ -37,8 +37,13 @@ function Test-DevConfigUserPathEntry {
         [Parameter(Mandatory)] [string] $Directory
     )
     $target = $Directory.TrimEnd('\')
-    foreach ($entry in ((Get-DevConfigUserPathValue).Value -split ';')) {
-        if ($entry -and [Environment]::ExpandEnvironmentVariables($entry).TrimEnd('\') -eq $target) {
+    $current = Get-DevConfigUserPathValue
+    # Windows expands %VAR% entries only in a REG_EXPAND_SZ PATH; a REG_SZ PATH keeps them literal.
+    $expand = $current.Kind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString
+    foreach ($entry in ($current.Value -split ';')) {
+        if (-not $entry) { continue }
+        $resolved = if ($expand) { [Environment]::ExpandEnvironmentVariables($entry) } else { $entry }
+        if ($resolved.TrimEnd('\') -eq $target) {
             return $true
         }
     }
