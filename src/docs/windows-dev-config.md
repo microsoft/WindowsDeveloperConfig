@@ -20,6 +20,12 @@ PowerShell 7.
 PowerShell discovery and handoff without installing software. Run it in both
 Windows PowerShell 5.1 and PowerShell 7.
 
+`src\tests\calm-os\skip-checks.ps1` checks `-Skip` with simulated registry,
+WinGet, WSL, and PowerShell 7 calls: the accepted ids, validation before
+anything runs, forwarding through elevation, relaunch, and reboot resume, and
+that skipped items are never checked or changed. Run it in both Windows
+PowerShell 5.1 and PowerShell 7.
+
 ## File layout
 
 | File | What it is |
@@ -48,6 +54,8 @@ Windows PowerShell 5.1 and PowerShell 7.
 | 6 | Microsoft Edge tweaks |  |  |
 
 Adding a phase means adding one file and one entry in a workload's phase list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.
+
+Step and setting names, phase file names, and package WinGet ids are also the [`-Skip` ids](../windows-dev-config/README.md#leave-items-out) callers pass, such as `registry-system/Sudo`. Renaming one breaks those callers; `skip-checks.ps1` lists every id and fails when one changes. A step that applies a setting someone can skip on its own, like `terminal/DarkTheme` or `registry-explorer/ExplorerDisplayReset`, lists that setting with `-SettingIds` and leaves it alone when it's skipped. A step in another phase that configures or cleans up a package, like the Copilot plugin steps, names the package's WinGet id with `-PackageIds` so skipping the package skips the step too. Phases build their step lists before any slow preparation and call `Test-DevConfigStepsToRun` first, because `-Skip` validation builds every phase's steps without running them.
 
 Run the isolated WSL probe checks from the repository root in Windows PowerShell 5.1 and PowerShell 7; they do not install WSL:
 
@@ -130,6 +138,7 @@ A workload reuses the shared engine, so it only describes *what* to set up. Elev
 The engine checks a workload in three stages, and any problem stops the run with a message:
 
 - When it loads the definition: unknown keys, malformed values, the action, and the minimum Windows version.
+- Before anything changes, when `-Skip` is passed: every id must be one of the workload's settings, steps, or packages.
 - Before the first phase runs: phase files, functions defined in those files, and parameters, including
   required parameters the workload doesn't set.
 - When a phase runs: package names and `Steps` names.

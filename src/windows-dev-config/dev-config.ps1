@@ -6,6 +6,11 @@
   -Workload picks a definition from workloads\. The default, devconfig, is the complete
   Windows Dev Config setup; other workloads, such as winui, reuse the same phases, helpers,
   elevation, logging, and summary.
+
+  -Skip leaves out settings, steps, and packages by id, such as registry-system/Sudo,
+  fonts/CascadiaDefaultFont, or Microsoft.AzureCLI. Skipped items are never checked or changed.
+  Ids can be passed as an array or as one comma-separated string. An unknown id stops the run
+  before anything changes.
 #>
 
 [CmdletBinding()]
@@ -15,7 +20,8 @@ param(
     [switch] $AllowUnsigned,
     [switch] $ApplyTerminalFont,
     [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+    [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+    [string[]] $Skip
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,25 +98,31 @@ if ($ApplyTerminalFont) {
 $Workload = $Workload.ToLowerInvariant()
 $Script:DevConfigWorkload = $Workload
 try {
+    $Skip = @(ConvertTo-DevConfigSkipIds -Skip $Skip)
     $definition = Get-DevConfigWorkload -Directory (Join-Path $PSScriptRoot 'workloads') -Workload $Workload -Action $Action
+    if ($Skip.Count -gt 0) {
+        Assert-DevConfigWorkloadSkipIds -Skip $Skip -Directory (Join-Path $PSScriptRoot 'workloads') -Workload $Workload `
+            -Actions @($definition['Actions']) -OrchestratorPath $PSCommandPath
+    }
 } catch {
     # Pause so the reason stays readable when this runs in a window that closes on exit.
     Write-Host $_.Exception.Message -ForegroundColor Red
     Wait-DevConfigKeyPress
     exit 1
 }
+$Script:DevConfigSkip = $Skip
 $workloadName = $definition['Name']
 
 # TLS is configured before any download step runs.
 Enable-DevConfigModernTls
 
-Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+Invoke-DevConfigElevate -ScriptPath $PSCommandPath -NoElevate:$NoElevate -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip
 
 if ($Action -eq 'Uninstall') {
-    Invoke-DevConfigEnsureCleanupShell -ScriptPath $PSCommandPath -AllowUnsigned:$AllowUnsigned -Workload $Workload
+    Invoke-DevConfigEnsureCleanupShell -ScriptPath $PSCommandPath -AllowUnsigned:$AllowUnsigned -Workload $Workload -Skip $Skip
 } else {
     # WinGet module behavior is more consistent in PowerShell 7 than in Windows PowerShell 5.1.
-    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+    Invoke-DevConfigEnsurePwsh -ScriptPath $PSCommandPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip
 }
 
 # The lock starts after relaunches so the worker process owns the log file.
@@ -150,6 +162,9 @@ if ($Action -eq 'Uninstall') {
     $setupNote = if ($definition['SetupNote']) { ", $($definition['SetupNote'])" } else { '' }
     Write-Host "$workloadName setup ($Action) -- $($phases.Count) phases$setupNote" -ForegroundColor Cyan
 }
+if ($Skip.Count -gt 0) {
+    Write-Host "Leaving out (-Skip): $($Skip -join ', ')" -ForegroundColor DarkGray
+}
 
 $failure = $null
 try {
@@ -159,6 +174,7 @@ try {
         if (-not (Test-Path -LiteralPath $path)) {
             $rerun = "bootstrap.ps1 -Action $Action"
             if ($Workload -ne 'devconfig') { $rerun += " -Workload $Workload" }
+            if ($Skip.Count -gt 0) { $rerun += " -Skip $($Skip -join ',')" }
             throw "The $operation script is missing: $path. Run $rerun to reinstall it."
         }
         . $path

@@ -21,6 +21,10 @@
 
       & ([scriptblock]::Create((irm <url>))) -Workload winui
 
+  To leave out settings, steps, or packages, pass their ids (comma-separated or as an array):
+
+      & ([scriptblock]::Create((irm <url>))) -Action Full -Skip registry-system/Sudo,fonts/CascadiaDefaultFont,Microsoft.AzureCLI
+
   To run a standalone AI installer with its verified dependencies:
 
       & ([scriptblock]::Create((irm <url>))) -Scenario cuda
@@ -39,7 +43,8 @@ param(
     [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
     [switch] $RequireTriton,
     [switch] $PlanOnly,
-    [string] $ReportRoot
+    [string] $ReportRoot,
+    [string[]] $Skip
 )
 
 function Invoke-CalmOsBootstrap {
@@ -56,7 +61,8 @@ function Invoke-CalmOsBootstrap {
         [ValidateSet('None', 'LlamaCpp', 'Ollama', 'Foundry')] [string] $AiRuntime = 'None',
         [switch] $RequireTriton,
         [switch] $PlanOnly,
-        [string] $ReportRoot
+        [string] $ReportRoot,
+        [string[]] $Skip
     )
 
     $ErrorActionPreference = 'Stop'
@@ -194,6 +200,21 @@ function Invoke-CalmOsBootstrap {
         throw '-AiBackend and -RequireTriton require -Scenario local-ai or pytorch.'
     }
 
+    # -Skip arrives as an array from scripts and as one comma-separated string through -File.
+    # The workload's ids come from the downloaded files, so dev-config.ps1 rejects unknown ones after download
+    # and elevation but before setup changes anything; this only rejects malformed ids before UAC.
+    $Skip = @($Skip | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    if ($Scenario -and $Skip.Count -gt 0) {
+        throw '-Skip leaves out workstation setup items and cannot be combined with -Scenario.'
+    }
+    # Keep identical to $Script:DevConfigSkipIdPattern in steps/_step-runner.ps1.
+    foreach ($id in $Skip) {
+        if ($id -notmatch '^(?:[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+|[a-z0-9][a-z0-9._+-]*)$') {
+            throw "'$id' is not a -Skip id. Use ids such as registry-system/Sudo, fonts/CascadiaFonts, or a WinGet id such as Git.Git."
+        }
+    }
+    $skipSuffix = if ($Skip.Count -gt 0) { " -Skip $($Skip -join ',')" } else { '' }
+
     # Reject refs that could escape the repository path.
     if ($Ref -notmatch '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -or $Ref.Contains('..')) {
         throw "'$Ref' is not a valid branch, tag or commit name. Use letters, digits, and . _ - / only."
@@ -248,7 +269,8 @@ function Invoke-CalmOsBootstrap {
             [switch] $RequireTriton,
             [switch] $PlanOnly,
             [string] $ReportRoot,
-            [string] $ElevationErrorPath
+            [string] $ElevationErrorPath,
+            [string[]] $Skip
         )
 
         $launcher = {
@@ -265,7 +287,8 @@ function Invoke-CalmOsBootstrap {
                 [switch] $RequireTriton,
                 [switch] $PlanOnly,
                 [string] $ReportRoot,
-                [string] $ElevationErrorPath
+                [string] $ElevationErrorPath,
+                [string[]] $Skip
             )
 
             $ErrorActionPreference = 'Stop'
@@ -335,6 +358,7 @@ function Invoke-CalmOsBootstrap {
             } else {
                 $arguments += '-Action', $Action
                 if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+                if ($Skip) { $arguments += '-Skip', ($Skip -join ',') }
             }
             if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
             if ($NoLaunch) { $arguments += '-NoLaunch' }
@@ -362,6 +386,10 @@ function Invoke-CalmOsBootstrap {
         } else {
             $command += " -Action '$Action'"
             if ($Workload -ne 'devconfig') { $command += " -Workload '$Workload'" }
+            if ($Skip) {
+                $escapedSkip = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Skip -join ',')
+                $command += " -Skip '$escapedSkip'"
+            }
         }
         if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
         if ($NoLaunch) { $command += ' -NoLaunch' }
@@ -449,7 +477,7 @@ function Invoke-CalmOsBootstrap {
         $command = Get-CalmOsElevationCommand -Ref $Ref -InstallRoot $InstallRoot -AllowUnsigned:$AllowUnsigned -NoLaunch:$NoLaunch `
             -Action $Action -Workload $Workload -Scenario $Scenario -AiBackend $AiBackend -AiRuntime $AiRuntime `
             -RequireTriton:$RequireTriton -PlanOnly:$PlanOnly -ReportRoot $ReportRoot `
-            -ElevationErrorPath $elevationErrorPath
+            -ElevationErrorPath $elevationErrorPath -Skip $Skip
         Write-Host 'Setup needs Administrator rights (a UAC prompt will appear)...' -ForegroundColor Yellow
         # AI runtimes can outlive setup; workstation actions still wait for the process tree.
         $proc = Start-Process -FilePath $shell -ArgumentList ($arguments + @('-Command', $command)) -Verb RunAs -Wait:(-not $Scenario) -PassThru
@@ -475,7 +503,7 @@ function Invoke-CalmOsBootstrap {
                 Write-Host "Scenario files are ready at $scenarioTarget." -ForegroundColor Cyan
             } else {
                 $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent((Join-Path $InstallRoot 'dev-config.ps1'))
-                Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
+                Write-Host "Run when ready: & '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$skipSuffix$(if ($AllowUnsigned) { ' -AllowUnsigned' })"
             }
         }
         return
@@ -638,7 +666,7 @@ function Invoke-CalmOsBootstrap {
 
         if ($NoLaunch) {
             $escapedTarget = [Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($target)
-            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix"
+            $command = "& '$escapedShell' $($arguments -join ' ') -File '$escapedTarget' -Action $Action$workloadSuffix$skipSuffix"
             if ($AllowUnsigned) { $command += ' -AllowUnsigned' }
             Write-Host "Run when ready: $command" -ForegroundColor Cyan
             return
@@ -646,6 +674,8 @@ function Invoke-CalmOsBootstrap {
 
         $arguments += '-File', "`"$target`"", '-Action', $Action
         if ($Workload -ne 'devconfig') { $arguments += '-Workload', $Workload }
+        # -File passes this as one string; dev-config.ps1 splits it at the commas.
+        if ($Skip.Count -gt 0) { $arguments += '-Skip', ($Skip -join ',') }
         if ($AllowUnsigned) { $arguments += '-AllowUnsigned' }
         $start = @{ FilePath = $shell; ArgumentList = $arguments; Wait = $true; PassThru = $true }
         if ($Action -ne 'Uninstall') { $start.NoNewWindow = $true }

@@ -184,14 +184,20 @@ function Install-DevConfigUbuntuVia {
 }
 
 function Install-DevConfigUbuntu {
+    param(
+        # -Skip left out WslFirstRun, so the first-run setting is not written.
+        [switch] $SkipFirstRunSetting
+    )
     # A distro install requires active platform components, so fail early when they are not active.
     if (-not (Test-DevConfigWslComponentsReady)) {
         throw "WSL isn't active on this machine, so Ubuntu can't be installed yet (see the note above)."
     }
 
     # Suppresses the "Welcome to WSL" first-run GUI.
-    $setting = $Script:DevConfigWslFirstRunSetting
-    Set-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value
+    if (-not $SkipFirstRunSetting) {
+        $setting = $Script:DevConfigWslFirstRunSetting
+        Set-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value
+    }
 
     if (Install-DevConfigUbuntuVia -Arguments @('--install', '-d', $Script:DevConfigWslDistributionName, '--no-launch') -MaxAttempts 2) {
         return
@@ -306,14 +312,17 @@ function Invoke-WslPhase {
     }
 
     # ArgumentList binds the path at call time; BestEffort preserves prior phases if WSL cannot start.
+    $firstRunId = Get-DevConfigSkipId -Name $Script:DevConfigWslFirstRunSetting.Name
     $steps = @(
         New-DevConfigStep -Name 'WslComponents' -Description 'Install WSL platform components' -BestEffort `
             -Check { Test-DevConfigWslComponentsReady } `
             -Apply { param($OrchestratorPath) Install-DevConfigWslPlatform -OrchestratorPath $OrchestratorPath } `
             -ArgumentList @($OrchestratorPath)
         New-DevConfigStep -Name 'WslUbuntu' -Description 'Install the default Ubuntu distro' -BestEffort `
+            -SettingIds @($firstRunId) `
             -Check { Test-DevConfigUbuntuInstalled } `
-            -Apply { Install-DevConfigUbuntu }
+            -Apply { param($SkipFirstRunSetting) Install-DevConfigUbuntu -SkipFirstRunSetting:$SkipFirstRunSetting } `
+            -ArgumentList @(Test-DevConfigSkipped -Id $firstRunId)
     )
 
     Invoke-DevConfigSteps -Steps $steps

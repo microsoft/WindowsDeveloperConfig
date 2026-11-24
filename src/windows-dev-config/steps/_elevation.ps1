@@ -154,7 +154,8 @@ function Get-DevConfigRelaunchArguments {
         [switch] $RequestElevation,
         [switch] $ApplyTerminalFont,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [string[]] $Skip = @()
     )
     $arguments = @('-NoProfile')
     if (-not $AllowUnsigned) {
@@ -168,6 +169,11 @@ function Get-DevConfigRelaunchArguments {
         # The default workload is omitted so these command lines match releases that predate workloads.
         if ($Workload -ne 'devconfig') {
             $arguments += '-Workload', $Workload
+        }
+        # -File passes this as one string; dev-config.ps1 splits it at the commas.
+        $skipIds = @($Skip | Where-Object { $_ })
+        if ($skipIds.Count -gt 0) {
+            $arguments += '-Skip', ($skipIds -join ',')
         }
         if (-not $RequestElevation) {
             $arguments += '-NoElevate'
@@ -189,7 +195,8 @@ function Invoke-DevConfigElevate {
         [switch] $Resumed,
         [switch] $AllowUnsigned,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [string[]] $Skip = @()
     )
 
     if (Test-DevConfigIsAdmin) {
@@ -208,7 +215,7 @@ function Invoke-DevConfigElevate {
         Get-DevConfigShellExe
     }
     # Preserve -Resumed so the elevated process continues after the WSL reboot.
-    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip
     try {
         $proc = Start-Process -FilePath $shell -ArgumentList $relaunchArgs -Verb RunAs -Wait -PassThru
     } catch {

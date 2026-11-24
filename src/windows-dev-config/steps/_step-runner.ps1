@@ -27,6 +27,15 @@ $Script:DevConfigPhaseHeaderShown = $false
 $Script:DevConfigPhaseSteps       = $null
 # Notes collected during the run print with the final summary so they do not scroll away.
 $Script:DevConfigNotes            = @()
+# The phase file's base name, such as registry-system, prefixes step ids such as registry-system/Sudo.
+$Script:DevConfigPhaseName        = ''
+# -Skip ids. A step whose id is listed is never checked or applied.
+$Script:DevConfigSkip             = @()
+# While set, phases only report their step ids here; Invoke-DevConfigSteps stops them before any step runs.
+$Script:DevConfigSkipCatalog      = $null
+$Script:DevConfigSkipCatalogDone  = $false
+# Keep identical to bootstrap.ps1: a phase/step id such as registry-system/Sudo, or a WinGet id such as Git.Git.
+$Script:DevConfigSkipIdPattern    = '^(?:[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+|[a-z0-9][a-z0-9._+-]*)$'
 
 function Write-DevConfigPhaseHeader {
     param(
@@ -40,7 +49,7 @@ function Write-DevConfigPhaseHeader {
 
 # The guard lets phases print early without a duplicate header.
 function Show-DevConfigPhaseHeader {
-    if ($Script:DevConfigPhaseHeaderShown -or -not $Script:DevConfigPhaseTitle) {
+    if ($Script:DevConfigPhaseHeaderShown -or -not $Script:DevConfigPhaseTitle -or $null -ne $Script:DevConfigSkipCatalog) {
         return
     }
     Write-DevConfigPhaseHeader -Index $Script:DevConfigPhaseIndex -Total $Script:DevConfigPhaseTotal -Title $Script:DevConfigPhaseTitle
@@ -124,6 +133,65 @@ function Show-DevConfigSilentSkipSummary {
     }
 }
 
+# -Skip arrives as an array from scripts and as one comma-separated string through -File relaunches.
+function ConvertTo-DevConfigSkipIds {
+    param(
+        [AllowNull()] [AllowEmptyCollection()] [string[]] $Skip
+    )
+    $ids = [Collections.Generic.List[string]]::new()
+    foreach ($id in @($Skip | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+        if ($id -notmatch $Script:DevConfigSkipIdPattern) {
+            throw "'$id' is not a -Skip id. Use ids such as registry-system/Sudo, fonts/CascadiaFonts, or a WinGet id such as Git.Git."
+        }
+        if ($ids -notcontains $id) {
+            $ids.Add($id)
+        }
+    }
+    return $ids.ToArray()
+}
+
+function Get-DevConfigSkipId {
+    param(
+        [Parameter(Mandatory)] [string] $Name
+    )
+    if ($Script:DevConfigPhaseName) {
+        return "$Script:DevConfigPhaseName/$Name"
+    }
+    return $Name
+}
+
+function Test-DevConfigSkipped {
+    param(
+        [AllowNull()] [AllowEmptyCollection()] [string[]] $Id
+    )
+    return @($Id | Where-Object { $_ -and $Script:DevConfigSkip -contains $_ }).Count -gt 0
+}
+
+function Get-DevConfigStepSkipIds {
+    param(
+        [Parameter(Mandatory)] $Step
+    )
+    $property = $Step.PSObject.Properties['SkipIds']
+    if ($property -and $property.Value) {
+        return @($property.Value)
+    }
+    return @(Get-DevConfigSkipId -Name $Step.Name)
+}
+
+# Phases call this before slow preparation, such as WinGet setup, that only their steps need.
+function Test-DevConfigStepsToRun {
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Steps
+    )
+    if ($null -ne $Script:DevConfigSkipCatalog) {
+        return $false
+    }
+    if ($Script:DevConfigSkip.Count -eq 0) {
+        return $true
+    }
+    return @($Steps | Where-Object { -not (Test-DevConfigSkipped -Id (Get-DevConfigStepSkipIds -Step $_)) }).Count -gt 0
+}
+
 function New-DevConfigStep {
     param(
         [Parameter(Mandatory)] [string] $Name,
@@ -131,8 +199,18 @@ function New-DevConfigStep {
         [Parameter(Mandatory)] [scriptblock] $Apply,
         [string] $Description = '',
         [object[]] $ArgumentList = @(),
-        [switch] $BestEffort
+        [switch] $BestEffort,
+        # -Skip ids that leave the whole step out; the default is <phase>/<Name>.
+        [string[]] $SkipIds,
+        # -Skip ids of settings the step applies itself; the step must leave skipped ones untouched.
+        [string[]] $SettingIds = @(),
+        # WinGet ids of the packages the step configures or cleans up; skipping one leaves the step out too.
+        [string[]] $PackageIds = @()
     )
+    if (-not $SkipIds) {
+        $SkipIds = @(Get-DevConfigSkipId -Name $Name)
+    }
+    $SkipIds = @(@($SkipIds) + @($PackageIds | Where-Object { $_ }) | Select-Object -Unique)
     # ArgumentList is passed positionally at call time, not captured by closure.
     [pscustomobject]@{
         Name         = $Name
@@ -141,6 +219,8 @@ function New-DevConfigStep {
         Apply        = $Apply
         ArgumentList = $ArgumentList
         BestEffort   = [bool]$BestEffort
+        SkipIds      = @($SkipIds)
+        SettingIds   = @($SettingIds)
     }
 }
 
@@ -227,6 +307,31 @@ function Invoke-DevConfigSteps {
         $Steps = @($Steps | Where-Object { $Script:DevConfigPhaseSteps -contains $_.Name })
     }
 
+    if ($null -ne $Script:DevConfigSkipCatalog) {
+        foreach ($step in $Steps) {
+            $settingIds = $step.PSObject.Properties['SettingIds']
+            foreach ($id in @(Get-DevConfigStepSkipIds -Step $step) + @(if ($settingIds) { $settingIds.Value })) {
+                if ($id) { [void]$Script:DevConfigSkipCatalog.Add($id) }
+            }
+        }
+        $Script:DevConfigSkipCatalogDone = $true
+        throw 'The phase was stopped after listing its -Skip ids.'
+    }
+
+    # Skipped steps are never checked, so nothing they own is read or changed.
+    $skipped = @()
+    if ($Script:DevConfigSkip.Count -gt 0) {
+        $kept = @()
+        foreach ($step in $Steps) {
+            if (Test-DevConfigSkipped -Id (Get-DevConfigStepSkipIds -Step $step)) {
+                $skipped += $step
+            } else {
+                $kept += $step
+            }
+        }
+        $Steps = $kept
+    }
+
     # Fresh runs print before slow checks so the console shows why it is waiting.
     if (-not $Script:DevConfigResumed) {
         Show-DevConfigPhaseHeader
@@ -261,6 +366,10 @@ function Invoke-DevConfigSteps {
 
     Show-DevConfigSilentSkipSummary
     Show-DevConfigPhaseHeader
+
+    foreach ($step in $skipped) {
+        Write-Host "  - $($step.Name.PadRight(22)) skipped" -ForegroundColor DarkGray
+    }
 
     foreach ($item in $checked) {
         $step     = $item.Step
