@@ -784,7 +784,9 @@ show_banner() {
   printf "\n"
   printf "${BOLD}${GREEN}   Distro configured. Ready for first user.${NC}\n"
   printf "\n"
-  printf "  ${DIM}To open this shell anytime: wsl -d ${WSL_DISTRO_NAME:-Ubuntu}${NC}\n"
+  if is_wsl; then
+    printf "  ${DIM}To open this shell anytime: wsl -d ${WSL_DISTRO_NAME:-Ubuntu}${NC}\n"
+  fi
   if [ -n "$LOG_FILE" ]; then
     printf "  ${DIM}Log: $LOG_FILE${NC}\n"
   fi
@@ -850,7 +852,9 @@ interactive_configure() {
 
   ask_toggle INSTALL_PROMPT       "Install starship prompt?"
   ask_toggle INSTALL_TOOLS        "Install modern CLI tools (fzf, rg, fd, ...)?"
-  ask_toggle INSTALL_SHIMS        "Install CLI shims (pbcopy, pbpaste, open)?"
+  if is_wsl; then
+    ask_toggle INSTALL_SHIMS      "Install CLI shims (pbcopy, pbpaste, open)?"
+  fi
   ask_toggle INSTALL_BREW         "Install Homebrew?"
   ask_toggle INSTALL_GIT_DEFAULTS "Set sensible git defaults (main branch, no-rebase, autocrlf=input)?"
 }
@@ -860,8 +864,9 @@ main() {
   setup_logging
 
   # Preflight checks
-  if ! is_wsl; then
-    die "This script is intended for WSL. Detected non-WSL environment."
+  if ! is_wsl && [ "$INSTALL_SHIMS" = "yes" ]; then
+    info "Not running under WSL; skipping Windows clipboard/open shims."
+    INSTALL_SHIMS="no"
   fi
   if [ ! -f /etc/os-release ]; then
     die "Cannot detect Linux distribution (missing /etc/os-release)."
