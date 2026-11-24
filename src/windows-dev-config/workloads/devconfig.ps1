@@ -120,7 +120,7 @@ if ($Action -eq 'Partial') {
 @{
     Name             = 'Calm OS'
     Actions          = @('Full', 'Partial', 'Uninstall')
-    SetupNote        = 'one reboot expected along the way'
+    SetupNote        = 'WSL may ask for one restart'
     UninstallWarning = 'Ubuntu and its files will be deleted. Targeted tools are removed even if they predate setup.'
     Notes            = @('A few Explorer and taskbar changes appear once you sign out and back in.')
     Phases           = $phases

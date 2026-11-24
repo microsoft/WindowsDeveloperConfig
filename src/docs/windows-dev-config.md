@@ -20,6 +20,28 @@ PowerShell 7.
 PowerShell discovery and handoff without installing software. Run it in both
 Windows PowerShell 5.1 and PowerShell 7.
 
+`src\tests\calm-os\skip-checks.ps1` checks `-Skip` with simulated registry,
+WinGet, WSL, and PowerShell 7 calls: the accepted ids, validation before
+anything runs, forwarding through elevation, relaunch, and reboot resume, and
+that skipped items are never checked or changed. Run it in both Windows
+PowerShell 5.1 and PowerShell 7.
+
+`src\tests\calm-os\restart-checks.ps1` checks restart handling with simulated
+WSL, task scheduler, console keys, and `shutdown.exe` calls: Ubuntu waits for
+the restart and phases that can wait run last; at a console setup asks
+**Restart now? [Y/n]** and only Y or Enter restarts, while earlier keys, no
+answer, no console, and `-NoRestart` restart nothing; `-RestartWhenNeeded`
+registers the resume task and restarts after its countdown, or at once without
+a console; a cancelled countdown, or a restart request that's missing,
+unreadable, or failed to save, restarts nothing; a resumed run without evidence
+of a restart exits at once without pausing or elevating; and 3010 reaches
+callers. Run it in a VM or sandbox, in both Windows PowerShell 5.1 and
+PowerShell 7. Validate the real behavior there too: restart now (answer Y, then
+run again; or let the `-RestartWhenNeeded` countdown run out), restart later
+(answer N, or cancel the countdown, then restart and run again), and never
+restart (`-NoRestart`, or no console: the run ends with 3010 and changes
+nothing further).
+
 ## File layout
 
 | File | What it is |
@@ -36,7 +58,9 @@ Windows PowerShell 5.1 and PowerShell 7.
 
 ## The phases
 
-`Full` runs all 11 phases in order; `Partial` skips Edge and uses [fewer settings](../windows-dev-config/README.md#setup-actions). WSL + Ubuntu runs last so its restart happens after everything else is done.
+`Full` runs all 11 phases in order; `Partial` skips Edge and uses [fewer settings](../windows-dev-config/README.md#setup-actions). WSL + Ubuntu runs last, so a restart WSL needs never holds up the other phases.
+
+Setup doesn't restart Windows from inside a step. A step that can only finish after a restart calls `Set-DevConfigStepRestartPending` instead of failing, and steps that depend on it do the same, as `WslUbuntu` does for `WslComponents`; phases that can wait for a restart run last in every workload, so nothing else waits behind one. The run then finishes, saves `<workload>-restart.json` next to `dev-config.ps1` (written atomically and read back), and exits with 3010. Running again is the resume: that file tells the next run whether Windows restarted in between, so WSL isn't reinstalled while its restart is still pending, and a platform still inactive after the restart stops the run instead of asking for another one. The file is kept until every step that waited verifies, so a run that skips, flags, or doesn't include them keeps it. A file that can't be read, or a boot time that can't be read, is `Unknown`: the run says so, leaves the file alone, and doesn't restart Windows. Only `dev-config.ps1` restarts Windows, only with a request that saved and read back as pending, and never with `-NoRestart`. By default `Request-DevConfigRestart` in `steps/_reboot-resume.ps1` asks **Restart now? [Y/n]** when there's a console and restarts on yes, scheduling nothing; with `-RestartWhenNeeded`, `Suspend-DevConfigForReboot` registers the resume task and restarts after a cancellable countdown, or at once without a console. Both restart through `Restart-DevConfigWindows`, without `/f`. A `-Resumed` run continues only when the file shows Windows restarted; otherwise it exits before elevation, without pausing.
 
 | # | Phase | # | Phase |
 | --- | --- | --- | --- |
@@ -48,6 +72,8 @@ Windows PowerShell 5.1 and PowerShell 7.
 | 6 | Microsoft Edge tweaks |  |  |
 
 Adding a phase means adding one file and one entry in a workload's phase list. Adding a step to an existing phase means one `New-DevConfigStep` call. Keep every step's check cheap and side-effect free — it runs on every invocation, including the fast path where nothing needs doing.
+
+Step and setting names, phase file names, and package WinGet ids are also the [`-Skip` ids](../windows-dev-config/README.md#leave-items-out) callers pass, such as `registry-system/Sudo`. Renaming one breaks those callers; `skip-checks.ps1` lists every id and fails when one changes. A step that applies a setting someone can skip on its own, like `terminal/DarkTheme`, lists that setting with `-SettingIds` and leaves it alone when it's skipped. Phases build their step lists before any slow preparation and call `Test-DevConfigStepsToRun` first, because `-Skip` validation builds every phase's steps without running them.
 
 Run the isolated WSL probe checks from the repository root in Windows PowerShell 5.1 and PowerShell 7; they do not install WSL:
 
@@ -130,6 +156,7 @@ A workload reuses the shared engine, so it only describes *what* to set up. Elev
 The engine checks a workload in three stages, and any problem stops the run with a message:
 
 - When it loads the definition: unknown keys, malformed values, the action, and the minimum Windows version.
+- Before anything changes, when `-Skip` is passed: every id must be one of the workload's settings, steps, or packages.
 - Before the first phase runs: phase files, functions defined in those files, and parameters, including
   required parameters the workload doesn't set.
 - When a phase runs: package names and `Steps` names.

@@ -68,10 +68,15 @@ function Test-DevConfigRegistryValueAbsent {
 function New-DevConfigRegistryStep {
     param(
         [Parameter(Mandatory)] [hashtable] $Setting,
-        [switch] $Reset
+        [switch] $Reset,
+        # -Skip ids that leave the setting alone; the default is <phase>/<setting Name>, for applying and resetting alike.
+        [string[]] $SkipIds
     )
+    if (-not $SkipIds) {
+        $SkipIds = @(Get-DevConfigSkipId -Name $Setting.Name)
+    }
     if ($Reset -and -not $Setting.ContainsKey('ResetValue')) {
-        return New-DevConfigStep -Name "$($Setting.Name)Reset" -Description "Reset $($Setting.ValueName)" -BestEffort `
+        return New-DevConfigStep -Name "$($Setting.Name)Reset" -Description "Reset $($Setting.ValueName)" -BestEffort -SkipIds $SkipIds `
             -Check {
                 param($KeyPath, $ValueName)
                 Test-DevConfigRegistryValueAbsent -KeyPath $KeyPath -ValueName $ValueName
@@ -93,7 +98,7 @@ function New-DevConfigRegistryStep {
     }
 
     $type = if ($Setting.ContainsKey('Type')) { $Setting.Type } else { 'DWord' }
-    New-DevConfigStep -Name $Setting.Name -Description $Setting.Description `
+    New-DevConfigStep -Name $Setting.Name -Description $Setting.Description -SkipIds $SkipIds `
         -BestEffort:([bool]$Setting['BestEffort']) `
         -Check {
             param($KeyPath, $ValueName, $Value)

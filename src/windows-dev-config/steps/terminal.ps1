@@ -13,7 +13,10 @@ $Script:DevConfigThemeSettings = @(
 )
 
 function Test-DevConfigDarkThemeSet {
-    foreach ($setting in $Script:DevConfigThemeSettings) {
+    param(
+        [object[]] $Settings = $Script:DevConfigThemeSettings
+    )
+    foreach ($setting in $Settings) {
         if (-not (Test-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value)) {
             return $false
         }
@@ -22,7 +25,10 @@ function Test-DevConfigDarkThemeSet {
 }
 
 function Set-DevConfigDarkTheme {
-    foreach ($setting in $Script:DevConfigThemeSettings) {
+    param(
+        [object[]] $Settings = $Script:DevConfigThemeSettings
+    )
+    foreach ($setting in $Settings) {
         Set-DevConfigRegistryValue -KeyPath $setting.KeyPath -ValueName $setting.ValueName -Value $setting.Value
     }
 }
@@ -83,11 +89,22 @@ function Invoke-TerminalPhase {
         return
     }
 
+    # DarkTheme leaves a skipped theme setting as it is; with both skipped it has nothing to set, so it is skipped too.
+    $themeIds = @($Script:DevConfigThemeSettings | ForEach-Object { Get-DevConfigSkipId -Name $_.Name })
+    $themeSettings = @($Script:DevConfigThemeSettings | Where-Object { -not (Test-DevConfigSkipped -Id (Get-DevConfigSkipId -Name $_.Name)) })
+    $darkThemeSkipIds = if ($themeSettings.Count -gt 0) {
+        @(Get-DevConfigSkipId -Name 'DarkTheme')
+    } else {
+        @(Get-DevConfigSkipId -Name 'DarkTheme') + $themeIds
+    }
+
     # These user preferences are best-effort so later setup phases can continue.
     $steps = @(
         New-DevConfigStep -Name 'DarkTheme' -Description 'Force dark app/system theme' -BestEffort `
-            -Check { Test-DevConfigDarkThemeSet } `
-            -Apply { Set-DevConfigDarkTheme }
+            -SkipIds $darkThemeSkipIds -SettingIds $themeIds `
+            -Check { param($Settings) Test-DevConfigDarkThemeSet -Settings $Settings } `
+            -Apply { param($Settings) Set-DevConfigDarkTheme -Settings $Settings } `
+            -ArgumentList @(, $themeSettings)
         New-DevConfigStep -Name 'Ps7DefaultProfile' -Description 'Set PowerShell 7 as the default Windows Terminal profile' -BestEffort `
             -Check { Test-DevConfigPs7DefaultProfile } `
             -Apply { Set-DevConfigPs7DefaultProfile }

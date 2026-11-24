@@ -6,6 +6,9 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# -Skip with either id declines PowerShell 7, so no step or relaunch may install it; an existing copy is still used.
+$Script:DevConfigPwshSkipIds = @('prerequisites/PowerShell7', 'Microsoft.PowerShell')
+
 function Get-DevConfigPwshExe {
     if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7) {
         $candidate = Join-Path $PSHOME 'pwsh.exe'
@@ -67,7 +70,10 @@ function Invoke-DevConfigEnsurePwsh {
         [switch] $Resumed,
         [switch] $AllowUnsigned,
         [ValidateSet('Full', 'Partial', 'Uninstall')] [string] $Action = 'Full',
-        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [string[]] $Skip = @(),
+        [switch] $RestartWhenNeeded,
+        [switch] $NoRestart
     )
 
     if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -ge 7) {
@@ -75,6 +81,10 @@ function Invoke-DevConfigEnsurePwsh {
     }
 
     $pwsh = Get-DevConfigPwshExe
+    if (-not $pwsh -and @($Skip | Where-Object { $Script:DevConfigPwshSkipIds -contains $_ }).Count -gt 0) {
+        Write-Host 'PowerShell 7 was left out with -Skip, so setup carries on with Windows PowerShell.' -ForegroundColor DarkGray
+        return
+    }
     if (-not $pwsh) {
         Write-Host ''
         Write-Host 'Installing PowerShell 7 first -- WinGet is more reliable on it than on Windows PowerShell.' -ForegroundColor Yellow
@@ -89,7 +99,7 @@ function Invoke-DevConfigEnsurePwsh {
     }
 
     Write-Host 'Switching this setup over to PowerShell 7...' -ForegroundColor DarkCyan
-    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload
+    $relaunchArgs = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -Resumed:$Resumed -AllowUnsigned:$AllowUnsigned -Action $Action -Workload $Workload -Skip $Skip -RestartWhenNeeded:$RestartWhenNeeded -NoRestart:$NoRestart
     $proc = Start-Process -FilePath $pwsh -ArgumentList $relaunchArgs -Wait -NoNewWindow -PassThru
 
     # The relaunch performs the setup work, so this Windows PowerShell process exits with its code.
@@ -100,7 +110,10 @@ function Invoke-DevConfigEnsureCleanupShell {
     param(
         [Parameter(Mandatory)] [string] $ScriptPath,
         [switch] $AllowUnsigned,
-        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig'
+        [ValidatePattern('^[a-z0-9]+(-[a-z0-9]+)*$')] [string] $Workload = 'devconfig',
+        [string[]] $Skip = @(),
+        [switch] $RestartWhenNeeded,
+        [switch] $NoRestart
     )
     if ($PSVersionTable.PSEdition -eq 'Desktop') {
         return
@@ -109,7 +122,7 @@ function Invoke-DevConfigEnsureCleanupShell {
     # Cleanup needs the Appx cmdlets and removes PowerShell 7 itself.
     Write-Host 'Switching cleanup to Windows PowerShell...' -ForegroundColor DarkCyan
     $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $arguments = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -AllowUnsigned:$AllowUnsigned -Action Uninstall -Workload $Workload
+    $arguments = Get-DevConfigRelaunchArguments -ScriptPath $ScriptPath -AllowUnsigned:$AllowUnsigned -Action Uninstall -Workload $Workload -Skip $Skip -RestartWhenNeeded:$RestartWhenNeeded -NoRestart:$NoRestart
     $proc = Start-Process -FilePath $shell -ArgumentList $arguments -Wait -PassThru
     exit $proc.ExitCode
 }

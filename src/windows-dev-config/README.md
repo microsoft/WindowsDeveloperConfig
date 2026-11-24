@@ -26,8 +26,8 @@ Set up a new Windows dev box in minutes, not hours. Pick a setup, run one comman
 
 Run this in Windows PowerShell 5.1 or PowerShell 7. Bootstrap requests elevation when needed:
 
-> ⚠️ **Possible restart** WSL needs virtualization enabled, so save your work first; the script resumes right where it left off.
-> ⚠️ **Up to 2 UAC prompts** (once to elevate, once after the WSL reboot)
+> ⚠️ **WSL may need a restart.** Setup finishes everything else first, then asks **Restart now? [Y/n]**. Either way, after the restart run the same command again; it picks up where it left off. See [Restart and resume](#restart-and-resume).
+> ⚠️ **Up to 2 UAC prompts** (once to elevate, and once more when you run it again after the restart)
 
 ### Standard experience
 ```powershell
@@ -39,7 +39,7 @@ irm https://aka.ms/devconfig/standard/setup.ps1 | iex
 - **Dev tools:** Windows Terminal, PowerShell 7, Git, GitHub CLI, GitHub Copilot CLI, VS Code, .NET SDK 10, Python 3.14 + uv, Node.js LTS + nvm, Coreutils for Windows, Windows App CLI, Oh My Posh, and PowerToys.
 - **Terminal:** PowerShell 7 as the default profile, Oh My Posh in your prompt, Cascadia Mono NF as the default font, and a GitHub Copilot profile in the dropdown.
 - **Windows settings:** Dark theme, long paths, File Explorer defaults, Start/Search settings, and Do Not Disturb
-- **WSL:** WSL platform + Ubuntu, including the restart and the automatic resume afterwards.
+- **WSL:** WSL platform + Ubuntu. If WSL needs a restart, Ubuntu is installed when you run the command again afterwards.
 </details>
 
 ### Full experience
@@ -99,6 +99,33 @@ $url = 'https://raw.githubusercontent.com/microsoft/WindowsDeveloperConfig/main/
 
 Replace `setup-full.ps1` with the chosen wrapper — short URLs point at these repository-root release files, not `src/`, and all three require `| iex`.
 
+### Leave items out
+
+Both `bootstrap.ps1` and `dev-config.ps1` also accept `-Skip` with the ids of settings, steps, and packages to leave out. A skipped item is never checked or changed, not even briefly, and this works with every `-Action` and `-Workload`:
+
+```powershell
+& ([scriptblock]::Create((irm $url))) -Action Full -Skip registry-system/Sudo,fonts/CascadiaDefaultFont,Microsoft.AzureCLI
+```
+
+| Item | Id | Example |
+| --- | --- | --- |
+| Setting or step | Phase file name, a slash, and the setting or step `Name` from that file | `registry-system/Sudo`, `terminal/DarkTheme`, `wsl/WslUbuntu` |
+| Package | Its WinGet id | `Microsoft.AzureCLI`, `Git.Git` |
+
+- Pass the ids as an array or as one comma-separated string, for example from `powershell.exe -File`. Ids are not case-sensitive.
+- An id the workload doesn't have stops the run before anything changes, and the message lists every id it accepts.
+- Skipping a package also leaves its settings (`packages/PowerToysAOT` for PowerToys) and its removal during `Uninstall` alone.
+- `prerequisites/PowerShell7` and `Microsoft.PowerShell` both decline PowerShell 7: setup never installs it, but still uses a copy that's already there.
+- Skipping one of `terminal/AppsTheme` and `terminal/SystemTheme` leaves that value alone while `terminal/DarkTheme` sets the other. `wsl/WslFirstRun` leaves the WSL first-run setting alone while Ubuntu still installs.
+- `-Skip` can't be combined with `-Scenario`.
+
+### Restarts
+
+When WSL needs a restart, setup asks **Restart now? [Y/n]** if you're at the console, and otherwise exits with code 3010. Two switches change that; see [Restart and resume](#restart-and-resume):
+
+- `-NoRestart` never restarts or asks, and exits with 3010. Use it when your own app or script handles the restart.
+- `-RestartWhenNeeded` restarts Windows and continues setup by itself, as for VMs and labs.
+
 ## Single workloads
 
 The same engine can set up one toolchain instead of the whole workstation — same elevation, signature checks, logging, and summary. For example:
@@ -137,9 +164,9 @@ Roughly **30 minutes** on a clean machine with a good connection, most of it spe
 | 1 | The first UAC prompt appears | **Accept it.** Most of the settings are machine-wide and need Administrator. |
 | 2 | PowerShell 7 is installed if it isn't already, and the setup restarts itself on it | None |
 | 3 | Packages, Windows settings, fonts, Terminal, prompt, and Copilot are configured | None. Long silent stretches during big downloads are normal — a "still working" note prints every minute |
-| 4 | WSL is installed. The machine warns you and **restarts after 10 seconds** | **Save your work before you start.** |
-| 5 | You sign back in; a window opens and the second UAC prompt appears | **Accept it** to finish the run |
-| 6 | A summary prints: how many things changed, how many were already fine | Press a key to close, or leave it — it closes itself after 15 minutes |
+| 4 | WSL is installed last. If it needs a restart, Ubuntu waits for it and everything else is already done | None |
+| 5 | A summary prints: how many things changed, how many were already fine, and anything waiting for a restart | If nothing waits for a restart, press a key to close, or leave it — it closes itself after 15 minutes |
+| 6 | If WSL needs a restart, setup asks **Restart now? [Y/n]**. Either way, after the restart run the same command again: it skips what's done, installs Ubuntu, and shows the second UAC prompt | **Y** (or Enter) restarts now, **N** lets you restart later. Then run the command again and accept the prompt |
 
 Afterwards, open **Ubuntu** from the Start menu once to create your Linux username and password. Some Explorer and taskbar changes appear after you sign out and back in.
 
@@ -265,8 +292,8 @@ These are **best-effort**: they need the network and a PATH that has just been u
 ### WSL
 
 - The WSL platform components, via `wsl --install --no-distribution`. If that isn't available, the `VirtualMachinePlatform` and `Microsoft-Windows-Subsystem-Linux` Windows features are enabled directly with `dism.exe` instead.
-- A restart, if one is needed — see [Reboot and resume](#reboot-and-resume).
-- **Ubuntu**, via `wsl --install -d Ubuntu --no-launch`, falling back to `--web-download` if the Microsoft Store route doesn't complete. The distro's first-run welcome screen is suppressed; open Ubuntu from the Start menu to create your Linux user.
+- A restart, if one is needed. Setup asks first, or doesn't restart at all — see [Restart and resume](#restart-and-resume).
+- **Ubuntu**, via `wsl --install -d Ubuntu --no-launch`, falling back to `--web-download` if the Microsoft Store route doesn't complete. It waits until WSL is active, so after a needed restart it's installed by the next run. The distro's first-run welcome screen is suppressed; open Ubuntu from the Start menu to create your Linux user.
 
 Nothing *inside* the distro is configured by this flow. For that, see [WSL Comfort](../wsl-comfort/readme.md).
 
@@ -280,9 +307,37 @@ Every step checks first, applies only if needed, then checks again — `already 
 
 A machine-wide lock (`Global\WindowsDevConfigSetup`) stops a second copy from running at the same time — it tells you to switch windows instead of fighting over the same installs.
 
-### Reboot and resume
+### Restart and resume
 
-If a restart is needed, setup registers a scheduled task (**`WindowsDevConfigResume`**) that resumes the run at your next logon, then restarts after **10 seconds**. Sign in, accept the second UAC prompt, and it finishes with a combined summary. Only one restart is ever performed — if WSL still isn't usable afterward, the run stops and explains why rather than rebooting again.
+WSL runs last, so when it needs a restart, everything that doesn't depend on it is already done; only Ubuntu waits. Then:
+
+| How setup runs | What happens |
+| --- | --- |
+| At a console (the default) | Asks **Restart now? [Y/n]**, with no countdown. **Y** or Enter restarts now; **N** or Esc doesn't. Keys pressed earlier don't count, and no answer within 15 minutes means no. The window then closes without another key press. |
+| Without a console (the default), such as from another app | Never restarts. |
+| `-NoRestart` | Never restarts or asks, for callers that handle the restart themselves. |
+| `-RestartWhenNeeded` | Restarts and resumes by itself, as below. |
+
+Whenever setup doesn't restart, it ends with:
+
+```text
+Restart Windows, then run the same command again; it picks up where it left off.
+```
+
+The run exits with code **3010** (succeeded, restart required) instead of failing, including when you answer **Y**. **Running the same command again is the resume**: every step checks first, so finished work is skipped in seconds and only what waited for the restart runs. If WSL still isn't usable after the restart, the run says so and stops instead of asking for another restart. Setup restarts with `shutdown /r /t 0`, without `/f`, so apps with unsaved work can still ask before Windows restarts.
+
+**Let setup restart and resume by itself.** For VMs and labs, pass `-RestartWhenNeeded` to `bootstrap.ps1` or `dev-config.ps1`, or set `DEVCONFIG_RESTART_WHEN_NEEDED` before a short link (an explicit `-NoRestart` wins):
+
+```powershell
+$env:DEVCONFIG_RESTART_WHEN_NEEDED = '1'
+irm https://aka.ms/devconfig/full/setup.ps1 | iex
+```
+
+Setup then registers a scheduled task (**`WindowsDevConfigResume`**) that continues the run at your next sign-in, and restarts after a **60-second** countdown. Save your work first. Press any key to cancel the countdown; the task stays registered, so setup still continues after your next restart, or you can restart and run the same command again. Without a console there's nobody to cancel a countdown, so Windows restarts right away. After you sign back in, accept the UAC prompt and the run finishes with a combined summary. `-NoRestart` and `-RestartWhenNeeded` can't be combined, and neither works with `-Scenario`.
+
+Setup keeps its restart request in `devconfig-restart.json` next to `dev-config.ps1`, and it restarts or continues on its own only with that evidence. The resume task exits at once, without a UAC prompt, if it starts before Windows has restarted, or if the file is missing or can't be read; run the same command again to finish. If the file can't be read, setup says so, leaves it as it is, and won't restart Windows until it can.
+
+**From a script.** Running `bootstrap.ps1` or `dev-config.ps1` with `-File` returns 3010 as the process exit code. With `irm ... | iex` it's left in `$LASTEXITCODE` so your console stays open; from `powershell -Command`, end the command with `; exit $LASTEXITCODE` to pass it on.
 
 ### Logs
 
@@ -438,7 +493,7 @@ Almost always hardware virtualization not being available to the OS.
 
 Then run the setup again. Everything else stays applied; only the WSL steps are retried.
 
-If virtualization is definitely on and WSL still won't activate after the restart, the run says so and stops rather than rebooting in a loop. The other likely cause is that the machine couldn't reach the WSL download.
+If virtualization is definitely on and WSL still won't activate after the restart, the run says so and stops rather than asking for another restart. The other likely cause is that the machine couldn't reach the WSL download.
 
 </details>
 
@@ -456,7 +511,9 @@ To change the target release, update `DevConfigWinGetTargetVersion` and both ass
 <details>
 <summary><strong>Nothing happened after the restart</strong></summary>
 
-The resume task waits 30 seconds after logon before starting, then opens a window and requests UAC consent. Accept that prompt; the first checks after elevation are quiet, so give it a couple of minutes.
+Setup only continues by itself after a restart when you used [`-RestartWhenNeeded`](#restart-and-resume). Otherwise, including when you answered **Y** to **Restart now?**, run the same command again; it picks up where it left off.
+
+With `-RestartWhenNeeded`, the resume task waits 30 seconds after sign-in before starting, then opens a window and requests UAC consent. Accept that prompt; the first checks after elevation are quiet, so give it a couple of minutes.
 
 If nothing appears at all, check the task exists:
 
@@ -558,12 +615,12 @@ See [Setup actions](#setup-actions) and [What it changes](#what-it-changes) for 
 | **All notifications are turned off** | Do Not Disturb is enabled globally, not just for quiet hours, until you turn it back on. |
 | **Node.js LTS and nvm-windows are both installed** | Two ways to manage Node — uninstall Node.js first if you want nvm to own the PATH entry. |
 | **Uninstall is destructive** | Deletes `Ubuntu` and its files and removes targeted tools, including pre-existing installs. Previous settings aren't restored. |
-| **One restart, always visible** | The WSL platform genuinely requires it. The setup warns you for 10 seconds and then restarts with `shutdown /r`. Save your work before you begin. |
+| **WSL can need a restart** | The WSL platform genuinely requires one on most machines. By default setup asks before restarting, and never restarts without a console or with `-NoRestart`; only `-RestartWhenNeeded` restarts by itself. Until you restart and run it again, Ubuntu isn't installed. |
 | **Ubuntu's first launch is still manual** | You have to open Ubuntu once to create a Linux username and password. |
 | **Package versions move** | Packages are installed at whatever winget currently publishes, so two machines set up on different days can differ. `Microsoft.DotNet.SDK.10` and `Python.Python.3.14` pin a major version and will need bumping as those age. |
 | **The font release is pinned** | Cascadia Code `2407.24`, verified by hash. Newer releases need both the version and the hash updated in `steps/fonts.ps1`. |
 | **Terminal settings lose their comments** | `settings.json` is round-tripped through JSON, so comments don't survive. A `.bak` is written first. |
-| **No package selection at run time** | `Full` and `Partial` install all packages. There's no `-Skip` switch or selection prompt. |
+| **No package selection prompt** | `Full` and `Partial` install every package unless you leave some out with [`-Skip`](#leave-items-out). There's no interactive selection prompt. |
 | **No dry run** | There's no `-WhatIf`. The `already OK` output tells you what a re-run *would* skip, but only after the fact. |
 | **Git and GitHub CLI are installed, not configured** | No `git config user.name`, no `gh auth login`. |
 | **`%ProgramData%\CalmOS` stays behind** | Setup and its log remain for resume and reruns. Deleting them requires Administrator rights. |
