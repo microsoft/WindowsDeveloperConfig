@@ -113,8 +113,8 @@ Both `bootstrap.ps1` and `dev-config.ps1` also accept `-Skip` with the ids of se
 | Package | Its WinGet id | `Microsoft.AzureCLI`, `Git.Git` |
 
 - Pass the ids as an array or as one comma-separated string, for example from `powershell.exe -File`. Ids are not case-sensitive.
-- An id the workload doesn't have stops the run before anything changes, and the message lists every id it accepts.
-- Skipping a package also leaves its settings (`packages/PowerToysAOT` for PowerToys) and its removal during `Uninstall` alone.
+- An id the workload doesn't have stops `dev-config.ps1` before it changes any setting, step, or package, and the message lists every id it accepts. The accepted ids come from the downloaded setup files, so `bootstrap.ps1` only rejects malformed ids before the UAC prompt; it still elevates and downloads the setup files before an unknown id is caught. With `-NoLaunch`, the printed command checks the ids when you run it.
+- Skipping a package also leaves its settings (`packages/PowerToysAOT` for PowerToys), the steps in other phases that configure it (the Copilot profile, marketplace, and plugin for `GitHub.Copilot`, the Oh My Posh profile line for `JanDeDobbeleer.OhMyPosh`), and its removal during `Uninstall` alone.
 - `prerequisites/PowerShell7` and `Microsoft.PowerShell` both decline PowerShell 7: setup never installs it, but still uses a copy that's already there.
 - Skipping one of `terminal/AppsTheme` and `terminal/SystemTheme` leaves that value alone while `terminal/DarkTheme` sets the other. `wsl/WslFirstRun` leaves the WSL first-run setting alone while Ubuntu still installs.
 - `-Skip` can't be combined with `-Scenario`.

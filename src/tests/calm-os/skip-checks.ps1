@@ -11,7 +11,7 @@ foreach ($helper in @('_console', '_step-runner', '_elevation', '_reboot-resume'
         '_retry', '_terminal', '_winget', '_pwsh-bootstrap', '_workload')) {
     . (Join-Path $stepsDir "$helper.ps1")
 }
-foreach ($phase in @('prerequisites', 'registry-system', 'terminal', 'packages', 'wsl')) {
+foreach ($phase in @('prerequisites', 'registry-system', 'registry-explorer', 'terminal', 'powershell-profile', 'copilot', 'packages', 'wsl')) {
     . (Join-Path $stepsDir "$phase.ps1")
 }
 
@@ -117,7 +117,10 @@ function Invoke-Phase {
     return @(Invoke-DevConfigWorkloadPhase -Phase $Phase -OrchestratorPath $orchestrator 6>&1 | ForEach-Object { "$_" })
 }
 $registrySystemPhase = @{ File = 'registry-system.ps1'; Function = 'Invoke-RegistrySystemPhase'; Title = 'System settings' }
+$registryExplorerPhase = @{ File = 'registry-explorer.ps1'; Function = 'Invoke-RegistryExplorerPhase'; Title = 'File Explorer tweaks' }
 $terminalPhase = @{ File = 'terminal.ps1'; Function = 'Invoke-TerminalPhase'; Title = 'Windows Terminal' }
+$powerShellProfilePhase = @{ File = 'powershell-profile.ps1'; Function = 'Invoke-PowerShellProfilePhase'; Title = 'PowerShell profile' }
+$copilotPhase = @{ File = 'copilot.ps1'; Function = 'Invoke-CopilotPhase'; Title = 'GitHub Copilot' }
 $wslPhase = @{ File = 'wsl.ps1'; Function = 'Invoke-WslPhase'; Title = 'WSL + Ubuntu' }
 function New-PackagesPhase([string[]] $Packages) {
     @{ File = 'packages.ps1'; Function = 'Invoke-PackagesPhase'; Title = 'Packages'; Parameters = @{ Packages = $Packages } }
@@ -286,6 +289,44 @@ Check 'A skipped package is never installed, and its settings stay untouched' {
     Reset-Fakes -Skip @('Git.Git') -Action Full
     $null = Invoke-Phase (New-PackagesPhase @('Git'))
     Assert ($script:Calls.Count -eq 0) "Skipping every package must also skip WinGet setup: $($script:Calls -join '; ')"
+}
+
+Check 'Uninstall leaves skipped display settings out of ExplorerDisplayReset' {
+    function Reset-DevConfigExplorerDisplay {
+        param([string[]] $Settings, [switch] $CheckOnly)
+        $script:Calls.Add("display $(if ($CheckOnly) { 'check' } else { 'reset' }) $($Settings -join ',')")
+        return $false
+    }
+    Reset-Fakes -Skip @('registry-explorer/ShowHiddenFiles') -Action Uninstall
+    $null = Invoke-Phase $registryExplorerPhase
+    $display = @($script:Calls | Where-Object { $_ -like 'display *' } | Select-Object -Unique)
+    Assert (($display -join ';') -eq 'display check ShowFileExtensions,FullPathTitlebar;display reset ShowFileExtensions,FullPathTitlebar') "Unexpected display reset: $($display -join '; ')"
+    Assert (@($script:Calls | Where-Object { $_ -like '*\Hidden' -or $_ -like '*\Hidden=*' }).Count -eq 0) 'The skipped hidden-files setting was touched.'
+
+    Reset-Fakes -Skip @('registry-explorer/ShowHiddenFiles', 'registry-explorer/ShowFileExtensions', 'registry-explorer/FullPathTitlebar') -Action Uninstall
+    $output = Invoke-Phase $registryExplorerPhase
+    Assert (@($script:Calls | Where-Object { $_ -like 'display *' }).Count -eq 0) 'ExplorerDisplayReset must not run when all its settings are skipped.'
+    Assert (@($output | Where-Object { $_ -match '^\s+- ExplorerDisplayReset\s+skipped$' }).Count -eq 1) 'ExplorerDisplayReset must be reported as skipped.'
+}
+
+Check 'A skipped package leaves the steps that configure it in other phases alone' {
+    function Get-DevConfigCopilotFragmentDir { return 'C:\DevConfigSkipChecks\NoSuchDir' }
+    function Test-DevConfigCopilotTerminalProfile { $script:Calls.Add('copilot') }
+    function Test-DevConfigWinSkillsMarketplaceAdded { $script:Calls.Add('copilot') }
+    function Test-DevConfigWinSkillsMarketplaceRegistered { $script:Calls.Add('copilot') }
+    function Test-DevConfigWinUIPluginInstalled { $script:Calls.Add('copilot') }
+    function Get-DevConfigInstalledWinUIPlugin { $script:Calls.Add('copilot') }
+    function Test-DevConfigWinUITemplatesInstalled { $script:Calls.Add('templates'); return $true }
+    function Test-DevConfigWinUITemplatePackageInstalled { $script:Calls.Add('templates'); return $false }
+    function Test-DevConfigOhMyPoshProfileConfigured { $script:Calls.Add('ohmyposh') }
+    function Remove-DevConfigOhMyPoshProfile { $script:Calls.Add('ohmyposh') }
+    foreach ($action in @('Full', 'Uninstall')) {
+        Reset-Fakes -Skip @('GitHub.Copilot', 'JanDeDobbeleer.OhMyPosh') -Action $action
+        $output = @(Invoke-Phase $copilotPhase) + @(Invoke-Phase $powerShellProfilePhase)
+        Assert (($script:Calls -join ';') -eq 'templates') "$action touched a skipped package's configuration: $($script:Calls -join '; ')"
+        $skippedSteps = @($output | Where-Object { $_ -match '^\s+- \S+\s+skipped$' })
+        Assert ($skippedSteps.Count -eq 4) "$action must report 3 Copilot steps and the Oh My Posh step as skipped: $($skippedSteps -join '; ')"
+    }
 }
 
 Check 'A skipped package is not removed during Uninstall' {

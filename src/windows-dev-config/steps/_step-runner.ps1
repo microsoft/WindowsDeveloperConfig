@@ -203,11 +203,14 @@ function New-DevConfigStep {
         # -Skip ids that leave the whole step out; the default is <phase>/<Name>.
         [string[]] $SkipIds,
         # -Skip ids of settings the step applies itself; the step must leave skipped ones untouched.
-        [string[]] $SettingIds = @()
+        [string[]] $SettingIds = @(),
+        # WinGet ids of the packages the step configures or cleans up; skipping one leaves the step out too.
+        [string[]] $PackageIds = @()
     )
     if (-not $SkipIds) {
         $SkipIds = @(Get-DevConfigSkipId -Name $Name)
     }
+    $SkipIds = @(@($SkipIds) + @($PackageIds | Where-Object { $_ }) | Select-Object -Unique)
     # ArgumentList is passed positionally at call time, not captured by closure.
     [pscustomobject]@{
         Name         = $Name

@@ -201,7 +201,8 @@ function Invoke-CalmOsBootstrap {
     }
 
     # -Skip arrives as an array from scripts and as one comma-separated string through -File.
-    # dev-config.ps1 checks each id exists before setup changes anything; this only rejects malformed ids before UAC.
+    # The workload's ids come from the downloaded files, so dev-config.ps1 rejects unknown ones after download
+    # and elevation but before setup changes anything; this only rejects malformed ids before UAC.
     $Skip = @($Skip | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
     if ($Scenario -and $Skip.Count -gt 0) {
         throw '-Skip leaves out workstation setup items and cannot be combined with -Scenario.'

@@ -8,6 +8,8 @@ Set-StrictMode -Version Latest
 
 function Reset-DevConfigExplorerDisplay {
     param(
+        # The registry-explorer settings to reset; the others are neither read nor written.
+        [string[]] $Settings = @('ShowFileExtensions', 'ShowHiddenFiles', 'FullPathTitlebar'),
         [switch] $CheckOnly
     )
     if (-not ('DevConfigExplorerSettings' -as [type])) {
@@ -55,26 +57,39 @@ public static class DevConfigExplorerSettings
     }
 
     $fullPathTitleMask = [uint32]1
-    $fileVisibilityMask = [uint32]3
+    # SSF_SHOWALLOBJECTS and SSF_SHOWEXTENSIONS match the first two SHELLSTATE Flags1 bits.
+    $fileVisibilityMask = [uint32]0
+    if ($Settings -contains 'ShowHiddenFiles') { $fileVisibilityMask = $fileVisibilityMask -bor 1 }
+    if ($Settings -contains 'ShowFileExtensions') { $fileVisibilityMask = $fileVisibilityMask -bor 2 }
+    $resetFullPath = $Settings -contains 'FullPathTitlebar'
+
     $cabinet = [DevConfigExplorerSettings+CabinetState]::new()
-    $cabinet.Length = [Runtime.InteropServices.Marshal]::SizeOf([type][DevConfigExplorerSettings+CabinetState])
-    # A false result supplies defaults when no cabinet settings have been saved.
-    [void][DevConfigExplorerSettings]::ReadCabinetState([ref]$cabinet, $cabinet.Length)
+    if ($resetFullPath) {
+        $cabinet.Length = [Runtime.InteropServices.Marshal]::SizeOf([type][DevConfigExplorerSettings+CabinetState])
+        # A false result supplies defaults when no cabinet settings have been saved.
+        [void][DevConfigExplorerSettings]::ReadCabinetState([ref]$cabinet, $cabinet.Length)
+    }
 
     $shell = [DevConfigExplorerSettings+ShellState]::new()
-    # The mask covers hidden files and file extensions, not other Explorer preferences.
-    [DevConfigExplorerSettings]::SHGetSetSettings([ref]$shell, $fileVisibilityMask, $false)
+    if ($fileVisibilityMask -ne 0) {
+        # The mask limits the call to the selected file-visibility preferences.
+        [DevConfigExplorerSettings]::SHGetSetSettings([ref]$shell, $fileVisibilityMask, $false)
+    }
     if ($CheckOnly) {
         return ($cabinet.Flags -band $fullPathTitleMask) -eq 0 -and
             ($shell.Flags1 -band $fileVisibilityMask) -eq 0
     }
 
-    $cabinet.Flags = $cabinet.Flags -band (-bnot $fullPathTitleMask)
-    if (-not [DevConfigExplorerSettings]::WriteCabinetState([ref]$cabinet)) {
-        throw 'Could not reset the Explorer cabinet settings.'
+    if ($resetFullPath) {
+        $cabinet.Flags = $cabinet.Flags -band (-bnot $fullPathTitleMask)
+        if (-not [DevConfigExplorerSettings]::WriteCabinetState([ref]$cabinet)) {
+            throw 'Could not reset the Explorer cabinet settings.'
+        }
     }
-    $shell.Flags1 = $shell.Flags1 -band (-bnot $fileVisibilityMask)
-    [DevConfigExplorerSettings]::SHGetSetSettings([ref]$shell, $fileVisibilityMask, $true)
+    if ($fileVisibilityMask -ne 0) {
+        $shell.Flags1 = $shell.Flags1 -band (-bnot $fileVisibilityMask)
+        [DevConfigExplorerSettings]::SHGetSetSettings([ref]$shell, $fileVisibilityMask, $true)
+    }
 }
 
 function Invoke-RegistryExplorerPhase {
@@ -160,9 +175,20 @@ function Invoke-RegistryExplorerPhase {
         New-DevConfigRegistryStep -Setting $tweak -Reset:($Script:DevConfigAction -eq 'Uninstall')
     }
     if ($Script:DevConfigAction -eq 'Uninstall') {
+        # ExplorerDisplayReset leaves a skipped display setting as it is; with all three skipped it is skipped too.
+        $displayNames = @('ShowFileExtensions', 'ShowHiddenFiles', 'FullPathTitlebar')
+        $displayIds = @($displayNames | ForEach-Object { Get-DevConfigSkipId -Name $_ })
+        $displaySettings = @($displayNames | Where-Object { -not (Test-DevConfigSkipped -Id (Get-DevConfigSkipId -Name $_)) })
+        $displaySkipIds = if ($displaySettings.Count -gt 0) {
+            @(Get-DevConfigSkipId -Name 'ExplorerDisplayReset')
+        } else {
+            @(Get-DevConfigSkipId -Name 'ExplorerDisplayReset') + $displayIds
+        }
         $steps += New-DevConfigStep -Name 'ExplorerDisplayReset' -Description 'Reset hidden files, file extensions, and full-path titles' -BestEffort `
-            -Check { Reset-DevConfigExplorerDisplay -CheckOnly } `
-            -Apply { Reset-DevConfigExplorerDisplay }
+            -SkipIds $displaySkipIds -SettingIds $displayIds `
+            -Check { param($Settings) Reset-DevConfigExplorerDisplay -Settings $Settings -CheckOnly } `
+            -Apply { param($Settings) Reset-DevConfigExplorerDisplay -Settings $Settings } `
+            -ArgumentList @(, $displaySettings)
     }
 
     Invoke-DevConfigSteps -Steps $steps
