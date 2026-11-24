@@ -34,6 +34,13 @@ try {
     Set-ItemProperty -LiteralPath $keys.Machine -Name 'NVM_SYMLINK' -Value 'C:\nvm4w\nodejs' -Type String
     Assert-Check (Test-DevConfigNvmPathVariables -Keys $keys) 'Report plain-string variables as done'
 
+    # Checks run before installs, and an NVM upgrade rewrites the variables as expandable strings.
+    $script:nvmCurrent = $false
+    function Test-DevConfigWingetPackageInstalled { param([string] $Id) $script:nvmCurrent }
+    Assert-Check (-not (Test-DevConfigNvmPathVariables -Keys $keys -PackageId 'CoreyButler.NVMforWindows')) 'Not done while an NVM upgrade is pending, so it applies after the upgrade'
+    $script:nvmCurrent = $true
+    Assert-Check (Test-DevConfigNvmPathVariables -Keys $keys -PackageId 'CoreyButler.NVMforWindows') 'Report done once NVM is current'
+
     Set-ItemProperty -LiteralPath $keys.Machine -Name 'NVM_SYMLINK' -Value '%SystemDrive%\nvm4w\nodejs' -Type ExpandString
     Assert-Check (@(Get-DevConfigNvmExpandableVariable -Keys $keys).Count -eq 0) 'Leave a value that names another variable expandable'
 

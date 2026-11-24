@@ -90,10 +90,17 @@ function Test-DevConfigNvmInstalled {
     return $false
 }
 
-# Not done until NVM is installed, so in a fresh run this applies right after the NVM package installs.
+# Not done until NVM is installed and current. Checks run before any install, and an NVM upgrade rewrites the
+# variables as expandable strings, so a pending install or upgrade must leave this step to run after it.
 function Test-DevConfigNvmPathVariables {
-    param([System.Collections.IDictionary] $Keys = $Script:DevConfigNvmEnvironmentKeys)
-    return (Test-DevConfigNvmInstalled -Keys $Keys) -and @(Get-DevConfigNvmExpandableVariable -Keys $Keys).Count -eq 0
+    param(
+        [System.Collections.IDictionary] $Keys = $Script:DevConfigNvmEnvironmentKeys,
+        [string] $PackageId
+    )
+    if (-not (Test-DevConfigNvmInstalled -Keys $Keys) -or @(Get-DevConfigNvmExpandableVariable -Keys $Keys).Count -gt 0) {
+        return $false
+    }
+    return (-not $PackageId) -or (Test-DevConfigWingetPackageInstalled -Id $PackageId)
 }
 
 function Set-DevConfigNvmPathVariables {
@@ -350,10 +357,12 @@ function Invoke-PackagesPhase {
                 } `
                 -ArgumentList @($package.Id, $package.ContainsKey('Large'), [bool]$package['AnyVersion'])
         }
-        if (@($selected | Where-Object { $_.Name -eq 'nvmForNode' }).Count -gt 0) {
+        $nvm = @($selected | Where-Object { $_.Name -eq 'nvmForNode' })
+        if ($nvm.Count -gt 0) {
             New-DevConfigStep -Name 'NvmPathVariables' -Description 'Let new terminals find nvm on PATH' -BestEffort `
-                -Check { Test-DevConfigNvmPathVariables } `
-                -Apply { Set-DevConfigNvmPathVariables }
+                -Check { param($Id) Test-DevConfigNvmPathVariables -PackageId $Id } `
+                -Apply { param($Id) Set-DevConfigNvmPathVariables } `
+                -ArgumentList @($nvm[0].Id)
         }
         foreach ($setting in $settings) {
             New-DevConfigRegistryStep -Setting $setting
