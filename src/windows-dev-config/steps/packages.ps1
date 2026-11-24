@@ -56,6 +56,63 @@ function Remove-DevConfigNvm {
     }
 }
 
+# NVM's installer stores NVM_HOME and NVM_SYMLINK as expandable strings and adds %NVM_HOME%;%NVM_SYMLINK% to
+# PATH. Windows doesn't expand a variable inside PATH when that variable is itself an expandable string, so new
+# terminals can't find nvm or the node it selects. Plain strings expand, and the PATH entries NVM's uninstaller
+# removes stay as they are.
+$Script:DevConfigNvmEnvironmentKeys = [ordered]@{
+    Machine = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+    User    = 'HKCU:\Environment'
+}
+
+function Get-DevConfigNvmExpandableVariable {
+    param([System.Collections.IDictionary] $Keys = $Script:DevConfigNvmEnvironmentKeys)
+    foreach ($scope in $Keys.Keys) {
+        $item = Get-Item -LiteralPath $Keys[$scope] -ErrorAction SilentlyContinue
+        if (-not $item) { continue }
+        foreach ($name in @('NVM_HOME', 'NVM_SYMLINK')) {
+            if ($item.GetValueNames() -notcontains $name) { continue }
+            $value = [string]$item.GetValue($name, '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            # A value that names another variable needs expanding itself, so it's left alone.
+            if ($item.GetValueKind($name) -eq [Microsoft.Win32.RegistryValueKind]::ExpandString -and $value -notmatch '%') {
+                [pscustomobject]@{ Scope = $scope; Name = $name; Value = $value }
+            }
+        }
+    }
+}
+
+function Test-DevConfigNvmInstalled {
+    param([System.Collections.IDictionary] $Keys = $Script:DevConfigNvmEnvironmentKeys)
+    foreach ($path in $Keys.Values) {
+        $item = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+        if ($item -and $item.GetValueNames() -contains 'NVM_HOME') { return $true }
+    }
+    return $false
+}
+
+# Not done until NVM is installed and current. Checks run before any install, and an NVM upgrade rewrites the
+# variables as expandable strings, so a pending install or upgrade must leave this step to run after it.
+function Test-DevConfigNvmPathVariables {
+    param(
+        [System.Collections.IDictionary] $Keys = $Script:DevConfigNvmEnvironmentKeys,
+        [string] $PackageId
+    )
+    if (-not (Test-DevConfigNvmInstalled -Keys $Keys) -or @(Get-DevConfigNvmExpandableVariable -Keys $Keys).Count -gt 0) {
+        return $false
+    }
+    return (-not $PackageId) -or (Test-DevConfigWingetPackageInstalled -Id $PackageId)
+}
+
+function Set-DevConfigNvmPathVariables {
+    if (-not (Test-DevConfigNvmInstalled)) {
+        throw "NVM_HOME isn't set, so NVM for Windows isn't installed yet. Re-run setup once it is."
+    }
+    # SetEnvironmentVariable writes a plain string and tells open windows that the environment changed.
+    foreach ($variable in @(Get-DevConfigNvmExpandableVariable)) {
+        [Environment]::SetEnvironmentVariable($variable.Name, $variable.Value, $variable.Scope)
+    }
+}
+
 # Every package any workload installs; a workload lists the names it wants, in its own install order.
 # KeepOnUninstall, AdditionalUninstallIds, UninstallOrder, and InnoUninstall shape cleanup. Settings are
 # registry values that go with the package: applied after installs and reset first during cleanup.
@@ -299,6 +356,13 @@ function Invoke-PackagesPhase {
                     Wait-DevConfigWingetPackageSettled -Id $Id -AnyVersion:$AnyVersion
                 } `
                 -ArgumentList @($package.Id, $package.ContainsKey('Large'), [bool]$package['AnyVersion'])
+        }
+        $nvm = @($selected | Where-Object { $_.Name -eq 'nvmForNode' })
+        if ($nvm.Count -gt 0) {
+            New-DevConfigStep -Name 'NvmPathVariables' -Description 'Let new terminals find nvm on PATH' -BestEffort `
+                -Check { param($Id) Test-DevConfigNvmPathVariables -PackageId $Id } `
+                -Apply { param($Id) Set-DevConfigNvmPathVariables } `
+                -ArgumentList @($nvm[0].Id)
         }
         foreach ($setting in $settings) {
             New-DevConfigRegistryStep -Setting $setting
